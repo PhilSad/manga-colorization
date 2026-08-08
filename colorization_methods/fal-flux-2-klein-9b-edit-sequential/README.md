@@ -73,6 +73,26 @@ Notes for local runs:
   --refs-dir data/refs
 ```
 
+## Skip leading pages
+
+The runner shows a tqdm progress bar while processing: it displays the current chapter page, the number of pages done, elapsed/remaining time, and the current source filename. The bar is suppressed automatically on non-interactive terminals; each completed page is still logged as `[n/N] wrote <output path>`. `tqdm` is installed via `requirements.txt` and its version is recorded in the manifest.
+
+`--skip-first N` skips the first N pages of the input folder (a zero-based folder offset applied before `--start-at`; the two compose, so `--skip-first 8 --start-at 2` starts at chapter page 10). This is convenient when a previous run was interrupted partway: resume the remaining pages without reprocessing earlier ones. Each invocation still creates a fresh timestamped run directory and never overwrites previous outputs.
+
+```bash
+.venv/bin/python colorization_methods/fal-flux-2-klein-9b-edit-sequential/run.py \
+  --model fal-ai/flux-2/klein/9b/edit \
+  --width 1200 \
+  --height 1800 \
+  --num-inference-steps 4 \
+  --output-format png \
+  --input-dir data/chapter_134 \
+  --refs-dir data/refs \
+  --skip-first 10
+```
+
+Pages are selected as `folder[skip_first + start_at - 1 :][:limit]`; the manifest's per-page `sequence` and the seed offsets reflect the real chapter page numbers (e.g. with `--skip-first 8`, the first processed page is recorded as sequence 9). The `skip_first` value is stored under `configuration` in the manifest.
+
 ## Resume or recover one page
 
 Use `--start-at` to select a one-based chapter page and `--previous-page` to seed its first request with an existing colorized predecessor. The optional safety checker can be disabled for a known-safe page that was falsely blocked. A recovery invocation still creates a new timestamped run and never overwrites the blocked artifact.

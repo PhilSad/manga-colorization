@@ -83,8 +83,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-inference-steps",
         type=int,
-        default=28,
-        help="Diffusion steps (Qwen model default is 28; range 1-50).",
+        default=40,
+        help="Diffusion steps (Qwen's official 2511 examples use 40; range 1-50).",
     )
     parser.add_argument(
         "--guidance-scale",
@@ -118,6 +118,21 @@ def parse_args() -> argparse.Namespace:
         "--disable-safety-checker",
         action="store_true",
         help="Disable fal's optional safety checker for this run.",
+    )
+    parser.add_argument(
+        "--negative-prompt",
+        default=(
+            "characters or objects copied from the other pictures, character "
+            "portraits, reference sheet portraits, atlas labels, extra people, "
+            "pasted or collaged elements, text labels, borders from reference "
+            "images, style-reference content or panel layout"
+        ),
+        help=(
+            "Negative prompt sent to the model. It targets Qwen-Image-Edit's "
+            "multi-image composition behavior (it may otherwise paste characters "
+            "from the atlas/style/previous-page references into the output). "
+            "Pass an empty string to disable."
+        ),
     )
     parser.add_argument("--prompt-file", type=Path, default=METHOD_DIR / "prompt.txt")
     parser.add_argument("--api-key-env", default="FAL_API_KEY")
@@ -372,6 +387,7 @@ def run() -> None:
             "num_inference_steps": args.num_inference_steps,
             "guidance_scale": args.guidance_scale,
             "acceleration": args.acceleration,
+            "negative_prompt": args.negative_prompt,
             "output_format": args.output_format,
             "seed": args.seed,
             "start_at": args.start_at,
@@ -409,9 +425,12 @@ def run() -> None:
             ),
             "input_image_sizes": (
                 "All four input images differ in size (1200x1800 page, 1440x2400 "
-                "atlas, 848x1264 style reference, and the previous output). An "
-                "explicit image_size is requested so the output is always the page "
-                "size regardless of how fal resizes the other inputs."
+                "atlas, 848x1264 style reference, and the previous output) and are "
+                "resized to a common size by the endpoint; an explicit image_size "
+                "is requested so the output is always the page size. Qwen docs say "
+                "multi-image input works best with 1-3 images; later pages use 4 "
+                "(page, atlas, style, previous) so composition/leakage is mitigated "
+                "via the prompt and negative_prompt."
             ),
         },
         "dependencies": {"python": sys.version, **package_versions()},
@@ -498,26 +517,35 @@ def run() -> None:
             ]
             if previous_remote_url is None:
                 input_description = (
-                    "Image 1 is the CURRENT BLACK-AND-WHITE TARGET PAGE. Image 2 "
-                    "is the LABELLED CHARACTER REFERENCE ATLAS. Image 3 is the "
+                    "Picture 1 is the CURRENT BLACK-AND-WHITE TARGET PAGE and is "
+                    "the only picture that may appear in the output. Picture 2 is "
+                    "the LABELLED CHARACTER REFERENCE ATLAS. Picture 3 is the "
                     "STYLE REFERENCE defining the target colorization style. There "
-                    "is no previous page; invent a coherent palette where image 2 "
-                    "does not apply, matching the style of image 3."
+                    "is no previous page; invent a coherent palette where picture 2 "
+                    "does not apply, matching the style of picture 3. Pictures 2 "
+                    "and 3 are reference material only: use them for colors and "
+                    "style, never copy their characters, portraits, labels, or "
+                    "layout into picture 1."
                 )
             else:
                 image_urls.append(previous_remote_url)
                 input_roles.append("previous_colorized_page")
                 input_dims.append(previous_input_dims or [0, 0])
                 input_description = (
-                    "Image 1 is the CURRENT BLACK-AND-WHITE TARGET PAGE and is the "
-                    "only image to edit. Image 2 is the LABELLED CHARACTER "
-                    "REFERENCE ATLAS. Image 3 is the STYLE REFERENCE defining the "
-                    "target colorization style. Image 4 is the PREVIOUS COLORIZED "
-                    "PAGE and is continuity guidance only."
+                    "Picture 1 is the CURRENT BLACK-AND-WHITE TARGET PAGE and is "
+                    "the only picture that may appear in the output; it is the only "
+                    "picture to edit. Picture 2 is the LABELLED CHARACTER "
+                    "REFERENCE ATLAS. Picture 3 is the STYLE REFERENCE defining "
+                    "the target colorization style. Picture 4 is the PREVIOUS "
+                    "COLORIZED PAGE and is continuity guidance only. Pictures 2, 3, "
+                    "and 4 are reference material only: use them for colors, style, "
+                    "and continuity, never copy their characters, portraits, "
+                    "labels, or layout into picture 1."
                 )
             contextual_prompt = f"{prompt}\n\n{input_description}"
             arguments: dict[str, Any] = {
                 "prompt": contextual_prompt,
+                "negative_prompt": args.negative_prompt,
                 "image_urls": image_urls,
                 "image_size": {"width": args.width, "height": args.height},
                 "num_inference_steps": args.num_inference_steps,

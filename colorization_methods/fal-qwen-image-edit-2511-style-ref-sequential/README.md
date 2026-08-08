@@ -2,7 +2,9 @@
 
 This method is a port of the [`fal-flux-2-klein-9b-edit-style-ref-sequential`](../fal-flux-2-klein-9b-edit-style-ref-sequential/) pipeline to the fal **Qwen Image Edit 2511** endpoint (`fal-ai/qwen-image-edit-2511`, based on Alibaba's instruction-based Qwen-Image-Edit image editing model). It keeps the same sequential design: a labelled character-reference atlas, a colorized **style reference page** supplied on every request, and the previously generated page as color-continuity context from page 2 onward.
 
-Each request supplies the current monochrome page as **image 1**, the labelled character-reference atlas as **image 2**, and the style reference as **image 3**. From page 2 onward, the preceding generated page is supplied as **image 4**. Page 1 invents colors where the atlas does not apply, guided by the style reference. The prompt refers to images by ordinal ("the first image", "the second image", …), which is how the Qwen edit model addresses multi-image input.
+Each request supplies the current monochrome page as **Picture 1**, the labelled character-reference atlas as **Picture 2**, and the style reference as **Picture 3**. From page 2 onward, the preceding generated page is supplied as **Picture 4**. Page 1 invents colors where the atlas does not apply, guided by the style reference.
+
+**Prompting is designed around Qwen-Image-Edit's documented behavior.** The model's multi-image mode is a *composition* feature (see [Prompting and best practices](#prompting-and-best-practices)), so the prompt states in no uncertain terms that only Picture 1 may appear in the output and Pictures 2–4 are reference-only, and a `negative_prompt` is sent to suppress atlas/portrait leakage. The prompt uses the model's own vocabulary ("Picture N") — the diffusers pipeline prepends `Picture N: <image>` before the instruction.
 
 The atlas and the style reference are each uploaded once per run and their fal-hosted URLs are reused. Each invocation creates a fresh local-time `output/YYYYMMDD-HHMMSS/` directory with the output images, normalized request inputs, atlas, and incremental manifest.
 
@@ -12,12 +14,24 @@ The atlas and the style reference are each uploaded once per run and their fal-h
 |---|---|---|
 | Endpoint | `fal-ai/flux-2/klein/9b/edit` | `fal-ai/qwen-image-edit-2511` |
 | Image input | `image_urls` (list) | `image_urls` (list) — same name |
-| Output size | Requested 1200×1800, actual 1216×1824 (FLUX VAE rounding) | Explicit `image_size` 1200×1800 requested; Qwen echoes input dims when `image_size` is omitted, but the inputs have mixed sizes (page 1200×1800, atlas 1440×2400, style 848×1264), so an explicit size is passed to force a 1200×1800 output |
-| Inference steps | 4 | Qwen model default **28** (range 1–50) — Qwen needs far more steps than FLUX Klein |
-| Guidance | — (not a FLUX Klein param) | `guidance_scale` (Qwen default 4.5) and `acceleration` (`none`/`regular`/`high`, default `regular`) |
+| Output size | Requested 1200×1800, actual 1216×1824 (FLUX VAE rounding) | Requested 1200×1800; Qwen's resolution bucketing (multiples of 16) yields **1200×1792** in practice. The inputs have mixed sizes (page 1200×1800, atlas 1440×2400, style 848×1264) and the endpoint resizes them to a common size, so an explicit `image_size` is passed for deterministic output |
+| Inference steps | 4 | **40** (Qwen's official 2511 examples; range 1–50). Cost is per megapixel, so more steps are free |
+| Guidance | — (not a FLUX Klein param) | `guidance_scale` (fal default 4.5) and `acceleration` (`none`/`regular`/`high`, default `regular`) |
+| Negative prompt | — | `--negative-prompt` (default targets multi-image composition leakage: portraits, atlas labels, pasted/collaged elements, reference content) |
 | Local server | `--endpoint` can run against the self-hosted BentoML FLUX.2 Klein server (`server/` at repo root) | **Not available.** The local server only serves FLUX.2 Klein weights, so this method runs on fal only; `local_fal_client.py` was dropped |
 | Safety checker | Optional, caused a false-positive black page 18 | Optional (`--disable-safety-checker`); blocked images are recorded via `has_nsfw_concepts` |
 | Pricing | $0.011/MP, each input billed at 1 MP | **$0.03/MP** (fal listing); input billing basis undocumented — see [Cost](#cost) |
+
+## Prompting and best practices
+
+Research into the official Qwen docs (model cards, GitHub README, diffusers pipeline source) shows Qwen-Image-Edit behaves very differently from FLUX Klein Edit, and the prompt design here follows those findings:
+
+1. **Multi-image input is a composition feature, not a reference feature.** The official Qwen-Image-Edit-2509/2511 docs describe multi-image editing as "person + person", "person + product", "person + scene" fusion, and the 2511 blog highlights "high-fidelity fusion of two separate person images into a coherent group shot". Feeding the model a labelled character atlas therefore *invites* it to paste atlas characters onto the page — this was observed in the first test run (atlas characters composited on top of the colorized page). The mitigation is a prompt that states only Picture 1 may appear in the output, plus the `negative_prompt`.
+2. **Optimal input count is 1–3 images** (2509 doc). Page 1 uses 3 (within range); later pages use 4 (page, atlas, style, previous) which is beyond the documented optimum — accepted as the price of sequential continuity, and mitigated by prompt + negative prompt.
+3. **Prompt rewriting is officially recommended.** The Qwen team notes edit results become unstable without it and ships a `polish_edit_prompt` VLM helper. The rules it encodes are applied statically here: a direct, specific imperative at the top; explicit statement of *which* image is modified; reference images described by role rather than relied on as-is; positive framing ("keep X unchanged") over negations where possible. A static prompt file can't adapt to the actual reference images, so if instability persists, pre-rewriting `prompt.txt` with a VLM (e.g. Qwen's `polish_edit_prompt` pattern) is the documented next step.
+4. **The model addresses images as "Picture 1/2/3/4".** The diffusers pipeline prepends `Picture N: <image>` tokens before the instruction; the prompt uses that vocabulary.
+5. **Single-image mode is the strict mode.** With one input image, Qwen-Image-Edit performs appearance editing where "all other regions of the image remain completely unchanged". Multi-image mode relaxes this. If the reference approach keeps leaking, the fallback is a single-image variant (current page only) with the atlas/style described in text.
+6. **Official 2511 generation settings:** 40 inference steps, guidance 1.0 + true-CFG 4.0 (the fal endpoint exposes a single `guidance_scale` knob, default 4.5). Outputs are resolution-bucketed to multiples of 16 → 1200×1792.
 
 ## Style reference
 
@@ -47,7 +61,7 @@ The runner loads `FAL_API_KEY` from the repository `.env`. It also accepts fal's
   --model fal-ai/qwen-image-edit-2511 \
   --width 1200 \
   --height 1800 \
-  --num-inference-steps 28 \
+  --num-inference-steps 40 \
   --output-format png \
   --input-dir data/chapter_134 \
   --refs-dir data/refs \
@@ -61,7 +75,7 @@ The runner loads `FAL_API_KEY` from the repository `.env`. It also accepts fal's
   --model fal-ai/qwen-image-edit-2511 \
   --width 1200 \
   --height 1800 \
-  --num-inference-steps 28 \
+  --num-inference-steps 40 \
   --output-format png \
   --input-dir data/chapter_134 \
   --refs-dir data/refs
@@ -76,7 +90,7 @@ Any colorized manga page can act as the style reference; pass its path to `--sty
   --model fal-ai/qwen-image-edit-2511 \
   --width 1200 \
   --height 1800 \
-  --num-inference-steps 28 \
+  --num-inference-steps 40 \
   --output-format png \
   --input-dir data/chapter_134 \
   --refs-dir data/refs \
@@ -93,7 +107,7 @@ Use `--start-at` to select a one-based chapter page and `--previous-page` to see
   --model fal-ai/qwen-image-edit-2511 \
   --width 1200 \
   --height 1800 \
-  --num-inference-steps 28 \
+  --num-inference-steps 40 \
   --output-format png \
   --input-dir data/chapter_134 \
   --refs-dir data/refs \
@@ -107,7 +121,7 @@ Use `--start-at` to select a one-based chapter page and `--previous-page` to see
 
 fal lists the model at **$0.03 per megapixel**. Unlike the FLUX Klein endpoint, fal does not document how input images are billed (FLUX documents each input as resized to 1 MP for billing; Qwen does not). The manifest therefore records an estimate that assumes each uploaded input image is billed at its native megapixel count, and it records the sizes of every input so the assumption can be re-checked.
 
-Per-request native megapixel totals (atlas 1440×2400 = 3.456 MP, style ref 848×1264 ≈ 1.072 MP, page/output 1200×1800 = 2.16 MP):
+Per-request native megapixel totals (atlas 1440×2400 = 3.456 MP, style ref 848×1264 ≈ 1.072 MP, page 1200×1800 = 2.16 MP, observed output 1200×1792 = 2.1504 MP):
 
 - **Page 1** (3 inputs + output): 6.688 + 2.16 = 8.848 MP → ≈ **$0.2654**
 - **Pages 2–18** (4 inputs + output): 8.848 + 2.16 = 11.008 MP → ≈ **$0.3302**
@@ -117,11 +131,13 @@ If fal instead caps each input at 1 MP for billing (like the FLUX endpoint), pag
 
 ## Reproducibility
 
-The manifest records the command, prompt, model settings (steps, guidance scale, acceleration, image size, seed), source/reference hashes (including the style reference), preprocessing, dependency versions, fal upload and output URLs, request IDs, seeds, timings, safety results, output hashes, and the cost estimate.
+The manifest records the command, prompt, negative prompt, model settings (steps, guidance scale, acceleration, image size, seed), source/reference hashes (including the style reference), preprocessing, dependency versions, fal upload and output URLs, request IDs, seeds, timings, safety results, output hashes, and the cost estimate.
 
-## Status and expected quality
+## Status and measured results
 
-**Not yet run.** Quality and cost are unmeasured for this model on this task. Qwen-Image-Edit is an instruction-following edit model (a different family from FLUX Klein Edit), so expected differences versus the FLUX variant include: stronger text/instruction adherence (the "add color only, preserve everything" requirement should be followed more literally), better handling of the labelled atlas because it is a VLM-grounded edit model, and 28-step inference making each page slower and costlier. Expected risks carried over from the base method: style-reference content leaking into the target page, atlas colors being applied unreliably, and Qwen's tendency to soften linework on heavy screentone pages. These are hypotheses to test, not measured outcomes.
+**First test run (20260808-104057, 2 pages, pre-fix prompt): failed the "add color only" requirement.** Pages 1–2 completed (1200×1792 PNG, $0.5948 total for 2 pages — the estimated cost landed between the two billing scenarios below because outputs were 2.1504 MP and inputs are billed at native MP), but the model pasted characters from the reference atlas on top of the colorized page — the documented multi-image *composition* behavior. The current prompt + `negative_prompt` design was introduced to suppress that. **The fix is untested as of this update**; quality and cost after the fix are unmeasured.
+
+Expected differences versus the FLUX variant: stronger text/instruction adherence (Qwen is a VLM-grounded instruction edit model), 40-step inference (free, since cost is per megapixel), and output at 1200×1792. Remaining risks: residual atlas/style/previous-content leakage despite the prompt, unreliable atlas colors, softened linework on screentone-heavy pages, and the 4-image requests on later pages being beyond Qwen's documented 1–3 image sweet spot.
 
 ## API references
 

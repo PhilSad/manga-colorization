@@ -14,6 +14,7 @@ from PIL import Image
 from config import PipelineConfig
 from detection import PanelBox
 from run_context import RunContext, write_json
+from selection import page_selected
 from stitching import stitch_page
 from util import SUPPORTED_IMAGE_SUFFIXES, file_record
 
@@ -37,6 +38,8 @@ def run_stitch_step(
     outputs: list[dict] = []
     for page_dir in page_dirs:
         page = page_dir.name
+        if config.only_panels and not page_selected(page, config.only_panels):
+            continue
         geometry_path = page_dir / "panels.json"
         if not geometry_path.is_file():
             raise ValueError(f"missing {geometry_path}; run the 'panels' step first")

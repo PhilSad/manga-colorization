@@ -84,10 +84,16 @@ class MockColorizer:
 
     def __init__(self, color: tuple[int, int, int] = (205, 92, 92)) -> None:
         self.color = color
-        self.calls: list[tuple[Path, Path | None, Path]] = []
+        self.calls: list[tuple[Path, Path | None, Path, str]] = []
 
-    def colorize(self, panel: Path, atlas: Path | None, output: Path) -> ColorizeRecord:
-        self.calls.append((panel, atlas, output))
+    def colorize(
+        self,
+        panel: Path,
+        atlas: Path | None,
+        output: Path,
+        palette_instruction: str = "",
+    ) -> ColorizeRecord:
+        self.calls.append((panel, atlas, output, palette_instruction))
         with Image.open(panel) as image:
             rgb = image.convert("RGB")
         tint = Image.new("RGB", rgb.size, self.color)
@@ -101,4 +107,67 @@ class MockColorizer:
             latency_s=0.01,
             error=None,
             seed=None,
+            original_size=(rgb.width, rgb.height),
+            scale=1.0,
+            cap_applied=False,
+            max_megapixels=None,
         )
+
+
+class MockPageCharacterDetector:
+    """Canned page-level detections keyed by page stem: `{page_stem: {panel_stem:
+    (characters, uncertain)}}`. Panels not covered are reported as a fallback
+    with no characters (deterministic, offline)."""
+
+    def __init__(self, by_page: dict[str, dict[str, tuple[list[str], bool]]] | None = None):
+        self.by_page = by_page or {}
+        self.calls: list[tuple[Path, list[str]]] = []
+
+    def detect_page(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+    ) -> "PageCharacterRecord":
+        from characters import CharacterRecord, PageCharacterRecord
+
+        self.calls.append((page, list(expected_panels)))
+        page_map = self.by_page.get(page.stem, {})
+        record = PageCharacterRecord(status="ok", page=page.stem, page_calls=1)
+        record.cost_usd = 0.0002
+        for panel_key in expected_panels:
+            entry = page_map.get(panel_key)
+            if entry is None:
+                record.status = "partial"
+                record.fallback_calls += 1
+                record.cost_usd += 0.0001
+                record.panels[panel_key] = CharacterRecord(
+                    status="ok", characters=[], unknown_entries=[],
+                    response_text="{}", usage={"total_tokens": 10},
+                    cost_usd=0.0001, cost_source="mock", latency_s=0.01,
+                    model_returned="mock", attempts=1, finished_at="mock",
+                    source="fallback",
+                )
+                continue
+            characters, uncertain = entry
+            if uncertain:
+                record.status = "partial"
+                record.fallback_calls += 1
+                record.cost_usd += 0.0001
+                record.panels[panel_key] = CharacterRecord(
+                    status="ok", characters=list(characters), unknown_entries=[],
+                    response_text="{}", usage={"total_tokens": 10},
+                    cost_usd=0.0001, cost_source="mock", latency_s=0.01,
+                    model_returned="mock", attempts=1, finished_at="mock",
+                    source="fallback", uncertain=False,
+                )
+                continue
+            record.panels[panel_key] = CharacterRecord(
+                status="ok", characters=list(characters), unknown_entries=[],
+                response_text="{}", usage={"total_tokens": 10},
+                cost_usd=None, cost_source="page-level", latency_s=0.0,
+                model_returned="mock", attempts=1, finished_at="mock",
+                source="page", uncertain=uncertain,
+            )
+        return record

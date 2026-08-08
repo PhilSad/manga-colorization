@@ -3,13 +3,16 @@
 Posts one panel (+ optional filtered atlas) to `POST /edit` (multipart), the
 same HTTP contract as `server/service.py` in this repo: the first image is the
 edit target, further images are references. The request size is the resolution
-closest to the panel's original size with both axes multiples of 16
-(user-confirmed size policy); stitching resizes the output back to the exact
-panel box afterwards.
+closest to the panel's original size with both axes multiples of 16 (V1 size
+policy), bounded by the configurable megapixel cap (task 0004): oversized
+inputs are scaled down proportionally, never upscaled. The prompt can carry an
+explicit canonical-palette instruction for the detected characters (task 0002)
+in addition to the atlas.
 """
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +21,7 @@ from typing import Protocol
 import requests
 from PIL import Image
 
-from config import requested_panel_size
+from config import bounded_requested_size
 from util import file_record
 
 _TIMEOUT_SECONDS = 1800
@@ -31,6 +34,10 @@ NO_ATLAS_INSTRUCTION = (
     "No reference atlas is provided: invent a coherent, restrained anime palette "
     "consistent with the series."
 )
+NO_PROFILE_INSTRUCTION = (
+    "No explicit character palette profiles are provided; derive canonical colors "
+    "from the atlas and invent coherent colors consistent with the series."
+)
 
 
 @dataclass
@@ -41,6 +48,10 @@ class ColorizeRecord:
     latency_s: float
     error: str | None = None
     seed: int | None = None
+    original_size: tuple[int, int] | None = None
+    scale: float | None = None
+    cap_applied: bool = False
+    max_megapixels: float | None = None
 
     def to_dict(self, panel: Path, atlas: Path | None) -> dict:
         doc = {
@@ -48,8 +59,14 @@ class ColorizeRecord:
             "panel": panel.name,
             "panel_sha256": file_record(panel)["sha256"],
             "atlas": atlas.name if atlas else None,
+            "original_size": {"width": self.original_size[0],
+                              "height": self.original_size[1]}
+            if self.original_size else None,
             "requested_size": {"width": self.requested_size[0],
                                "height": self.requested_size[1]},
+            "scale": round(self.scale, 4) if self.scale is not None else None,
+            "cap_applied": self.cap_applied,
+            "max_megapixels": self.max_megapixels,
             "latency_s": round(self.latency_s, 3),
             "seed": self.seed,
             "error": self.error,
@@ -63,7 +80,13 @@ class Colorizer(Protocol):
     """Interface for anything that colorizes one panel with an optional
     reference atlas."""
 
-    def colorize(self, panel: Path, atlas: Path | None, output: Path) -> ColorizeRecord:
+    def colorize(
+        self,
+        panel: Path,
+        atlas: Path | None,
+        output: Path,
+        palette_instruction: str = "",
+    ) -> ColorizeRecord:
         ...
 
 
@@ -80,6 +103,7 @@ class FluxColorizer:
         seed: int | None = None,
         output_format: str = "png",
         timeout: float = _TIMEOUT_SECONDS,
+        max_megapixels: float = 2.0,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.prompt_template = prompt_template
@@ -89,20 +113,46 @@ class FluxColorizer:
         self.seed = seed
         self.output_format = output_format
         self.timeout = timeout
+        self.max_megapixels = max_megapixels
 
-    def _prompt(self, width: int, height: int, atlas: Path | None) -> str:
+    def _prompt(
+        self,
+        width: int,
+        height: int,
+        atlas: Path | None,
+        palette_instruction: str = "",
+    ) -> str:
         instruction = ATLAS_INSTRUCTION if atlas else NO_ATLAS_INSTRUCTION
+        palette = palette_instruction or NO_PROFILE_INSTRUCTION
         return self.prompt_template.format(
-            width=width, height=height, atlas_instruction=instruction
+            width=width,
+            height=height,
+            atlas_instruction=instruction,
+            character_profiles=palette,
         )
 
     def colorize(
-        self, panel: Path, atlas: Path | None, output: Path
+        self,
+        panel: Path,
+        atlas: Path | None,
+        output: Path,
+        palette_instruction: str = "",
     ) -> ColorizeRecord:
         with Image.open(panel) as image:
-            width, height = requested_panel_size(image.width, image.height)
+            original = (image.width, image.height)
+        requested = bounded_requested_size(
+            original[0], original[1], self.max_megapixels
+        )
+        width, height = requested
+        original_area = original[0] * original[1]
+        cap_applied = original_area > self.max_megapixels * 1_000_000
+        scale = (
+            math.sqrt((width * height) / original_area)
+            if cap_applied and original_area
+            else 1.0
+        )
         fields = {
-            "prompt": self._prompt(width, height, atlas),
+            "prompt": self._prompt(width, height, atlas, palette_instruction),
             "width": str(width),
             "height": str(height),
             "num_inference_steps": str(self.num_inference_steps),
@@ -134,6 +184,10 @@ class FluxColorizer:
                 latency_s=time.monotonic() - started,
                 error=f"{type(error).__name__}: {error}",
                 seed=self.seed,
+                original_size=original,
+                scale=scale,
+                cap_applied=cap_applied,
+                max_megapixels=self.max_megapixels,
             )
         finally:
             for _, (_, handle, _) in files:
@@ -148,6 +202,10 @@ class FluxColorizer:
                 latency_s=latency,
                 error=f"HTTP {response.status_code}: {response.text[:500]}",
                 seed=self.seed,
+                original_size=original,
+                scale=scale,
+                cap_applied=cap_applied,
+                max_megapixels=self.max_megapixels,
             )
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_bytes(response.content)
@@ -158,6 +216,10 @@ class FluxColorizer:
             latency_s=latency,
             error=None,
             seed=self.seed,
+            original_size=original,
+            scale=scale,
+            cap_applied=cap_applied,
+            max_megapixels=self.max_megapixels,
         )
 
 

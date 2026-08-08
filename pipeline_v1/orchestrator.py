@@ -72,7 +72,7 @@ class PipelineRunner:
 
     def _initial_manifest(self) -> dict:
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "pipeline": PIPELINE_NAME,
             "status": "running",
             "started_at": iso_now(),
@@ -82,12 +82,16 @@ class PipelineRunner:
             "configuration": self.config.to_dict(),
             "dependencies": {"python": sys.version,
                              **package_versions(DEPENDENCY_PACKAGES)},
+            "prompt_hashes": self._prompt_hashes(),
             "pricing_assumptions": self._pricing_assumptions(),
             "steps": {},
             "totals": {
                 "openrouter_cost_usd": 0.0,
                 "character_calls": 0,
                 "successful_character_calls": 0,
+                "page_character_calls": 0,
+                "fallback_character_calls": 0,
+                "forced_character_panels": 0,
                 "flux_calls": 0,
                 "successful_flux_calls": 0,
                 "panels_colorized": 0,
@@ -95,6 +99,22 @@ class PipelineRunner:
                 "wall_time_s": 0.0,
             },
         }
+
+    def _prompt_hashes(self) -> dict:
+        from util import sha256
+
+        hashes = {}
+        for name, path in (
+            ("vlm_prompt", self.config.vlm_prompt_file),
+            ("vlm_panel_prompt", self.config.vlm_panel_prompt_file),
+            ("colorizer_prompt", self.config.colorizer_prompt_file),
+            ("profiles", self.config.profiles_file),
+        ):
+            try:
+                hashes[name + "_sha256"] = sha256(path)
+            except (OSError, ValueError):
+                hashes[name + "_sha256"] = None
+        return hashes
 
     def _pricing_assumptions(self) -> dict:
         if self.config.mock:
@@ -130,17 +150,27 @@ class PipelineRunner:
         return steps
 
     def _copy_resumed_outputs(self, ctx: RunContext) -> None:
+        """Copy step outputs from the resume run. With `--from-step STEP` only
+        the outputs strictly before STEP are copied; later-stage outputs are
+        regenerated in the fresh run (task 0001)."""
         resume_dir = Path(self.config.resume)
         if not resume_dir.is_dir():
             raise ValueError(f"--resume directory not found: {resume_dir}")
-        for step, dirname in STEP_DIRS.items():
-            source = resume_dir / dirname
+        steps = list(STEP_ORDER)
+        if self.config.from_step:
+            steps = list(STEP_ORDER[: STEP_ORDER.index(self.config.from_step)])
+        for step in steps:
+            source = resume_dir / STEP_DIRS[step]
             if source.is_dir():
-                target = ctx.run_dir / dirname
+                target = ctx.run_dir / STEP_DIRS[step]
                 target.mkdir(parents=True, exist_ok=True)
                 for item in source.iterdir():
                     _copytree(item, target / item.name)
-        print(f"resumed outputs copied from {resume_dir}", flush=True)
+        print(
+            f"resumed outputs copied from {resume_dir} (steps before "
+            f"{self.config.from_step or 'end'})",
+            flush=True,
+        )
 
     def _step_has_outputs(self, ctx: RunContext, step: str) -> bool:
         directory = ctx.run_dir / STEP_DIRS[step]
@@ -178,6 +208,9 @@ class PipelineRunner:
                 "openrouter_cost_usd": totals["cost_usd"],
                 "character_calls": totals["api_calls"],
                 "successful_character_calls": totals["successful_calls"],
+                "page_character_calls": totals["page_calls"],
+                "fallback_character_calls": totals["fallback_calls"],
+                "forced_character_panels": totals["forced_panels"],
             })
         elif step == "colorize":
             from steps.colorize import run_colorize_step

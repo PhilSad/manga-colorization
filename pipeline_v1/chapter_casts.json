@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "description": "Optional cached chapter/arc cast shortlists (task 0003). Selected deterministically by --cast-key; never fetched remotely during a run. The detector passes only the shortlist to the page-level prompt instead of the full roster. Characters outside the shortlist are reported as unknown (uncertain) rather than guessed.",
+  "casts": {
+    "c001": {
+      "label": "Volume 1, chapter 1",
+      "characters": ["Frieren", "Himmel", "Heiter", "Eisen", "Fern", "Stark"],
+      "note": "Hero-party funeral flashback + present-day party. Sein does not appear in chapter 1 and is deliberately excluded so he cannot be guessed for Heiter."
+    },
+    "ch134": {
+      "label": "Chapter 134 (goddess monument arc)",
+      "characters": [
+        "Frieren", "Fern", "Stark", "Sein", "Kanne", "Lawine",
+        "Richter", "Wirbel", "Uebel", "Laufen", "Denken", "Flamme", "Serie"
+      ],
+      "note": "Late-arc chapter with a wide cast. Clematis (not in the reference set) may appear; she must be reported as unknown, never mapped to a known character."
+    }
+  }
+}

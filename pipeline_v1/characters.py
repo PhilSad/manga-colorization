@@ -1,14 +1,20 @@
-"""Per-panel character detection via OpenRouter vision-language models.
+"""Character detection via OpenRouter vision-language models.
 
-Library port of
-`research/character_detection_methods/character-detection-openrouter-vlm/run.py`
-(the standalone experiment stays untouched): same prompt contract, JSON parsing
-and validation, retry policy, and per-call cost accounting (`usage.cost` from
-OpenRouter, computed from published pricing as a fallback).
+V1 behaviour (`detection_mode="panel"`): one call per panel, the panel as the
+only image, prompt listing the canonical reference characters (hints come from
+the shared character profiles, task 0002) and asking for exactly
+`{"characters": ["Name1", ...]}`.
 
-One image per call: the panel is sent as the only image alongside a prompt that
-lists the canonical reference characters (from `data/refs/`) with short hints and
-asks for exactly `{"characters": ["Name1", ...]}`.
+V1.1 behaviour (`detection_mode="page"`, default, task 0003): one paid call
+per page. The full page is sent with the panels numbered in reading order
+(same numbers the extraction uses); the model returns a strict per-panel
+mapping. Missing, invalid, or explicitly `uncertain` panel entries trigger a
+cropped-panel fallback call (the V1 per-panel prompt). An optional cached
+chapter cast shortlist (`--cast-key`) replaces the full roster in the prompt.
+
+Parsing, validation, retry policy, and per-call cost accounting (`usage.cost`
+from OpenRouter) are shared with the standalone research method
+`character-detection-openrouter-vlm`.
 """
 
 from __future__ import annotations
@@ -17,37 +23,16 @@ import base64
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from profiles import hint_text, load_profiles
 from util import file_record
 
 API_BASE = "https://openrouter.ai/api/v1"
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
-
-# Short neutral hints from the anime, used to help the VLM tell characters
-# apart in black-and-white panels. Only names present in data/refs are used.
-CHARACTER_HINTS: dict[str, str] = {
-    "frieren": "elf, long silver hair, elven ears",
-    "fern": "Frieren's apprentice, pale hair, mage staff",
-    "stark": "warrior, spiky red hair, large build",
-    "himmel": "hero, blue hair, confident",
-    "heiter": "priest, light gray hair, cross pendant",
-    "eisen": "dwarf, tall, white beard, heavy armor",
-    "aura": "demon general, long black hair, dark dress",
-    "denken": "elderly mage, black hair and beard",
-    "flamme": "Frieren's master, tall elf, long white hair",
-    "serie": "great mage, elf, long black hair, dark dress",
-    "sein": "priest, black hair, relaxed",
-    "kanne": "timid mage girl, dark hair",
-    "laufen": "energetic girl, short dark hair, dark outfit",
-    "lawine": "mage girl, light hair",
-    "richter": "older city guard, short dark hair, mustache",
-    "wirbel": "mage, light hair",
-    "uebel": "shadow warrior, black hair, dark clothes",
-}
 
 MAX_ATTEMPTS = 8
 BASE_BACKOFF_S = 5.0
@@ -74,21 +59,47 @@ def canonical_characters(refs_dir: Path) -> list[str]:
     return [seen[key] for key in sorted(seen)]
 
 
-def build_prompt(template: str, characters: list[str]) -> str:
+def cast_shortlist_for(chapter_casts_file: Path, cast_key: str | None) -> list[str] | None:
+    """Deterministic cached chapter cast shortlist (never fetched remotely)."""
+    if not cast_key:
+        return None
+    data = json.loads(Path(chapter_casts_file).read_text(encoding="utf-8"))
+    casts = data.get("casts", {})
+    if cast_key not in casts:
+        raise ValueError(
+            f"cast key {cast_key!r} not found in {chapter_casts_file} "
+            f"(available: {sorted(casts)})"
+        )
+    return [str(name) for name in casts[cast_key]["characters"]]
+
+
+def build_prompt(
+    template: str,
+    characters: list[str],
+    profiles: dict | None = None,
+    cast_shortlist: list[str] | None = None,
+) -> str:
     lines = []
     for name in characters:
-        hint = CHARACTER_HINTS.get(name.lower())
+        hint = hint_text(name, profiles) if profiles else None
         lines.append(f"- {name}: {hint}" if hint else f"- {name}")
-    return template.replace("{characters}", "\n".join(lines))
+    rendered = template.replace("{characters}", "\n".join(lines))
+    if cast_shortlist:
+        cast_text = (
+            "\nThis page comes from a chapter whose likely cast is limited to: "
+            + ", ".join(cast_shortlist)
+            + ". Do not name characters outside this list; report them as "
+            + "unknown (\"uncertain\": true)."
+        )
+    else:
+        cast_text = ""
+    return rendered.replace("{cast_shortlist}", cast_text)
 
 
 # ---------------------------------------------------------------------------
 # Parsing and validation of the model's answer
 
-def parse_characters(text: str) -> list[Any] | None:
-    if not text:
-        return None
-    text = text.strip()
+def _extract_json_object(text: str) -> Any:
     fenced = re.search(r"```(?:json)?\s*(.*?)```", text, re.S)
     if fenced:
         text = fenced.group(1).strip()
@@ -97,16 +108,50 @@ def parse_characters(text: str) -> list[Any] | None:
         if not match:
             continue
         try:
-            data = json.loads(match.group(0))
+            return json.loads(match.group(0))
         except json.JSONDecodeError:
             continue
-        if isinstance(data, dict) and "characters" in data:
-            if isinstance(data["characters"], list):
-                return [str(item) for item in data["characters"]]
-            return None
-        if isinstance(data, list):
-            return [str(item) for item in data]
     return None
+
+
+def parse_characters(text: str) -> list[Any] | None:
+    if not text:
+        return None
+    data = _extract_json_object(text.strip())
+    if data is None:
+        return None
+    if isinstance(data, dict) and "characters" in data:
+        if isinstance(data["characters"], list):
+            return [str(item) for item in data["characters"]]
+        return None
+    if isinstance(data, list):
+        return [str(item) for item in data]
+    return None
+
+
+def parse_page_mapping(text: str) -> dict[str, dict[str, Any]] | None:
+    """Parse the page-level response into `{panel_key: {characters, uncertain}}`.
+
+    Returns None for unparseable/malformed answers. Panel keys are validated
+    by the caller against the expected reading-order set.
+    """
+    if not text:
+        return None
+    data = _extract_json_object(text.strip())
+    if not isinstance(data, dict) or not isinstance(data.get("panels"), dict):
+        return None
+    mapping: dict[str, dict[str, Any]] = {}
+    for panel_key, entry in data["panels"].items():
+        if not isinstance(entry, dict):
+            return None
+        characters = entry.get("characters", [])
+        if not isinstance(characters, list):
+            return None
+        mapping[str(panel_key)] = {
+            "characters": [str(item) for item in characters],
+            "uncertain": bool(entry.get("uncertain", False)),
+        }
+    return mapping
 
 
 def validate_characters(
@@ -138,7 +183,7 @@ def validate_characters(
 class CharacterRecord:
     """Result of one character-detection call for one panel."""
 
-    status: str                       # ok | ok-with-unknown | unparseable | error
+    status: str                       # ok | ok-with-unknown | unparseable | error | forced
     characters: list[str]             # canonical names, validated
     unknown_entries: list[str]
     response_text: str
@@ -150,10 +195,14 @@ class CharacterRecord:
     attempts: int
     error: str | None = None
     finished_at: str | None = None
+    source: str = "panel"             # "page" | "fallback" | "forced"
+    uncertain: bool = False
 
     def to_dict(self, panel: Path, page: str) -> dict[str, Any]:
         return {
             "status": self.status,
+            "source": self.source,
+            "uncertain": self.uncertain,
             "page": page,
             "panel": panel.name,
             "panel_sha256": file_record(panel)["sha256"],
@@ -171,6 +220,21 @@ class CharacterRecord:
         }
 
 
+@dataclass
+class PageCharacterRecord:
+    """Result of one page-level detection call plus its fallbacks."""
+
+    status: str                       # "ok" | "partial" | "error"
+    page: str
+    panels: dict[str, CharacterRecord] = field(default_factory=dict)
+    page_calls: int = 0
+    fallback_calls: int = 0
+    unpriced_calls: int = 0
+    cost_usd: float = 0.0
+    total_latency_s: float = 0.0
+    error: str | None = None
+
+
 class CharacterDetector(Protocol):
     """Interface for anything that lists which reference characters appear in
     a manga panel."""
@@ -179,8 +243,22 @@ class CharacterDetector(Protocol):
         ...
 
 
+class PageCharacterDetector(Protocol):
+    """Interface for page-level detection (task 0003): one call per page
+    mapping numbered panels to canonical characters."""
+
+    def detect_page(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+    ) -> PageCharacterRecord:
+        ...
+
+
 class OpenRouterCharacterDetector:
-    """One OpenRouter VLM call per panel (vision-capable chat model)."""
+    """OpenRouter VLM client supporting both per-panel and page-level calls."""
 
     def __init__(
         self,
@@ -188,14 +266,19 @@ class OpenRouterCharacterDetector:
         api_key: str,
         api_base: str = API_BASE,
         prompt_template: str | None = None,
-        max_tokens: int = 2048,
+        panel_prompt_template: str | None = None,
+        max_tokens: int = 1024,
         temperature: float = 0.2,
         client: Any = None,  # injected OpenAI-compatible client (tests)
+        profiles_file: Path | None = None,
+        chapter_casts_file: Path | None = None,
+        cast_key: str | None = None,
     ) -> None:
         self.model = model
         self.api_key = api_key
         self.api_base = api_base
         self.prompt_template = prompt_template
+        self.panel_prompt_template = panel_prompt_template
         self.max_tokens = max_tokens
         self.temperature = temperature
         if client is not None:
@@ -204,38 +287,197 @@ class OpenRouterCharacterDetector:
             from openai import OpenAI
 
             self.client = OpenAI(api_key=api_key, base_url=api_base)
+        self.profiles_file = Path(profiles_file) if profiles_file else None
+        self.chapter_casts_file = Path(chapter_casts_file) if chapter_casts_file else None
+        self.cast_key = cast_key
         self.canonical: list[str] = []
+        self.profiles: dict = {}
         self.prompt: str = ""
+        self.panel_prompt: str = ""
 
-    def prepare(self, refs_dir: Path, prompt_file: Path | None = None) -> None:
-        """Load the canonical character list and build the prompt once per run."""
+    def prepare(
+        self,
+        refs_dir: Path,
+        prompt_file: Path | None = None,
+        panel_prompt_file: Path | None = None,
+    ) -> None:
+        """Load the canonical list, profiles, cast shortlist and build the
+        prompts once per run."""
         self.canonical = canonical_characters(refs_dir)
+        if self.profiles_file is not None and self.profiles_file.is_file():
+            self.profiles = load_profiles(self.profiles_file)
+        shortlist = cast_shortlist_for(self.chapter_casts_file, self.cast_key)
+
         template = self.prompt_template
         if template is None:
             if prompt_file is None:
-                raise ValueError("a prompt template or prompt_file is required")
-            template = prompt_file.read_text(encoding="utf-8")
-        self.prompt = build_prompt(template, self.canonical)
+                raise ValueError("a page prompt template or prompt_file is required")
+            template = Path(prompt_file).read_text(encoding="utf-8")
+        self.prompt = build_prompt(
+            template, self.canonical, profiles=self.profiles, cast_shortlist=shortlist
+        )
+
+        panel_template = self.panel_prompt_template
+        if panel_template is None and panel_prompt_file is not None:
+            panel_template = Path(panel_prompt_file).read_text(encoding="utf-8")
+        self.panel_prompt = build_prompt(
+            panel_template or "", self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
+    # -- per-panel ---------------------------------------------------------
 
     def detect(self, panel: Path, refs_dir: Path) -> CharacterRecord:
-        if not self.prompt or not self.canonical:
+        if not self.panel_prompt or not self.canonical:
             self.prepare(refs_dir)
         info = file_record(panel)
         info["data_base64"] = base64.b64encode(panel.read_bytes()).decode()
-        return self._classify(info)
+        content = [
+            {"type": "text", "text": self.panel_prompt},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{info['mime_type']};base64,{info['data_base64']}"}},
+        ]
+        result = self._call(content)
+        parsed = parse_characters(result.text)
+        known, unknown = validate_characters(parsed, self.canonical)
+        if result.error is not None:
+            status = "error"
+        elif parsed is None:
+            status = "unparseable"
+        elif unknown:
+            status = "ok-with-unknown"
+        else:
+            status = "ok"
+        return CharacterRecord(
+            status=status,
+            characters=known,
+            unknown_entries=unknown,
+            response_text=result.text,
+            usage=result.usage,
+            cost_usd=result.cost_usd,
+            cost_source=result.cost_source,
+            latency_s=result.latency_s,
+            model_returned=result.model_returned,
+            attempts=result.attempts,
+            error=result.error,
+            finished_at=_iso_now(),
+            source="panel",
+        )
 
-    def _classify(self, panel: dict[str, Any]) -> CharacterRecord:
+    # -- page-level (task 0003) --------------------------------------------
+
+    def detect_page(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+    ) -> PageCharacterRecord:
+        """One page-level call; per-panel fallbacks for missing/invalid/
+        uncertain entries."""
+        if not self.prompt or not self.canonical:
+            self.prepare(refs_dir)
+        record = PageCharacterRecord(status="ok", page=page.stem)
+
+        annotated = _annotated_page(page, panels_dir)
+        info = file_record(annotated)
+        info["data_base64"] = base64.b64encode(annotated.read_bytes()).decode()
+        content = [
+            {"type": "text", "text": self.prompt},
+            {"type": "image_url",
+             "image_url": {"url": f"data:{info['mime_type']};base64,{info['data_base64']}"}},
+        ]
+        result = self._call(content)
+        record.page_calls = 1
+        record.cost_usd += result.cost_usd or 0.0
+        record.total_latency_s += result.latency_s
+        if result.cost_usd is None:
+            record.unpriced_calls += 1
+
+        mapping = parse_page_mapping(result.text) if result.error is None else None
+        mapping = mapping or {}
+        expected_set = set(expected_panels)
+        if result.error is not None:
+            record.status = "error"
+            record.error = result.error
+
+        for panel_key in expected_panels:
+            entry = mapping.get(panel_key)
+            if entry is None:
+                # missing or invalid mapping entry -> cropped-panel fallback
+                record.status = "partial" if record.status == "ok" else record.status
+                fallback = self._fallback_panel(panel_key, panels_dir, refs_dir)
+                record.fallback_calls += 1
+                record.cost_usd += fallback.cost_usd or 0.0
+                record.total_latency_s += fallback.latency_s
+                if fallback.cost_usd is None:
+                    record.unpriced_calls += 1
+                record.panels[panel_key] = fallback
+                continue
+            known, unknown = validate_characters(
+                entry["characters"], self.canonical
+            )
+            if entry["uncertain"] or unknown:
+                record.status = "partial" if record.status == "ok" else record.status
+                fallback = self._fallback_panel(panel_key, panels_dir, refs_dir)
+                record.fallback_calls += 1
+                record.cost_usd += fallback.cost_usd or 0.0
+                record.total_latency_s += fallback.latency_s
+                if fallback.cost_usd is None:
+                    record.unpriced_calls += 1
+                record.panels[panel_key] = fallback
+                continue
+            # Keep only expected panel keys (extra keys are not accepted).
+            record.panels[panel_key] = CharacterRecord(
+                status="ok",
+                characters=known,
+                unknown_entries=[],
+                response_text=result.text,
+                usage=result.usage,
+                cost_usd=None,  # cost attributed at page level
+                cost_source="page-level",
+                latency_s=0.0,
+                model_returned=result.model_returned,
+                attempts=result.attempts,
+                error=None,
+                finished_at=_iso_now(),
+                source="page",
+                uncertain=False,
+            )
+        # Panels the model invented that were not expected are rejected.
+        for extra in set(mapping) - expected_set:
+            print(f"    page detection: rejecting unexpected panel key {extra!r}",
+                  flush=True)
+        return record
+
+    def _fallback_panel(
+        self, panel_key: str, panels_dir: Path, refs_dir: Path
+    ) -> CharacterRecord:
+        panel = panels_dir / f"{panel_key}.png"
+        if not panel.is_file():
+            # try any supported extension
+            for suffix in SUPPORTED_IMAGE_SUFFIXES:
+                candidate = panels_dir / f"{panel_key}{suffix}"
+                if candidate.is_file():
+                    panel = candidate
+                    break
+        if not panel.is_file():
+            return CharacterRecord(
+                status="error", characters=[], unknown_entries=[],
+                response_text="", usage={}, cost_usd=None, cost_source="unavailable",
+                latency_s=0.0, model_returned=None, attempts=0,
+                error=f"fallback crop missing: {panels_dir / panel_key}", 
+                finished_at=_iso_now(), source="fallback",
+            )
+        record = self.detect(panel, refs_dir)
+        record.source = "fallback"
+        return record
+
+    # -- shared OpenAI call machinery --------------------------------------
+
+    def _call(self, content: list[dict[str, Any]]) -> "_CallResult":
         from openai import APIError, APIConnectionError, BadRequestError, RateLimitError
 
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": self.prompt},
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{panel['mime_type']};base64,{panel['data_base64']}"
-                },
-            },
-        ]
         messages = [{"role": "user", "content": content}]
         response_format: str | None = "json_object"
         attempts = 0
@@ -267,13 +509,17 @@ class OpenRouterCharacterDetector:
                     response_format = None
                     attempts = 0
                     continue
-                return self._error_record(
-                    f"BadRequestError: {error}", started, attempts
+                return _CallResult(
+                    text="", usage={}, cost_usd=None, cost_source="unavailable",
+                    latency_s=time.monotonic() - started, model_returned=None,
+                    attempts=attempts, error=f"BadRequestError: {error}",
                 )
             except RateLimitError as error:
                 if attempts >= MAX_ATTEMPTS:
-                    return self._error_record(
-                        f"RateLimitError: {error}", started, attempts
+                    return _CallResult(
+                        text="", usage={}, cost_usd=None, cost_source="unavailable",
+                        latency_s=time.monotonic() - started, model_returned=None,
+                        attempts=attempts, error=f"RateLimitError: {error}",
                     )
                 headers = getattr(getattr(error, "response", None), "headers", {}) or {}
                 retry_after = headers.get("retry-after")
@@ -286,8 +532,11 @@ class OpenRouterCharacterDetector:
                 continue
             except (APIConnectionError, APIError) as error:
                 if attempts >= MAX_ATTEMPTS:
-                    return self._error_record(
-                        f"{type(error).__name__}: {error}", started, attempts
+                    return _CallResult(
+                        text="", usage={}, cost_usd=None, cost_source="unavailable",
+                        latency_s=time.monotonic() - started, model_returned=None,
+                        attempts=attempts,
+                        error=f"{type(error).__name__}: {error}",
                     )
                 delay = BASE_BACKOFF_S * attempts
                 print(
@@ -298,8 +547,10 @@ class OpenRouterCharacterDetector:
                 time.sleep(delay)
                 continue
             except Exception as error:  # noqa: BLE001 - record anything else
-                return self._error_record(
-                    f"{type(error).__name__}: {error}", started, attempts
+                return _CallResult(
+                    text="", usage={}, cost_usd=None, cost_source="unavailable",
+                    latency_s=time.monotonic() - started, model_returned=None,
+                    attempts=attempts, error=f"{type(error).__name__}: {error}",
                 )
 
             latency = time.monotonic() - started
@@ -328,43 +579,69 @@ class OpenRouterCharacterDetector:
                 if response.choices
                 else ""
             )
-            parsed = parse_characters(text)
-            known, unknown = validate_characters(parsed, self.canonical)
-            status = "ok"
-            if parsed is None:
-                status = "unparseable"
-            elif unknown:
-                status = "ok-with-unknown"
-            return CharacterRecord(
-                status=status,
-                characters=known,
-                unknown_entries=unknown,
-                response_text=text,
-                usage=usage_record,
-                cost_usd=cost_usd,
-                cost_source=cost_source,
-                latency_s=latency,
+            return _CallResult(
+                text=text, usage=usage_record, cost_usd=cost_usd,
+                cost_source=cost_source, latency_s=latency,
                 model_returned=getattr(response, "model", None),
-                attempts=attempts,
-                error=None,
-                finished_at=_iso_now(),
+                attempts=attempts, error=None,
             )
 
-    def _error_record(self, message: str, started: float, attempts: int) -> CharacterRecord:
-        return CharacterRecord(
-            status="error",
-            characters=[],
-            unknown_entries=[],
-            response_text="",
-            usage={},
-            cost_usd=None,
-            cost_source="unavailable",
-            latency_s=time.monotonic() - started,
-            model_returned=None,
-            attempts=attempts,
-            error=message,
-            finished_at=_iso_now(),
-        )
+
+@dataclass
+class _CallResult:
+    text: str
+    usage: dict[str, int]
+    cost_usd: float | None
+    cost_source: str
+    latency_s: float
+    model_returned: str | None
+    attempts: int
+    error: str | None
+
+
+def _annotated_page(page: Path, panels_dir: Path) -> Path:
+    """A copy of the page with panel numbers overlaid in reading order (the
+    same numbers the extraction uses). Written next to the page in a temp
+    location inside the run's panels dir so it is never confused with inputs.
+    """
+    from extraction import draw_overlay
+    from PIL import Image
+
+    geometry_path = panels_dir / "panels.json"
+    if not geometry_path.is_file():
+        raise ValueError(f"missing {geometry_path}; cannot annotate page for detection")
+    geometry = json.loads(geometry_path.read_text(encoding="utf-8"))
+    from detection import PanelBox
+
+    boxes = [PanelBox(*d["box"], d.get("confidence", 0.9))
+             for d in geometry["detections"]]
+    annotated = panels_dir / "detection_annotated.png"
+    with Image.open(page) as image:
+        draw_overlay(image.convert("RGB"), boxes, annotated)
+    return annotated
+
+
+def forced_record(
+    panel: Path, names: list[str], profiles: dict | None = None
+) -> CharacterRecord:
+    """Ground-truth identity record: no API call, zero cost (task 0001)."""
+    from profiles import unknown_names
+
+    return CharacterRecord(
+        status="forced",
+        characters=list(names),
+        unknown_entries=unknown_names(names, profiles or {}),
+        response_text="",
+        usage={},
+        cost_usd=0.0,
+        cost_source="forced ground-truth",
+        latency_s=0.0,
+        model_returned=None,
+        attempts=0,
+        error=None,
+        finished_at=_iso_now(),
+        source="forced",
+    )
 
 
 def _iso_now() -> str:

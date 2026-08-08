@@ -126,7 +126,7 @@ def test_pipeline_end_to_end(pipeline_inputs, mock_backends):
     for i in range(1, 6):
         assert (colorized_dir / f"panel_000{i}.png").is_file()
     # Atlas sent only when characters were detected.
-    for panel, atlas, _output in mock_backends.colorizer.calls:
+    for panel, atlas, _output, _palette in mock_backends.colorizer.calls:
         expected_atlas = bool(CHARACTERS_BY_PANEL[panel.stem])
         assert (atlas is not None) == expected_atlas, panel.name
         if atlas is not None:

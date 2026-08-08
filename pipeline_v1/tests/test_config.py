@@ -23,6 +23,16 @@ def test_parse_args_defaults():
     assert config.output_format == "png"
     assert config.atlas_columns is None
     assert config.to_dict()["input_dir"]
+    # V1.1 defaults
+    assert config.detection_mode == "page"
+    assert config.cast_key is None
+    assert config.full_page_fallback is True
+    assert config.blank_ink_threshold == 0.005
+    assert config.max_megapixels == 2.0
+    assert config.max_tokens == 1024
+    assert config.sleep_s == 1.0
+    assert config.only_panels == ()
+    assert config.forced_characters == {}
 
 
 def test_parse_args_overrides():
@@ -52,6 +62,45 @@ def test_parse_args_overrides():
 def test_invalid_values_rejected(argv):
     with pytest.raises(SystemExit):
         parse_args(argv)
+
+
+def test_v1_1_flags_parse():
+    config = parse_args([
+        "--detection-mode", "panel",
+        "--cast-key", "c001",
+        "--no-full-page-fallback",
+        "--max-megapixels", "3.5",
+        "--blank-ink-threshold", "0.01",
+        "--only-panel", "P003:panel_0006",
+        "--only-panel", "p007:panel_0003",
+        "--force-characters", "P003:panel_0006=Frieren",
+        "--force-characters", "p007:panel_0003=Heiter,Fern",
+    ])
+    assert config.detection_mode == "panel"
+    assert config.cast_key == "c001"
+    assert config.full_page_fallback is False
+    assert config.max_megapixels == 3.5
+    assert config.blank_ink_threshold == 0.01
+    assert config.only_panels == ("P003:panel_0006", "p007:panel_0003")
+    assert config.forced_characters == {
+        "P003:panel_0006": ["Frieren"],
+        "p007:panel_0003": ["Heiter", "Fern"],
+    }
+
+
+def test_invalid_v1_1_values_rejected():
+    for argv in (
+        ["--detection-mode", "pagex"],
+        ["--max-megapixels", "0"],
+        ["--max-megapixels", "-1"],
+        ["--blank-ink-threshold", "1.5"],
+        ["--blank-ink-threshold", "-0.1"],
+        ["--only-panel", "missing-colon"],
+        ["--force-characters", "no-equals"],
+        ["--force-characters", "P003:panel_0006="],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
 
 
 def test_unknown_step_rejected():

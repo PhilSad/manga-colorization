@@ -66,10 +66,17 @@ def build_backends(config):
         api_key=api_key,
         max_tokens=config.max_tokens,
         temperature=config.temperature,
+        profiles_file=config.profiles_file,
+        chapter_casts_file=config.chapter_casts_file,
+        cast_key=config.cast_key,
     )
     if not config.vlm_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")
-    character_detector.prepare(config.refs_dir, config.vlm_prompt_file)
+    character_detector.prepare(
+        config.refs_dir,
+        config.vlm_prompt_file,
+        config.vlm_panel_prompt_file,
+    )
 
     if not config.colorizer_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.colorizer_prompt_file}")
@@ -82,6 +89,7 @@ def build_backends(config):
         lora_scale=config.lora_scale,
         seed=config.seed,
         output_format=config.output_format,
+        max_megapixels=config.max_megapixels,
     )
     return Backends(
         detector=detector,

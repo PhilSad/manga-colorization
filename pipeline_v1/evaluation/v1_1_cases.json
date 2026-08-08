@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "description": "V1.1 fixed evaluation set: real V1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets.",
+  "aliases": {
+    "P003": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].png",
+    "P004_005": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].png",
+    "P006": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p006 [VIZ Media] [Digital] [1r0n].png",
+    "P007": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n].png",
+    "P008": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p008 [VIZ Media] [Digital] [1r0n].png",
+    "CH134_004": "data/chapter_134/0134-004.png"
+  },
+  "cases": [
+    {
+      "id": "DET-001",
+      "stage": "characters",
+      "failure": "present-day-cast-in-flashback",
+      "input": {"source_page": "P003", "panel": "panel_0002"},
+      "expected": {"characters": ["Frieren", "Himmel"], "unknown_present": false},
+      "baseline": {"characters": ["Fern", "Stark"]},
+      "note": "Present-day cast guessed inside a hero-party flashback crop."
+    },
+    {
+      "id": "DET-002",
+      "stage": "characters",
+      "failure": "multi-character-collapse",
+      "input": {"source_page": "P003", "panel": "panel_0004"},
+      "expected": {"characters": ["Frieren", "Himmel", "Heiter", "Eisen"], "unknown_present": false},
+      "baseline": {"characters": ["Sein"]},
+      "note": "Multi-character panel collapsed to one wrong priest."
+    },
+    {
+      "id": "DET-003",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P008", "panel": "panel_0003"},
+      "expected": {"characters": ["Heiter"], "unknown_present": false},
+      "baseline": {"characters": ["Sein"]},
+      "note": "Heiter/Sein confusion in a close-up."
+    },
+    {
+      "id": "DET-004",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P008", "panel": "panel_0004"},
+      "expected": {"characters": ["Frieren", "Heiter"], "unknown_present": false},
+      "baseline": {"characters": ["Frieren", "Sein"]},
+      "note": "One correct identity plus one confused identity."
+    },
+    {
+      "id": "OOV-001",
+      "stage": "characters",
+      "failure": "out-of-vocabulary",
+      "input": {"source_page": "CH134_004", "panel": "panel_0003"},
+      "expected": {
+        "characters": [],
+        "unknown_present": true,
+        "expected_unknown_characters": ["Clematis"]
+      },
+      "baseline": {"characters": ["Sein"]},
+      "note": "Clematis is outside the 17-name reference vocabulary; must not be forced to the closest known priest. unknown_present is evaluation metadata, not permission to invent a name."
+    },
+    {
+      "id": "COL-001",
+      "stage": "color",
+      "failure": "palette-adherence",
+      "input": {
+        "source_page": "P003",
+        "panel": "panel_0006",
+        "forced_characters": ["Frieren"]
+      },
+      "expected": {
+        "characters": ["Frieren"],
+        "required_colors": ["silver-white hair", "green eyes where visible", "white/gold canonical outfit"],
+        "forbidden_colors": ["magenta or purple hair"],
+        "preserve": ["text", "linework", "screentones", "composition", "canvas_size"]
+      },
+      "note": "Same canonical Frieren palette as COL-002 despite a different crop and page."
+    },
+    {
+      "id": "COL-002",
+      "stage": "color",
+      "failure": "palette-adherence",
+      "input": {
+        "source_page": "P007",
+        "panel": "panel_0006",
+        "forced_characters": ["Frieren"]
+      },
+      "expected": {
+        "characters": ["Frieren"],
+        "required_colors": ["silver-white hair", "green eyes where visible", "white/gold canonical outfit"],
+        "forbidden_colors": ["magenta or purple hair"],
+        "preserve": ["text", "linework", "composition", "canvas_size"]
+      },
+      "note": "Same canonical Frieren palette as COL-001 despite a different crop and page."
+    },
+    {
+      "id": "COL-003",
+      "stage": "color",
+      "failure": "palette-adherence",
+      "input": {
+        "source_page": "P008",
+        "panel": "panel_0003",
+        "forced_characters": ["Heiter"]
+      },
+      "expected": {
+        "characters": ["Heiter"],
+        "required_colors": ["light green hair", "glasses", "black clerical robe with gold trim"],
+        "forbidden_colors": ["Sein's brown-hair/purple-blue outfit palette"],
+        "preserve": ["text", "linework", "composition", "canvas_size"]
+      },
+      "note": "Heiter must not receive Sein's palette."
+    },
+    {
+      "id": "LAY-001",
+      "stage": "layout",
+      "failure": "zero-panel-fallback",
+      "input": {
+        "source_page": "P006",
+        "full_page_fallback": true
+      },
+      "expected": {
+        "panels": 1,
+        "box": [0, 0, 1500, 2250],
+        "crop": "panel_0001",
+        "provenance": "full-page-fallback",
+        "blank_page": false
+      },
+      "note": "Full-page illustration with no panel frames: one synthetic full-page panel, then a stitched 1500x2250 colorized page. Must not be classified as blank."
+    },
+    {
+      "id": "LAY-002",
+      "stage": "layout",
+      "failure": "blank-page-skip",
+      "input": {
+        "generate": {"kind": "white", "size": [1500, 2250], "name": "blank_1500x2250.png"},
+        "full_page_fallback": true
+      },
+      "expected": {
+        "panels": 0,
+        "blank_page": true,
+        "skip_reason": "blank-page",
+        "paid_calls": 0,
+        "final_page": {"width": 1500, "height": 2250}
+      },
+      "note": "Generated all-white page: zero panels, an explicit blank-page skip record, zero character/FLUX calls, unchanged final page if stitching is requested."
+    },
+    {
+      "id": "SIZE-001",
+      "stage": "size",
+      "failure": "oversized-input-capping",
+      "input": {
+        "source_page": "P004_005",
+        "panel": "panel_0001",
+        "detected_box": [23, 0, 2918, 2250],
+        "cap_megapixels": 2.0
+      },
+      "expected": {
+        "requested_size": {"width": 1600, "height": 1248},
+        "requested_pixels": 1996800,
+        "multiples_of_16": true,
+        "aspect_ratio_tolerance": 0.02
+      },
+      "note": "One panel remains one panel; FLUX request is 1600x1248 (multiples of 16, 1,996,800 px <= 2.0 MP); final stitched page stays exactly 3000x2250. Record original crop size, request size, scale, latency, applied cap."
+    }
+  ]
+}

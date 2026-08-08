@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "description": "Canonical Frieren character profiles: monochrome identity cues for detection, canonical palette descriptions for explicit FLUX conditioning (task 0002), reference filenames under data/refs/, and empty variant maps. Palette entries are descriptive prose injected into the colorization prompt; they are not exact hex codes.",
+  "profiles": [
+    {
+      "name": "Frieren",
+      "aliases": ["Frieren the Slayer"],
+      "identity_cues": ["elf", "long silver twin-tail hair", "elven ears"],
+      "canonical_palette": ["silver-white hair", "green eyes", "white coat with gold trim"],
+      "reference_files": ["frieren_reference.webp", "Frieren_anime_profile.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Fern",
+      "aliases": ["Frieren's apprentice"],
+      "identity_cues": ["pale hair", "mage staff", "young mage girl"],
+      "canonical_palette": ["pale lavender hair", "purple-brown eyes", "dark mage robe with white trim"],
+      "reference_files": ["fern_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Stark",
+      "aliases": ["Stark the warrior"],
+      "identity_cues": ["warrior", "spiky red hair", "large build"],
+      "canonical_palette": ["bright red hair", "blue-grey eyes", "dark armour with grey fur trim"],
+      "reference_files": ["stark_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Himmel",
+      "aliases": ["Himmel the Hero"],
+      "identity_cues": ["hero", "blue hair", "confident smile"],
+      "canonical_palette": ["light blue hair", "blue eyes", "white and gold hero outfit"],
+      "reference_files": ["himmel_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Heiter",
+      "aliases": ["Heiter the Priest"],
+      "identity_cues": ["priest", "light gray hair", "cross pendant", "glasses"],
+      "canonical_palette": ["light green hair", "grey-green eyes", "glasses", "black clerical robe with gold trim"],
+      "reference_files": ["heiter_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Eisen",
+      "aliases": ["Eisen the Dwarf"],
+      "identity_cues": ["dwarf", "tall", "white beard", "heavy armor"],
+      "canonical_palette": ["white hair and beard", "grey eyes", "heavy grey armour"],
+      "reference_files": ["eisen_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Aura",
+      "aliases": ["Aura the Guillotine"],
+      "identity_cues": ["demon general", "long black hair", "dark dress"],
+      "canonical_palette": ["long black hair", "red eyes", "dark dress with white trim"],
+      "reference_files": ["aura_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Denken",
+      "aliases": ["Denken the mage"],
+      "identity_cues": ["elderly mage", "black hair and beard"],
+      "canonical_palette": ["black hair and beard", "dark eyes", "dark green cloak"],
+      "reference_files": ["denken_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Flamme",
+      "aliases": ["Frieren's master"],
+      "identity_cues": ["tall elf", "long white hair", "mage"],
+      "canonical_palette": ["long white hair", "green eyes", "white and green mage outfit"],
+      "reference_files": ["flamme_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Serie",
+      "aliases": ["Great Mage Serie"],
+      "identity_cues": ["great mage", "elf", "long black hair", "dark dress"],
+      "canonical_palette": ["long black hair", "red eyes", "dark dress"],
+      "reference_files": ["serie_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Sein",
+      "aliases": ["Sein the priest"],
+      "identity_cues": ["priest", "black hair", "relaxed"],
+      "canonical_palette": ["brown hair", "brown eyes", "purple-blue priest outfit"],
+      "reference_files": ["sein_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Kanne",
+      "aliases": ["Kanne the water mage"],
+      "identity_cues": ["timid mage girl", "dark hair"],
+      "canonical_palette": ["dark brown hair", "brown eyes", "blue and white outfit"],
+      "reference_files": ["kanne_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Laufen",
+      "aliases": [],
+      "identity_cues": ["energetic girl", "short dark hair", "dark outfit"],
+      "canonical_palette": ["short dark hair", "brown eyes", "dark outfit with red accents"],
+      "reference_files": ["laufen_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Lawine",
+      "aliases": ["Lawine the ice mage"],
+      "identity_cues": ["mage girl", "light hair"],
+      "canonical_palette": ["light blue hair", "blue eyes", "blue and white outfit"],
+      "reference_files": ["lawine_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Richter",
+      "aliases": [],
+      "identity_cues": ["older city guard", "short dark hair", "mustache"],
+      "canonical_palette": ["short dark hair", "moustache", "dark city-guard uniform"],
+      "reference_files": ["richter_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Wirbel",
+      "aliases": [],
+      "identity_cues": ["mage", "light hair"],
+      "canonical_palette": ["light blonde hair", "blue eyes", "white mage outfit"],
+      "reference_files": ["wirbel_reference.webp"],
+      "variants": {}
+    },
+    {
+      "name": "Uebel",
+      "aliases": [],
+      "identity_cues": ["shadow warrior", "black hair", "dark clothes"],
+      "canonical_palette": ["black hair", "dark eyes", "dark clothes"],
+      "reference_files": ["uebel_reference.webp"],
+      "variants": {}
+    }
+  ]
+}

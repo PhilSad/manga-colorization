@@ -16,21 +16,28 @@ pipeline_v1/
 ├── detection.py          # PanelDetector protocol + YoloPanelDetector (ultralytics, lazy)
 ├── panel_ordering.py     # pure: Japanese reading order for detected boxes
 ├── extraction.py         # pure: crop panels, numbered files
-├── steps/panels.py       # stage 1+2 -> 1_panels/ (crops + panels.json + overlay)
-├── characters.py         # CharacterDetector protocol + OpenRouter gemma-4-31b-it client
-├── prompt.txt            # character-detection prompt (same as research method)
-├── steps/characters.py   # stage 3 -> 2_characters/
+├── steps/panels.py       # stage 1+2 -> 1_panels/ (crops + panels.json + overlay; blank check + full-page fallback)
+├── characters.py         # CharacterDetector protocol + OpenRouter gemma-4-31b-it client (per-panel + page-level)
+├── prompt.txt            # page-level character-detection prompt (numbered panels -> JSON mapping)
+├── prompt_panel.txt      # per-panel fallback detection prompt
+├── character_profiles.json  # canonical profiles: identity cues + palettes (task 0002)
+├── profiles.py           # profile loading, validation, prompt rendering
+├── chapter_casts.json    # optional cached chapter cast shortlists (task 0003)
+├── selection.py          # --only-panel / --force-characters selectors (task 0001)
+├── steps/characters.py   # stage 3 -> 2_characters/ (page calls + fallbacks + forced identities)
 ├── atlas.py              # labelled atlas filtered to detected characters only
-├── colorizer.py          # Colorizer protocol + FluxColorizer (multipart POST /edit)
-├── colorizer_prompt.txt  # colorize-only prompt with mngclranm trigger
-├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + colorize call)
+├── colorizer.py          # Colorizer protocol + FluxColorizer (multipart POST /edit; palette + size cap)
+├── colorizer_prompt.txt  # colorize-only prompt with mngclranm trigger + {character_profiles}
+├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + palette + resume reuse)
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
-├── orchestrator.py       # step sequencing, manifest aggregation, resume
+├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
+├── evaluate.py           # V1.1 evaluation: auto-scored detection + human color review (task 0001)
+├── evaluation/v1_1_cases.json  # fixed failure set (task 0001)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
 ├── output/<ts>/          # per-run artifacts (gitignored)
-│   ├── 1_panels/         # crops + panels.json (boxes + reading order) + overlay
-│   ├── 2_characters/     # per-panel detection JSONs + summary
+│   ├── 1_panels/         # crops + panels.json (boxes + reading order + provenance) + overlay
+│   ├── 2_characters/     # per-panel detection JSONs (source: page|fallback|forced) + summary
 │   ├── 3_colorized/      # per-panel colorized outputs
 │   ├── 4_stitched/       # final pages
 │   └── manifest.json
@@ -44,11 +51,12 @@ page (input_dir)
   -> [detection.py + panel_ordering.py + extraction.py]
        -> 1_panels/<page>/panel_000N.*        (crops, reading order)
        -> 1_panels/<page>/panels.json         (boxes, confidence, order)
-  -> [characters.py]  per panel
-       -> 2_characters/<panel>.json           (canonical names, cost, latency)
-  -> [atlas.py]       per panel
-       -> filtered labelled atlas (detected characters only; None if none)
-  -> [colorizer.py]   per panel  POST /edit [panel, atlas?]
+  -> [characters.py]  per page (page-level call) with per-panel fallbacks
+       -> 2_characters/<panel>.json           (canonical names, source, cost, latency)
+  -> [profiles.py + atlas.py]  per panel
+       -> explicit palette instruction + filtered labelled atlas
+       -> (detected characters only; None if none)
+  -> [colorizer.py]   per panel  POST /edit [panel, atlas?, palette text]
        -> 3_colorized/<page>/panel_000N.png
   -> [stitching.py]
        -> 4_stitched/<page>.png               (panels colorized, rest B&W)
@@ -67,9 +75,19 @@ page (input_dir)
 - **Size policy (user-confirmed)**: each panel is colorized at the resolution
   closest to its original size with both axes multiples of 16
   (`nearest_multiple_of`), then resized back to the exact panel box when
-  stitching. No fixed upscaling target.
+  stitching. Since V1.1 oversized inputs are capped at `--max-megapixels`
+  (default 2.0 MP, aspect-preserving, multiples of 16).
 - **Empty character detection**: a panel with no detected reference characters
   is colorized with the panel only (no atlas).
+- **Character profiles (V1.1)**: canonical identity cues and palettes live in
+  `character_profiles.json`; detection prompts and the FLUX palette
+  instruction render from the same source of truth.
+- **Page-level detection (V1.1)**: one paid call per page; the annotated page
+  carries the reading-order numbers used by extraction. Missing/invalid/
+  uncertain panel entries trigger cropped-panel fallbacks.
+- **Targeted reruns (V1.1)**: `--only-panel PAGE:PANEL` restricts processing;
+  `--force-characters` injects ground-truth identities without paid calls;
+  `--resume RUN --from-step STEP` copies only the outputs before STEP.
 - **Numbered intermediate dirs**: `1_panels/`, `2_characters/`,
   `3_colorized/`, `4_stitched/` under the timestamped run dir; the stage-1
   detection positions are persisted in `1_panels/<page>/panels.json` for the

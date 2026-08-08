@@ -162,3 +162,100 @@ def test_stitch_step_missing_colorized_raises(tmp_path):
     shutil.copytree(tmp_path / "1_panels", ctx.step_dir("panels"), dirs_exist_ok=True)
     with pytest.raises(ValueError):
         run_stitch_step(ctx, config)
+
+
+# ---------------------------------------------------------------------------
+# V1.1 (task 0004): full-page fallback placement
+
+def test_stitch_full_page_fallback_returns_canvas_dimensions(tmp_path):
+    """A capped full-page output (requested size != canvas) must be resized
+    back to exactly the source canvas dimensions when stitched."""
+    from config import PipelineConfig
+    from run_context import RunContext
+    from steps.stitch import run_stitch_step
+
+    canvas = (1500, 2250)
+    page_path = tmp_path / "pages" / "p006.png"
+    page_path.parent.mkdir(parents=True)
+    Image.new("RGB", canvas, "white").save(page_path)
+
+    panels_dir = tmp_path / "1_panels" / "p006"
+    panels_dir.mkdir(parents=True)
+    geometry = {
+        "page": "p006.png",
+        "page_path": str(page_path.resolve()),
+        "detections": [{
+            "panel_index": 1, "box": [0, 0, 1500, 2250], "confidence": 1.0,
+            "crop": "panel_0001.png", "provenance": "full-page-fallback",
+        }],
+        "reading_order": [1],
+        "full_page_fallback": True,
+    }
+    (panels_dir / "panels.json").write_text(json.dumps(geometry))
+
+    colorized_dir = tmp_path / "3_colorized" / "p006"
+    colorized_dir.mkdir(parents=True)
+    # The FLUX server returned a capped 1152x1728 image.
+    Image.new("RGB", (1152, 1728), (220, 60, 60)).save(
+        colorized_dir / "panel_0001.png"
+    )
+
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    config = PipelineConfig(
+        input_dir=tmp_path / "pages",
+        refs_dir=refs,
+        output_root=tmp_path / "output",
+        mock=True,
+    )
+    ctx = RunContext.create(tmp_path / "output", {"status": "running"})
+    import shutil
+
+    shutil.copytree(tmp_path / "1_panels", ctx.step_dir("panels"), dirs_exist_ok=True)
+    shutil.copytree(tmp_path / "3_colorized", ctx.step_dir("colorize"),
+                    dirs_exist_ok=True)
+
+    result = run_stitch_step(ctx, config)
+    assert len(result["outputs"]) == 1
+    with Image.open(ctx.step_dir("stitch") / "p006.png") as image:
+        assert image.size == canvas  # exactly the source canvas
+        assert image.getpixel((750, 1000)) == (220, 60, 60)  # colorized
+
+
+def test_stitch_step_only_panels_skips_unselected_pages(tmp_path):
+    from config import PipelineConfig
+    from run_context import RunContext
+    from steps.stitch import run_stitch_step
+
+    _build_step_layout(tmp_path)
+    # A second page without colorized outputs (like a resumed run's extra page).
+    second = tmp_path / "1_panels" / "p002"
+    second.mkdir(parents=True)
+    (second / "panels.json").write_text(json.dumps({
+        "page": "p002.png",
+        "page_path": str((tmp_path / "pages" / "p002.png").resolve()),
+        "detections": [{"panel_index": 1, "box": [20, 20, 180, 180],
+                         "crop": "panel_0001.png"}],
+        "reading_order": [1],
+    }))
+    Image.new("RGB", (160, 160), "white").save(second / "panel_0001.png")
+
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    config = PipelineConfig(
+        input_dir=tmp_path / "pages",
+        refs_dir=refs,
+        output_root=tmp_path / "output3",
+        mock=True,
+        only_panels=("p001:panel_0001",),
+    )
+    ctx = RunContext.create(tmp_path / "output3", {"status": "running"})
+    import shutil
+
+    shutil.copytree(tmp_path / "1_panels", ctx.step_dir("panels"), dirs_exist_ok=True)
+    shutil.copytree(tmp_path / "3_colorized", ctx.step_dir("colorize"),
+                    dirs_exist_ok=True)
+
+    result = run_stitch_step(ctx, config)
+    assert [output["page"] for output in result["outputs"]] == ["p001"]
+    assert not (ctx.step_dir("stitch") / "p002.png").exists()

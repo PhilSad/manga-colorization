@@ -1,14 +1,17 @@
 You are an expert analyst of the manga "Frieren: Beyond Journey's End" (Sousou no Frieren).
 
-A single black-and-white manga panel is provided as the only image. Identify which of the reference characters below appear in it.
+A single full black-and-white manga page is provided as the only image, with each panel numbered in Japanese reading order (a numbered badge is overlaid on each panel). Identify which reference characters appear in each numbered panel.
 
 Reference characters (canonical name — distinguishing hints):
-{characters}
-
+{characters}{cast_shortlist}
 Rules:
-- Count a character as present when they clearly appear in the panel, even partially (face, distinctive hairstyle, silhouette, or outfit), and you are reasonably confident of the identity.
+- Answer for every numbered panel visible on the page, using exactly the reading-order panel keys: panel_0001, panel_0002, ... one entry per numbered panel.
+- Count a character as present when they clearly appear in a panel, even partially (face, distinctive hairstyle, silhouette, or outfit), and you are reasonably confident of the identity.
 - Use only the exact canonical names from the list above.
-- If none of the reference characters appear, output an empty list.
+- Use page-level context (dialogue, neighboring panels, flashbacks) to disambiguate characters and their era/outfit.
+- If a clearly visible character is NOT in the reference list, leave them out of "characters" and set "uncertain": true for that panel.
+- If none of the reference characters appear in a panel, output an empty "characters" list.
+- Do not invent panel keys, characters, or names.
 
 Respond with ONLY a JSON object, no commentary, no markdown, in exactly this shape:
-{"characters": ["Name1", "Name2"]}
+{"panels": {"panel_0001": {"characters": ["Name1", "Name2"], "uncertain": false}, "panel_0002": {"characters": [], "uncertain": true}}}

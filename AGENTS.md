@@ -21,6 +21,7 @@ Never run colorization scripts or otherwise trigger a colorization job. Instead,
 - `data/`: source manga pages, reference images, and other input assets. Keep original inputs unchanged.
 - `colorization_methods/`: one self-contained directory per colorization method.
 - `methods.md`: the index and comparison table for all methods.
+- `server/`: self-hosted inference server for the FLUX.2 Klein 9B method (BentoML, docker-packaged; weights are an external model dir mounted at runtime, never baked into the image). See `server/README.md`. The client side lives in the method directory (`local_fal_client.py` + `run.py --endpoint`).
 - `AGENTS.md`: these repository-wide instructions.
 - `.env`: contains the gemini api key and fal api key
 

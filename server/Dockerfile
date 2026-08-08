@@ -12,11 +12,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # Ubuntu 24.04 ships Python 3.12; the PyTorch cu130 aarch64 wheels target it.
+# build-essential: torch 2.13's Triton JIT-compiles CUDA kernels at first use on
+# Blackwell and fails at runtime without a C compiler ("Failed to find C compiler").
 RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-venv \
+        python3.12-dev \
         curl \
         ca-certificates \
+        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 ENV VIRTUAL_ENV=/opt/venv

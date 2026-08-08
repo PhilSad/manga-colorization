@@ -17,8 +17,12 @@ services:
       - "3000:3000"
     environment:
       FLUX2_MODEL_PATH: /models/flux2-klein
+      # Persist Triton JIT-compiled kernels across container restarts
+      # (first inference recompiles ~1 min if this volume is missing).
+      TRITON_CACHE_DIR: /triton-cache
     volumes:
       - ./models/FLUX.2-klein-9B:/models/flux2-klein:ro
+      - ./triton-cache:/triton-cache
     shm_size: 8g
     deploy:
       resources:

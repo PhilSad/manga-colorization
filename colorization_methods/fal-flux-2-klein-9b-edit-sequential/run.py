@@ -43,14 +43,14 @@ PRICING = {
 LOCAL_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
 LOCAL_PRICING = {
     "model": LOCAL_MODEL_ID,
-    "hosting": "self-hosted via BentoML on the DGX Spark (see server/)",
+    "hosting": "self-hosted via BentoML on the DGX Spark (see server/ at repo root)",
     "date": "2026-08-08",
     "currency": "USD",
     "usd_per_megapixel_input_and_output": 0.0,
     "notes": (
         "No per-call fee; estimates in this run are therefore $0. Electricity "
         "estimate: DGX Spark ~350-400 W during inference; an 18-page run at "
-        "~10-20 min is roughly $0.01-0.02 at $0.15/kWh. See server/README.md."
+        "~10-20 min is roughly $0.01-0.02 at $0.15/kWh. See server/README.md (repo root)."
     ),
 }
 

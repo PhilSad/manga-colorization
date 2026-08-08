@@ -33,9 +33,10 @@ local machine (repo)                          DGX Spark 192.168.1.40
 This directory is meant to be moved to the server (e.g. under the workspace):
 
 ```bash
-scp -r colorization_methods/fal-flux-2-klein-9b-edit-sequential/server \
-    spark:/home/phil/agent_workspace/flux2-klein-server
+scp -r server spark:/home/phil/agent_workspace/flux2-klein-server
 ```
+
+(`server/` is at the root of this repository.)
 
 All steps below run on the server (`ssh spark`), inside
 `/home/phil/agent_workspace/flux2-klein-server`.
@@ -107,6 +108,29 @@ directly comparable with the existing runs in `output/20260808-011051/`.
 | `output_format` | text | `png` \| `jpeg` \| `webp` |
 
 Response: raw image bytes in the requested format.
+
+## Verified on 2026-08-08 (end-to-end run on the DGX Spark)
+
+- Docker image built successfully on the server (arm64, 9.45 GB; weights not
+  baked in). `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` + Python 3.12 venv
+  + torch 2.13.0+cu130 aarch64 + diffusers 0.39.0 + transformers 4.57.6.
+- Two runtime requirements were found by testing and are already in the
+  Dockerfile: `build-essential` (gcc) **and `python3.12-dev` (Python.h)** —
+  torch 2.13 JIT-compiles Triton CUDA kernels on first inference and fails
+  without both ("Failed to find C compiler", then "fatal error: Python.h").
+- Verified with the ungated `black-forest-labs/FLUX.2-klein-4B` stand-in
+  (identical diffusers layout): container healthy, `healthz` 200, model
+  resident on GPU (~15 GB BF16), and a full client round-trip
+  (`run.py --endpoint http://spark:3000 --limit 1`) produced a real 1216×1824
+  RGB PNG in ~17.4 s wall time at $0 cost — output kept in
+  `colorization_methods/.../output/20260808-095523/`.
+- The 9B weights could not be tested yet: the HF account has a valid token but
+  **has not accepted the license** for `black-forest-labs/FLUX.2-klein-9B`
+  (file access returns "not in the authorized list"). Once accepted, run
+  `./download_model.sh` and `docker compose up -d --build` (or the docker run
+  below with `models/FLUX.2-klein-9B` mounted) to switch from 4B to 9B.
+- First inference per container recompiles Triton kernels (~1 min); the
+  `triton-cache/` volume in docker-compose.yml persists that cache.
 
 ## Cost and license
 

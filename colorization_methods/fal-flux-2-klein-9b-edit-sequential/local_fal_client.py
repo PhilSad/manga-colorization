@@ -6,7 +6,7 @@ Implements the subset of the fal client API used by run.py (`upload_file`,
 pipeline can run against the self-hosted server with `--endpoint <url>` and
 zero changes to the manifest/provenance logic.
 
-HTTP contract (see server/service.py):
+HTTP contract (see server/service.py at the repo root):
     POST /edit   multipart/form-data
       images                 repeated file parts, all named "images", in order
                              [current_page, reference_atlas, previous_page?]

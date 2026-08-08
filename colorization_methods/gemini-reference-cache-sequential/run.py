@@ -111,6 +111,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         help="Process only the first N sorted pages (useful for a paid test run).",
     )
+    parser.add_argument(
+        "--skip-first",
+        type=int,
+        default=0,
+        help="Skip the first N sorted pages before applying --limit (default 0).",
+    )
     parser.add_argument("--aspect-ratio", default="2:3")
     parser.add_argument(
         "--thinking-level",
@@ -134,6 +140,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--cache-ttl-seconds must be at least 300")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be at least 1")
+    if args.skip_first < 0:
+        parser.error("--skip-first must be non-negative")
 
     normalized_model = args.model.removeprefix("models/")
     if args.reference_mode == "cache" and normalized_model not in CACHE_SUPPORTED_MODELS:
@@ -435,6 +443,8 @@ def run() -> None:
     refs = sorted(
         path for path in refs_dir.iterdir() if path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
     )
+    if args.skip_first:
+        pages = pages[args.skip_first :]
     if args.limit:
         pages = pages[: args.limit]
     if not pages:
@@ -468,6 +478,7 @@ def run() -> None:
             "keep_cache": args.keep_cache,
             "aspect_ratio": args.aspect_ratio,
             "thinking_level": args.thinking_level if normalized_model.startswith("gemini-3.1-") else None,
+            "skip_first": args.skip_first,
             "input_dir": str(input_dir),
             "refs_dir": str(refs_dir),
             "prompt_file": str(prompt_path),

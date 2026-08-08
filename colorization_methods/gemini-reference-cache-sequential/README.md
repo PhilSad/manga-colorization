@@ -46,6 +46,8 @@ Use this command to make exactly one image-generation request:
   --limit 1
 ```
 
+`--skip-first N` (default 0) skips the first N sorted pages before `--limit` is applied, e.g. `--skip-first 3 --limit 5` colorizes pages 4–8 of a volume, skipping cover/title pages.
+
 The completed smoke test is preserved in [`output/20260808-002733/`](output/20260808-002733/), with the [generated first page](output/20260808-002733/0134-001.jpg) and manifest.
 
 ## Completed full-chapter run

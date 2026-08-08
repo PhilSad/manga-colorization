@@ -19,9 +19,11 @@ pipeline_v1/
 ├── steps/panels.py       # stage 1+2 -> 1_panels/ (crops + panels.json + overlay)
 ├── characters.py         # CharacterDetector protocol + OpenRouter gemma-4-31b-it client
 ├── prompt.txt            # character-detection prompt (same as research method)
+├── steps/characters.py   # stage 3 -> 2_characters/
 ├── atlas.py              # labelled atlas filtered to detected characters only
 ├── colorizer.py          # Colorizer protocol + FluxColorizer (multipart POST /edit)
 ├── colorizer_prompt.txt  # colorize-only prompt with mngclranm trigger
+├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + colorize call)
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume

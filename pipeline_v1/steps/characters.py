@@ -20,6 +20,7 @@ def _panel_images(page_dir: Path) -> list[Path]:
         path
         for path in page_dir.iterdir()
         if path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+        and path.stem != "overlay"
     )
 
 

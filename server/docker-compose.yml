@@ -2,22 +2,31 @@
 #   docker build -t flux2-klein:latest .
 #   docker run -d --name flux2-klein --restart unless-stopped --gpus all \
 #     --shm-size 8g -p 3000:3000 \
-#     -v ./models/FLUX.2-klein-base-9B:/models/flux2-klein:ro \
+#     -v ./models/FLUX.2-klein-9B:/models/flux2-klein:ro \
 #     -v ./models/FLUX.2-klein-lora:/models/flux2-klein-lora:ro \
+#     -e FLUX2_LORA_PATH=/models/flux2-klein-lora/manga_colorization.safetensors \
+#     -e FLUX2_LORA_SCALE=1.0 \
+#     -e FLUX2_STEPS=4 \
 #     flux2-klein:latest
 #
-# This config targets the LoRA deployment: the undistilled BASE model
-# (black-forest-labs/FLUX.2-klein-base-9B, gated — run ./download_model.sh with
-# FLUX2_MODEL_ID=black-forest-labs/FLUX.2-klein-base-9B) plus the
-# manga-colorization-by-reference LoRA (./download_lora.sh, public).
-# The base model is NOT step-distilled: it needs ~20-50 steps and
-# guidance_scale ~4-5, hence FLUX2_STEPS / FLUX2_GUIDANCE_SCALE below.
+# This config loads the manga-colorization-by-reference LoRA
+# (thedeoxen/FLUX.2-klein-9B-manga-colorization-by-reference-LORA, trigger word
+# `mngclranm`) on top of the **step-distilled** checkpoint
+# black-forest-labs/FLUX.2-klein-9B (gated — run ./download_model.sh with the
+# default FLUX2_MODEL_ID). The LoRA was trained for the undistilled base model
+# (~20-50 steps, guidance ~4-5) but loads on the distilled checkpoint too
+# (same transformer architecture): step-distilled runs at 4 steps and ignores
+# guidance_scale (diffusers disables CFG), so FLUX2_STEPS=4 and no
+# FLUX2_GUIDANCE_SCALE is set. This is the off-label combination used for the
+# LoRA panel tests (README.md §2b notes the caveat).
 #
-# To go back to the plain distilled model (4 steps, no LoRA), mount
-# ./models/FLUX.2-klein-9B instead, drop FLUX2_LORA_PATH, and set
-# FLUX2_STEPS=4 (guidance is ignored by the distilled model).
+# To switch to the plain distilled checkpoint (no LoRA), drop the
+# FLUX2_LORA_PATH env var and the FLUX.2-klein-lora mount.
+# To switch to the on-label LoRA deployment (undistilled BASE model), mount
+# ./models/FLUX.2-klein-base-9B and set FLUX2_STEPS=20 /
+# FLUX2_GUIDANCE_SCALE=4.0. See README.md §2b.
 #
-# Note: the model directories must exist first (run download_model.sh /
+# Note: the model directory must exist first (run download_model.sh /
 # download_lora.sh). The container needs no HF_TOKEN at runtime — weights are
 # mounted, not fetched.
 services:
@@ -32,13 +41,12 @@ services:
       FLUX2_MODEL_PATH: /models/flux2-klein
       FLUX2_LORA_PATH: /models/flux2-klein-lora/manga_colorization.safetensors
       FLUX2_LORA_SCALE: "1.0"
-      FLUX2_GUIDANCE_SCALE: "4.0"
-      FLUX2_STEPS: "20"
+      FLUX2_STEPS: "4"
       # Persist Triton JIT-compiled kernels across container restarts
       # (first inference recompiles ~1 min if this volume is missing).
       TRITON_CACHE_DIR: /triton-cache
     volumes:
-      - ./models/FLUX.2-klein-base-9B:/models/flux2-klein:ro
+      - ./models/FLUX.2-klein-9B:/models/flux2-klein:ro
       - ./models/FLUX.2-klein-lora:/models/flux2-klein-lora:ro
       - ./triton-cache:/triton-cache
     shm_size: 8g

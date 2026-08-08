@@ -53,3 +53,12 @@ Bottom line: **fal FLUX.2 Klein** is structurally the most faithful and visually
 ## Reproduce
 
 Every method has its own directory with `README.md` (setup + exact commands), `run.py`, prompt, and requirements. See [`methods.md`](methods.md) for the full index. API keys are read from `.env` at runtime; the `.env` file itself is not committed.
+
+## Volume tooling (`script/`)
+
+Utility scripts for manga volumes (Python 3 stdlib only, runnable from any directory):
+
+- `script/extract_pages.py` — unpack `.cbz` volumes from `data/volumes/` into per-volume page folders under `data/page_per_volume/<volume-name>/`. Pages keep their original filenames (zero-padded, so natural sort = reading order), extraction is resumable, and `--force` re-extracts. `--volume` filters by name substring.
+- `script/merge_to_cbz.py` — pack a folder of pages back into a `.cbz`, natural-sorted. Only image files by default (`--all` to include everything); output defaults to `<folder-name>.cbz` in the current directory, override with `--output`.
+
+Both `data/volumes/` and `data/page_per_volume/` are gitignored; extracted pages are local artifacts, not tracked in this repository.

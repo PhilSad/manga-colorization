@@ -119,3 +119,131 @@ Idea:
 - If prompt-level conditioning is still insufficient, verify a contact sheet of
   all colorized panels once per page and re-colorize only flagged panels, with a
   one-retry limit. Avoid one paid verification call per panel.
+
+---
+
+## V1.1 — fixed evaluation set, explicit palettes, page-level detection
+
+V1.1 (epic 002, tasks 0001–0004) targets the V1 failures: character confusion
+(Heiter/Sein, flashback cast), out-of-vocabulary identity (Clematis), palette
+adherence (Frieren's magenta hair), the p006 zero-panel page, and the oversized
+spread. It adds a fixed evaluation contract
+([`pipeline_v1/evaluation/v1_1_cases.json`](pipeline_v1/evaluation/v1_1_cases.json))
+and [`pipeline_v1/evaluate.py`](pipeline_v1/evaluate.py) that auto-scores
+detection and produces a human-review color report. All V1.1 runs used a fixed
+seed (`1337`); V1 used the default (random) seed.
+
+Changed settings vs V1: **per-page character detection** (one paid call per
+page + cropped fallbacks) instead of one call per panel; **explicit canonical
+palettes** injected into the FLUX prompt (`character_profiles.json`);
+**full-page fallback** for zero-panel pages; **2.0 MP request cap** for
+oversized inputs; `max_tokens` 2048 → 1024; configurable inter-call delay.
+
+### Runs (2026-08-09, all self-hosted FLUX, $0/call + electricity)
+
+| Run | Input | Detection | Colorization | OpenRouter cost | Wall time |
+|---|---|---|---|---|---|
+| Fixed COL experiment ([20260809-005032](pipeline_v1/output/20260809-005032/)) | P003/P007/P008 COL panels, forced identities | 0 calls, $0 | 3 FLUX | $0 | 36.6 s |
+| Volume 1, ch.1 5 pages ([20260809-010458](pipeline_v1/output/20260809-010458/)) | p003–p008, `--skip-first 3 --limit 5`, cast `c001` | 5 page calls + 0 fallbacks | 19 FLUX (incl. p006 fallback) | **$0.00050690** | 276.6 s |
+| Chapter 134 smoke ([20260809-011110](pipeline_v1/output/20260809-011110/)) | 0134-004, cast `ch134` | 1 page call | 5 FLUX | $0.00014994 | 50.7 s |
+| Full-roster detection ([20260809-013917](pipeline_v1/output/20260809-013917/)) | P003+P008 page-level, **no** cast shortlist | 2 page calls | 0 FLUX | $0.00032604 | — |
+| Layout run ([20260809-014132](pipeline_v1/output/20260809-014132/)) | p006 + generated blank page | 0 calls | 1 FLUX (p006 only) | $0 | — |
+| Spread cap A/B @3.5 MP ([20260809-014331](pipeline_v1/output/20260809-014331/)) | spread panel, seed 1337 | 0 | 1 FLUX | $0 | — |
+
+### Character detection — page-level, measured on the task-0001 ground truth
+
+Detection is scored automatically (set comparison, exact TP/FP/FN; the
+evaluator never scores a forced ground-truth record as a detection):
+
+| Case | V1 (per-panel) | V1.1 (page-level, shortlist `c001`) | V1.1 (page-level, full roster) |
+|---|---|---|---|
+| DET-001 (P003:2, expected Frieren,Himmel) | [Fern, Stark] (tp0 fp2 fn2) | [Himmel] (tp1 fp0 fn1) | [Frieren] (tp1 fp0 fn1) |
+| DET-002 (P003:4, expected Frieren,Himmel,Heiter,Eisen) | [Sein] (tp0 fp1 fn4) | [Frieren,Heiter,Himmel] (tp3 fp0 fn1) | [Frieren] (tp1 fp0 fn3) |
+| DET-003 (P008:3, expected Heiter) | [Sein] ✗ | [Heiter] ✓ | [Heiter] ✓ |
+| DET-004 (P008:4, expected Frieren,Heiter) | [Frieren,Sein] (tp1 fp1 fn1) | [Heiter,Frieren] ✓ | [Heiter,Frieren] ✓ |
+| **Precision / recall** | **0.167 / 0.111** | **1.000 / 0.778** | **1.000 / 0.778** |
+
+The Heiter/Sein confusion is fixed by page-level context alone (the full-roster
+run scores identically to the shortlist run — the shortlist is not the reason).
+Remaining detection misses are era/under-detection: DET-001/002 still miss a
+hero-party member (Himmel on P003:2, Eisen on P003:4) because the model
+interprets the flashback cast inconsistently.
+
+OOV-001 (chapter 134, panel 3) **still fails**: Clematis is not in the 17-name
+reference vocabulary and the model forced her to **Wirbel** instead of leaving
+her unknown. The page-level prompt instructs unknown characters to be reported
+as `uncertain`, but the model does not comply reliably.
+
+### Color — explicit palettes (human review pending)
+
+The three COL cases were run with forced ground-truth identities (Run
+20260809-005032, 0 paid detection calls) and also produced in the volume run
+with the detected identities. The generated image, monochrome input, atlas and
+fixture expectation for every variant are in the run's
+[`evaluation/color_review.md`](pipeline_v1/output/20260809-005032/evaluation/color_review.md);
+verdicts are **pending user review** by design (no automated color verdict).
+Objective signals only: the dominant saturated color in all three outputs is
+warm gold/white (no magenta-dominant color), and COL-002's hair region is very
+light — consistent with the injected "silver-white hair" palette, but this is
+not a pass/fail judgement.
+
+The FLUX prompt now contains explicit canonical colors, e.g. for COL-001/002:
+`Frieren: silver-white hair; green eyes; white coat with gold trim.` recorded
+with the profile hash in the manifest (`palette_instruction`,
+`profiles_sha256`). `--force-characters` made the fixed experiment free of paid
+detection calls.
+
+### Full-page art and oversized inputs
+
+- **LAY-001** ✓ — p006 (full-page illustration, no panel frames) now produces
+  one synthetic full-page panel (`provenance: full-page-fallback`), is
+  colorized (capped 1152×1728, 22.3 s) and stitched back to exactly 1500×2250.
+  Previously the page stayed black & white. See
+  [v11-p006-fullpage.png](docs/pipeline_v1/v11-p006-fullpage.png).
+- **LAY-002** ✓ — a generated all-white 1500×2250 page is skipped with an
+  explicit `blank-page` record, zero character/FLUX calls, and an unchanged
+  1500×2250 final page.
+- **SIZE-001** ✓ — the 2895×2250 spread is capped to 1600×1248 (multiples of
+  16, 1,996,800 px ≤ 2.0 MP; original/requested size, scale and applied cap
+  recorded). The final stitched page stays exactly 3000×2250.
+
+### Spread size-cap A/B (same seed 1337)
+
+| Cap | Request size | Spread FLUX latency | vs V1 (2896×2256, 71.7 s) |
+|---|---|---|---|
+| 2.0 MP (default) | 1600×1248 | 28.9 s | −60% |
+| 3.5 MP | 2112×1648 | 43.5 s | −39% |
+
+Outputs for visual comparison:
+[2.0 MP](docs/pipeline_v1/v11-spread-cap-2.0MP.png) ·
+[3.5 MP](docs/pipeline_v1/v11-spread-cap-3.5MP.png). 2.0 MP stays the default
+(SIZE-001 is the deterministic 2.0 MP fixture); the largest cap with no visible
+regression is a user judgement pending on these two images.
+
+### Cost summary
+
+- V1 total (ch134 + 5 pages): **$0.00178516** OpenRouter.
+- V1.1 total (all six runs above): **$0.00098288** — 45% less, and the
+  5-page comparison alone is **$0.00050690** (2.7× under V1's $0.00137551 for
+  the same input). Page-level detection used 5 paid calls instead of 18.
+- FLUX stays $0/call (self-hosted); wall time for the 5-page run dropped from
+  358 s to 276.6 s **while colorizing one more panel** (p006 fallback).
+
+### Remaining known failures (honest)
+
+1. OOV-001: Clematis forced to a known character (Wirbel) — unknown-identity
+   handling needs a stronger prompt or a "refuse to guess" constraint.
+2. DET-001/002: one hero-party member still missed per panel (era
+   under-detection in flashback crops).
+3. Color pass/fail for COL-001..003 is **unreviewed** — the reports are
+   written, the user must look at the images.
+4. Task 0005 (page-batched verification + bounded retries) is **gated**: it is
+   implemented only if explicit palette conditioning still leaves material
+   color-adherence failures after human review of the COL cases.
+
+Debug views (bbox + reading order + detected characters on the colorized
+stitched page):
+
+| vol1 p003 | vol1 p008 | ch134 0134-004 |
+|---|---|---|
+| ![p003](docs/pipeline_v1/v11-vol1-p003.png) | ![p008](docs/pipeline_v1/v11-vol1-p008.png) | ![0134-004](docs/pipeline_v1/v11-ch134-0134-004.png) |

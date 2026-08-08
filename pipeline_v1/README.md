@@ -173,3 +173,25 @@ with annotated debug views):
   detected character is sometimes given wrong colors anyway.
 - **Edge cases seen:** a full-page illustration page is detected as 0 panels and
   stays black & white; a double-page spread is detected as one large panel.
+
+### V1.1 (epic 002, tasks 0001–0004; runs 2026-08-09, seed 1337)
+
+- **Fixed failure set:** [`evaluation/v1_1_cases.json`](evaluation/v1_1_cases.json)
+  + `evaluate.py` — auto-scored detection (exact TP/FP/FN, set comparison) and
+  human-review `evaluation/color_review.md` (no automated color verdict).
+- **Detection (page-level):** precision 1.0 / recall 0.78 on the fixed set
+  (V1: 0.17 / 0.11); Heiter/Sein confusion fixed; one hero-party member still
+  missed in the flashback panels; OOV-001 (Clematis) still fails.
+- **Color:** explicit canonical palettes reach the FLUX prompt; COL-001..003
+  outputs and reports are in the fixed-experiment run — verdicts pending user
+  review (objective signals show no magenta-dominant color).
+- **Full-page + caps:** p006 full-page fallback colorized (LAY-001 ✓); blank
+  page skipped (LAY-002 ✓); spread capped to 1600×1248, 28.9 s vs 71.7 s
+  (SIZE-001 ✓).
+- **Cost:** 5-page comparison $0.00050690 (5 page calls) vs V1 $0.00137551
+  (18 calls); ch134 smoke $0.00014994 (1 call) vs $0.00040965 (5 calls).
+- **Runs:** [fixed COL experiment](output/20260809-005032/) ·
+  [vol-1 5 pages](output/20260809-010458/) · [ch134 smoke](output/20260809-011110/) ·
+  [full-roster detection](output/20260809-013917/) · [layout run](output/20260809-014132/) ·
+  [spread cap A/B @3.5 MP](output/20260809-014331/). Full comparison in
+  [`pipelines.md`](../pipelines.md).

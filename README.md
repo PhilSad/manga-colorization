@@ -28,6 +28,53 @@ Klein 9B + manga LoRA at 4 steps using an atlas **filtered to the detected
 characters**, then stitch the colorized panels back onto the page. Everything
 outside the panels stays black & white.
 
+### How it works
+
+For each manga page, the pipeline runs five stages in order. Each run creates a
+fresh timestamped directory `pipeline_v1/output/YYYYMMDD-HHMMSS/` with four
+numbered intermediate directories (`1_panels/`, `2_characters/`,
+`3_colorized/`, `4_stitched/`) plus an incremental `manifest.json` recording the
+command, configuration, inputs, per-panel results and measured costs.
+
+1. **Panel detection** — [`YOLO26n`](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)
+   (`leoxs22/manga-panel-detector-yolo26n`, Apache-2.0; weights auto-downloaded
+   to `pipeline_v1/models/`) finds the panel boxes on the page; the `text`
+   class is ignored and detections below the confidence threshold are dropped.
+2. **Extraction in Japanese reading order** — panels are clustered into
+   horizontal bands (top to bottom) and ordered right to left within each band,
+   then cropped as `panel_0001.png …` into `1_panels/<page>/`. The geometry
+   (boxes + confidence + reading order) is saved to `panels.json` — it is
+   needed again at the end to stitch — and a numbered `overlay.png` is written
+   for visual QA.
+3. **Per-panel character detection** — one OpenRouter call per panel with
+   `google/gemma-4-31b-it` (same prompt/JSON contract as the
+   [OpenRouter VLM method](research/character_detection_methods/character-detection-openrouter-vlm/)):
+   the panel image plus a list of the canonical reference characters (from
+   `data/refs/`) with hints; the model answers
+   `{"characters": ["Frieren", …]}`. Results (including cost from
+   `usage.cost`) go to `2_characters/<page>/`.
+4. **Per-panel colorization** — for each panel, a labelled atlas is built from
+   the **reference images of the detected characters only**, and the panel
+   (`#1`) + filtered atlas (`#2`) are sent to the self-hosted Spark server
+   running the step-distilled FLUX.2 Klein 9B + thedeoxen
+   manga-colorization-by-reference LoRA (trigger `mngclranm`, **4 steps**;
+   same backend as the
+   [LoRA method](research/colorization_methods/flux-2-klein-9b-base-lora-edit-sequential/)).
+   Each panel is colorized at the resolution **closest to its native size with
+   both axes multiples of 16** (FLUX VAE constraint). A panel with **no
+   detected characters** is colorized panel-only, without an atlas. Outputs go
+   to `3_colorized/<page>/` alongside the per-panel atlas used.
+5. **Stitching** — each colorized panel is resized back to its exact original
+   box (from `panels.json`) and pasted onto the page at the recorded position;
+   gutters, margins, text and any page without panels stay black & white. The
+   final pages land in `4_stitched/`.
+
+Flags of interest: `--skip-first N` / `--limit N` (page selection),
+`--steps` / `--from-step` / `--resume <run-dir>` (partial or resumed runs),
+`--mock` (offline demo with fake backends), `--num-inference-steps` (4 for the
+step-distilled model), `--lora-scale`, `--seed`. See
+[`pipeline_v1/README.md`](pipeline_v1/README.md) for the full CLI and setup.
+
 Status: **v1 works end-to-end**. Two real runs (2026-08-08):
 
 - Chapter 134 smoke — 1 page / 5 panels: **$0.00040965** OpenRouter + $0 FLUX, 75 s

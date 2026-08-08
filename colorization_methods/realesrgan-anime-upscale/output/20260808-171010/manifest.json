@@ -1,0 +1,49 @@
+{
+  "method": "realesrgan-anime-upscale",
+  "status": "completed",
+  "started_at": "2026-08-08T17:11:14+02:00",
+  "run_directory": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010",
+  "binary": "/tmp/realesrgan/realesrgan-ncnn-vulkan",
+  "binary_version": "Usage: realesrgan-ncnn-vulkan -i infile -o outfile [options]...",
+  "model": "realesrgan-x4plus-anime",
+  "model_version": "unknown",
+  "scale": 4,
+  "input_dir": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138",
+  "pages": [    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].jpg",
+      "input_bytes": 228798,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].png",
+      "output_bytes": 6217367
+    },    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].jpg",
+      "input_bytes": 228847,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].png",
+      "output_bytes": 5070613
+    },    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/Frieren - Beyond Journey's End - c001 (v01) - p006 [VIZ Media] [Digital] [1r0n].jpg",
+      "input_bytes": 77566,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/Frieren - Beyond Journey's End - c001 (v01) - p006 [VIZ Media] [Digital] [1r0n].png",
+      "output_bytes": 735712
+    },    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n].jpg",
+      "input_bytes": 278121,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n].png",
+      "output_bytes": 5477087
+    },    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/Frieren - Beyond Journey's End - c001 (v01) - p008 [VIZ Media] [Digital] [1r0n].jpg",
+      "input_bytes": 285209,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/Frieren - Beyond Journey's End - c001 (v01) - p008 [VIZ Media] [Digital] [1r0n].png",
+      "output_bytes": 4988085
+    },    {
+      "input": "colorization_methods/gemini-reference-cache-sequential/output/20260808-170138/reference-atlas.jpg",
+      "input_bytes": 641737,
+      "output": "/home/phil/code/perso/manga_colorization/colorization_methods/realesrgan-anime-upscale/output/20260808-171010/reference-atlas.png",
+      "output_bytes": 22172486
+    }],
+  "totals": {
+    "pages_upscaled": 6,
+    "elapsed_seconds": 64,
+    "cost_usd": 0.0,
+    "cost_notes": "Local inference on CPU/GPU; zero per-image API cost (electricity only)."
+  }
+}

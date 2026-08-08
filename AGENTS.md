@@ -17,19 +17,20 @@ The purpose is to compare methods on quality and cost, not only to produce attra
 - `data/`: source manga pages, reference images, and other input assets. Keep original inputs unchanged.
   - `data/volumes/`: raw manga volumes as `.cbz` archives (gitignored).
   - `data/page_per_volume/`: pages extracted from the volumes, one directory per volume, original filenames preserved (natural sort = reading order; gitignored).
-- `colorization_methods/`: one self-contained directory per colorization method.
+- `research/colorization_methods/`: one self-contained directory per colorization method.
+- `research/character_detection_methods/`: one self-contained directory per character-detection method. Companion experiments (not colorizers): given a panel or page, they list which reference characters appear in it, e.g. via vision-language models. They follow the same conventions as colorization methods (timestamped `output/` runs, manifests, `methods.md` entry).
 - `methods.md`: the index and comparison table for all methods.
 - `script/`: utility scripts shared across methods, currently volume tooling: `extract_pages.py` (unpack `data/volumes/*.cbz` into `data/page_per_volume/`) and `merge_to_cbz.py` (pack a page folder back into a `.cbz`). Both are Python 3 stdlib-only.
 - `server/`: self-hosted inference server for the FLUX.2 Klein 9B method (BentoML, docker-packaged; weights are an external model dir mounted at runtime, never baked into the image). See `server/README.md`. The client side lives in the method directory (`local_fal_client.py` + `run.py --endpoint`).
 - `AGENTS.md`: these repository-wide instructions.
-- `.env`: contains the gemini api key and fal api key
+- `.env`: contains the gemini api key, fal api key, openai api key, and openrouter api key
 
-## Adding a colorization method
+## Adding a method (colorization or character detection)
 
-Use a descriptive, filesystem-safe method name and create a new directory under `colorization_methods/`. Each method must have its own persistent `output/` directory:
+Use a descriptive, filesystem-safe method name and create a new directory under `colorization_methods/` (colorization) or `character_detection_methods/` (character detection). Each method must have its own persistent `output/` directory:
 
 ```text
-colorization_methods/<method-name>/
+colorization_methods/<method-name>/   # or character_detection_methods/<method-name>/
 ├── output/
 ├── README.md                 # method, setup, usage, quality, and cost notes
 ├── run.*                     # executable entry point, if applicable
@@ -40,6 +41,7 @@ When a method is run, it must create a new timestamped subdirectory inside that 
 
 ```text
 colorization_methods/<method-name>/output/20260808-143015/
+character_detection_methods/<method-name>/output/20260808-143015/
 ```
 
 Never overwrite a previous run. If two runs could have the same second-level timestamp, append a short unique suffix (for example, `-01` or a run ID). The run directory should contain the generated images and a manifest with the input files, configuration/prompt, model or service version, timestamp, and cost data available at run time.
@@ -48,7 +50,7 @@ Do not commit generated outputs, credentials, downloaded model weights, or other
 
 ## Updating `methods.md`
 
-Every new method must be added to `methods.md` in the same change that adds its implementation. At minimum, include:
+Every new method (colorization or character detection) must be added to `methods.md` in the same change that adds its implementation. At minimum, include:
 
 - method name and link to its directory;
 - model, service, or algorithm;

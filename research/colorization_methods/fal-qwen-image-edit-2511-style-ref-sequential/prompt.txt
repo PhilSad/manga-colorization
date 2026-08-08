@@ -1,0 +1,8 @@
+Edit IMAGE 1 only. IMAGE 1 defines the complete output composition.
+Colorize IMAGE 1 while preserving its panel layout, drawings, text, line art and composition.
+
+IMAGE 2 is a color reference only. Identify matching characters in IMAGE 1 and use their hair, skin, eye, clothing and accessory colors from IMAGE 2. Do not reproduce any figure, pose, layout, background, label or text from IMAGE 2. IMAGE 2 must never appear in the output.
+
+IMAGE 3, if present, is only a color-continuity reference. Do not reproduce its composition or objects.
+
+Output only the colorized composition of IMAGE 1.

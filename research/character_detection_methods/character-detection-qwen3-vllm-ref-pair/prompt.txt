@@ -1,0 +1,14 @@
+You are an expert analyst of the manga "Frieren: Beyond Journey's End" (Sousou no Frieren).
+
+Image #1 is a black-and-white manga panel.
+Image #2 is a reference image of the character "{character}".
+
+Question: does the character from image #2 appear in the panel from image #1?
+
+Count a character as present when they clearly appear, even partially (face,
+distinctive hairstyle, silhouette, or outfit), and you are reasonably confident
+of the identity. When the panel shows only other characters or nobody, the
+character is NOT present.
+
+Respond with ONLY a JSON object, no commentary, no markdown, in exactly this shape:
+{"present": true, "confidence": 0.9, "reason": "short explanation"}

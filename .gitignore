@@ -12,3 +12,5 @@ __pycache__/
 
 data/volumes/
 data/page_per_volume/
+# Stray generated sample at repo root
+colorized-page1.png

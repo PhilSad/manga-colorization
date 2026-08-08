@@ -21,6 +21,31 @@ The runner loads `FAL_API_KEY` from the repository `.env`. It also accepts fal's
   -r colorization_methods/fal-flux-2-klein-9b-edit-sequential/requirements.txt
 ```
 
+## Local inference server (optional)
+
+A self-hosted BentoML server running the same `FLUX.2-klein-9B` weights locally on the DGX Spark can replace the paid fal endpoint entirely. Everything server-side lives in [`server/`](server/) (docker-packaged; the ~35 GB weights are an "external module" downloaded to `models/` and mounted read-only, not baked into the image). See [`server/README.md`](server/README.md) for the full deployment guide.
+
+The client side uses `local_fal_client.py`, a fal-compatible shim (`upload_file`/`submit`/`get`) that talks to the server's `POST /edit` multipart endpoint; no manifest/provenance logic changes. Use `--endpoint` to switch:
+
+```bash
+.venv/bin/python colorization_methods/fal-flux-2-klein-9b-edit-sequential/run.py \
+  --model black-forest-labs/FLUX.2-klein-9B \
+  --endpoint http://spark:3000 \
+  --width 1216 \
+  --height 1824 \
+  --num-inference-steps 4 \
+  --output-format png \
+  --input-dir data/chapter_134 \
+  --refs-dir data/refs \
+  --limit 1
+```
+
+Notes for local runs:
+- Use `--width 1216 --height 1824`: the FLUX VAE needs multiples of 16 and diffusers floors non-compliant sizes (1200×1800 → 1200×1792); 1216×1824 also matches fal's actual outputs for direct comparison.
+- Local runs record the self-hosted pricing block in the manifest ($0 per call, electricity estimate) instead of the fal $/MP pricing — do not compare local and fal costs as if identical (see server/README.md).
+- The local pipeline has no safety checker (fal's optional one falsely blocked page 18).
+
+
 ## One-page smoke test
 
 ```bash

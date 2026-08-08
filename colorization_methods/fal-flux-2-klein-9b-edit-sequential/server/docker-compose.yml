@@ -1,0 +1,29 @@
+# Convenience wrapper for the DGX Spark. Equivalent to:
+#   docker build -t flux2-klein:latest .
+#   docker run -d --name flux2-klein --restart unless-stopped --gpus all \
+#     --shm-size 8g -p 3000:3000 \
+#     -v ./models/FLUX.2-klein-9B:/models/flux2-klein:ro \
+#     flux2-klein:latest
+#
+# Note: the model directory must exist first (run ./download_model.sh).
+# The container needs no HF_TOKEN at runtime — weights are mounted, not fetched.
+services:
+  flux2-klein:
+    build: .
+    image: flux2-klein:latest
+    container_name: flux2-klein
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      FLUX2_MODEL_PATH: /models/flux2-klein
+    volumes:
+      - ./models/FLUX.2-klein-9B:/models/flux2-klein:ro
+    shm_size: 8g
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

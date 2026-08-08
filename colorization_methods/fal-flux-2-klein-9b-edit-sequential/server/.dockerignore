@@ -1,0 +1,6 @@
+models/
+.git/
+__pycache__/
+*.pyc
+*.md
+.env*

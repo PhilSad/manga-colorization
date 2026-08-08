@@ -40,6 +40,20 @@ PRICING = {
     ),
 }
 
+LOCAL_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
+LOCAL_PRICING = {
+    "model": LOCAL_MODEL_ID,
+    "hosting": "self-hosted via BentoML on the DGX Spark (see server/)",
+    "date": "2026-08-08",
+    "currency": "USD",
+    "usd_per_megapixel_input_and_output": 0.0,
+    "notes": (
+        "No per-call fee; estimates in this run are therefore $0. Electricity "
+        "estimate: DGX Spark ~350-400 W during inference; an 18-page run at "
+        "~10-20 min is roughly $0.01-0.02 at $0.15/kWh. See server/README.md."
+    ),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -77,6 +91,18 @@ def parse_args() -> argparse.Namespace:
         "--disable-safety-checker",
         action="store_true",
         help="Disable fal's optional safety checker for this run.",
+    )
+    parser.add_argument(
+        "--endpoint",
+        type=str,
+        default=None,
+        help=(
+            "Base URL of a local BentoML FLUX.2 Klein server (e.g. "
+            "http://spark:3000). When set, requests go to the local server "
+            "instead of fal and no API key is required. Use --width 1216 "
+            "--height 1824 for parity with fal outputs (FLUX VAE needs "
+            "multiples of 16)."
+        ),
     )
     parser.add_argument("--prompt-file", type=Path, default=METHOD_DIR / "prompt.txt")
     parser.add_argument("--api-key-env", default="FAL_API_KEY")
@@ -255,14 +281,23 @@ def estimate_cost(input_count: int, output_dimensions: list[int]) -> dict[str, A
 
 
 def run() -> None:
+    global PRICING, fal_client
     args = parse_args()
     load_dotenv(REPO_ROOT / ".env")
-    api_key = os.getenv(args.api_key_env) or os.getenv("FAL_KEY")
-    if not api_key:
-        raise SystemExit(
-            f"Missing API key: set {args.api_key_env} or FAL_KEY in {REPO_ROOT / '.env'}"
-        )
-    os.environ["FAL_KEY"] = api_key
+    if args.endpoint:
+        import local_fal_client as fal_client
+
+        fal_client.configure(args.endpoint)
+        PRICING = LOCAL_PRICING
+        if args.model == DEFAULT_MODEL:
+            args.model = LOCAL_MODEL_ID
+    else:
+        api_key = os.getenv(args.api_key_env) or os.getenv("FAL_KEY")
+        if not api_key:
+            raise SystemExit(
+                f"Missing API key: set {args.api_key_env} or FAL_KEY in {REPO_ROOT / '.env'}"
+            )
+        os.environ["FAL_KEY"] = api_key
 
     input_dir = args.input_dir.resolve()
     refs_dir = args.refs_dir.resolve()

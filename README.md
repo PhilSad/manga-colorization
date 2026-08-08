@@ -32,6 +32,22 @@ Page 1 is the same monochrome input for every method (no previous-page context, 
 |---|---|
 | ![OpenAI colorized page 1](docs/before-after-openai.jpg) | ![fal colorized page 1](docs/before-after-fal.jpg) |
 
+## Before / after — page 2 (page-by-page consistency)
+
+Page 2 is the first page to receive **previous-page context**: each method is given its own page-1 colorization and asked to keep colors consistent. It shows how well the sequential mechanism carries the palette (and its errors) forward. GPT Image 1 Mini has no page-2 output because only a 1-page smoke test was run.
+
+![All methods, page 2](docs/all-methods-page2.jpg)
+
+| Before (source) | After — Gemini 3.1 Flash Lite |
+|---|---|
+| ![Original page 2](data/chapter_134/0134-002.png) | ![Gemini colorized page 2](docs/before-after-gemini-page2.jpg) |
+
+| After — fal FLUX.2 Klein 9B Edit |
+|---|
+| ![fal colorized page 2](docs/before-after-fal-page2.jpg) |
+
+Page 2 and later pages colorized with this strategy can be inspected in the full run directories ([Gemini `20260808-003106`](colorization_methods/gemini-reference-cache-sequential/output/20260808-003106/), [fal `20260808-011051`](colorization_methods/fal-flux-2-klein-9b-edit-sequential/output/20260808-011051/)); note these are local, gitignored artifacts, so only the page-1/page-2 samples above are tracked in this repository.
+
 ## Quality notes (sampled pages, full chapter where noted)
 
 | Method | Strengths | Known failures |

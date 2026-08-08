@@ -1,0 +1,12 @@
+pillow>=10.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+openai>=1.40
+tqdm>=4.66
+pytest>=8.0
+# Panel detection (YOLO26n via ultralytics). Imported lazily by detection.py so
+# the rest of the pipeline and the offline test suite never require torch.
+# Python 3.14 wheels required; if unavailable, see detection.py / README for
+# the dedicated-venv or ONNX fallback.
+ultralytics>=8.3

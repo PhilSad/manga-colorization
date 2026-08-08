@@ -1,0 +1,7 @@
+# Run artifacts (timestamped dirs) and downloaded model weights are local
+# only — never committed (AGENTS.md).
+output/
+models/
+__pycache__/
+*.pyc
+.pytest_cache/

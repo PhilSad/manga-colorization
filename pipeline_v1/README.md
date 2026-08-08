@@ -126,4 +126,16 @@ assumptions. Re-running with the same inputs creates a new timestamped run.
 
 ## Quality and failure cases
 
-> To be filled from the first real smoke run (`scripts/smoke_real.sh`).
+First real evaluation (see [`pipelines.md`](../pipelines.md) for the full review
+with annotated debug views):
+
+- **Works:** panel detection + Japanese reading order (verified by eye); per-panel
+  character lists match the story; per-panel colorization is coherent and fast
+  (3.8–13.5 s per panel, 71.7 s for a 2896×2256 spread); stitching is exact and
+  the page outside the panels stays untouched.
+- **Known limits:** characters **not in `data/refs/`** can never be detected;
+  the wiki reference images are colorless so the atlas carries no canonical
+  colors; colors are not harmonized across panels of the same page; a correctly
+  detected character is sometimes given wrong colors anyway.
+- **Edge cases seen:** a full-page illustration page is detected as 0 panels and
+  stays black & white; a double-page spread is detected as one large panel.

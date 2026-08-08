@@ -79,6 +79,7 @@ def run_colorize_step(
             record = colorizer.colorize(panel_path, atlas, output_path)
             doc = record.to_dict(panel_path, atlas)
             doc["characters"] = characters
+            doc["page"] = page
             records.append(doc)
             totals["api_calls"] += 1
             if record.status == "ok":

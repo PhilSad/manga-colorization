@@ -78,3 +78,8 @@ Before considering a method complete, verify that its run entry point creates a 
 # Available external server
 
 You can run `ssh spark` to ssh to a DGX Spark server with 120GB of ram. You should only work in the folder `/home/phil/agent_workspace`
+
+
+# Contribution guide
+
+When you finish implementing a feature or a bug fix or a meaningfull code change, you should commit it with a meaningfull commit title and description

@@ -60,6 +60,9 @@ Two 5-page runs on Frieren vol. 1 (c001 p003–p008, `--skip-first 3 --limit 5`)
 
 - [`output/20260808-164132/`](output/20260808-164132/): `gemini-3.1-flash-lite-image` — **$0.1723 total ($0.0345/page)**.
 - [`output/20260808-165248/`](output/20260808-165248/): `gemini-3.1-flash-image` (Nano Banana 2) — **$0.3376 total ($0.0675/page)**, roughly 2× the Lite cost as expected from list pricing ($0.067 vs $0.0336 per 1K output image).
+- [`output/20260808-170138/`](output/20260808-170138/): `gemini-3.1-flash-image` at `--image-size 0.5K` (sent as `512`) — **$0.2276 total ($0.0455/page)** at 416×624 output, a ~33% cost cut but ~4× fewer pixels than the 1K run. A preceding attempt that sent `0.5K` literally failed with `400 INVALID_ARGUMENT` (supported values: `1K, 2K, 4K, 512, 512P, 512PX`); that failure is preserved in [`output/20260808-170120/`](output/20260808-170120/).
+
+`--image-size` (default `1K`) accepts `0.5K` (alias for `512`), `512`, `1K`, `2K`, `4K` and only applies to `gemini-3.1-*` models; per-size image pricing is picked from the model's `output_image_each_by_size` table.
 
 ## Reproducibility and cost
 

@@ -43,7 +43,13 @@ PRICING = {
         "input_per_million_tokens": 0.50,
         "text_and_thinking_output_per_million_tokens": 3.00,
         "output_image_each": 0.067,
-        "notes": "Standard paid tier, 1K output ($60/1M image tokens, $0.067 per 1K image). Explicit context caching is unsupported.",
+        "output_image_each_by_size": {
+            "512": 0.045,
+            "1K": 0.067,
+            "2K": 0.101,
+            "4K": 0.151,
+        },
+        "notes": "Standard paid tier ($60/1M image tokens). Explicit context caching is unsupported.",
     },
     "gemini-3.1-flash-lite-image": {
         "date": "2026-08-08",
@@ -52,7 +58,13 @@ PRICING = {
         "input_per_million_tokens": 0.25,
         "text_and_thinking_output_per_million_tokens": 1.50,
         "output_image_each": 0.0336,
-        "notes": "Standard paid tier, 1K output. Explicit context caching is unsupported.",
+        "output_image_each_by_size": {
+            "512": 0.022,
+            "1K": 0.0336,
+            "2K": 0.050,
+            "4K": 0.076,
+        },
+        "notes": "Standard paid tier. Explicit context caching is unsupported.",
     },
     "gemini-2.5-flash-image": {
         "date": "2026-08-08",
@@ -128,6 +140,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--aspect-ratio", default="2:3")
     parser.add_argument(
+        "--image-size",
+        choices=("0.5K", "512", "1K", "2K", "4K"),
+        default="1K",
+        help=(
+            "Requested output image size (Gemini 3.1 image models only; "
+            "0.5K is an alias for 512)."
+        ),
+    )
+    parser.add_argument(
         "--thinking-level",
         choices=("minimal", "high"),
         default="minimal",
@@ -151,8 +172,15 @@ def parse_args() -> argparse.Namespace:
         parser.error("--limit must be at least 1")
     if args.skip_first < 0:
         parser.error("--skip-first must be non-negative")
-
     normalized_model = args.model.removeprefix("models/")
+    if args.image_size == "0.5K":
+        args.image_size = "512"
+    if not normalized_model.startswith("gemini-3.1-") and args.image_size != "1K":
+        parser.error(
+            f"--image-size is only supported for gemini-3.1-* models "
+            f"({args.model} does not accept it)"
+        )
+
     if args.reference_mode == "cache" and normalized_model not in CACHE_SUPPORTED_MODELS:
         parser.error(
             f"{args.model} has not been verified to support explicit "
@@ -342,7 +370,7 @@ def usage_record(response: Any) -> dict[str, int | None]:
     return {name: getattr(usage, name, None) if usage else None for name in names}
 
 
-def estimated_cost(model: str, usage: dict[str, int | None]) -> dict[str, Any]:
+def estimated_cost(model: str, usage: dict[str, int | None], image_size: str = "1K") -> dict[str, Any]:
     normalized_model = model.removeprefix("models/")
     pricing = PRICING.get(normalized_model)
     if not pricing:
@@ -356,7 +384,11 @@ def estimated_cost(model: str, usage: dict[str, int | None]) -> dict[str, Any]:
     cached_tokens = usage.get("cached_content_token_count") or 0
     uncached_tokens = max(0, prompt_tokens - cached_tokens)
     known = uncached_tokens * pricing["input_per_million_tokens"] / 1_000_000
-    known += pricing["output_image_each"]
+    by_size = pricing.get("output_image_each_by_size")
+    if by_size and image_size in by_size:
+        known += by_size[image_size]
+    else:
+        known += pricing["output_image_each"]
     thoughts_tokens = usage.get("thoughts_token_count") or 0
     if "text_and_thinking_output_per_million_tokens" in pricing:
         known += (
@@ -384,7 +416,7 @@ def generation_config(
         "image_config": types.ImageConfig(**image_options),
     }
     if normalized_model.startswith("gemini-3.1-"):
-        image_options["image_size"] = "1K"
+        image_options["image_size"] = args.image_size
         config_options["image_config"] = types.ImageConfig(**image_options)
         config_options["thinking_config"] = types.ThinkingConfig(
             thinking_level=args.thinking_level
@@ -487,6 +519,7 @@ def run() -> None:
             "keep_cache": args.keep_cache,
             "aspect_ratio": args.aspect_ratio,
             "thinking_level": args.thinking_level if normalized_model.startswith("gemini-3.1-") else None,
+            "image_size": args.image_size if normalized_model.startswith("gemini-3.1-") else None,
             "skip_first": args.skip_first,
             "input_dir": str(input_dir),
             "refs_dir": str(refs_dir),
@@ -575,7 +608,7 @@ def run() -> None:
                 output_dimensions = [generated.width, generated.height]
 
             usage = usage_record(response)
-            cost = estimated_cost(args.model, usage)
+            cost = estimated_cost(args.model, usage, args.image_size)
             page_record = {
                 "sequence": page_number,
                 "input": file_record(page_path),

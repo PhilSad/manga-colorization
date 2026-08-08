@@ -36,6 +36,15 @@ SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 SYSTEM_INSTRUCTION = """You are a meticulous manga colorization artist. The reference atlas contains labelled canonical character colors. Apply those colors whenever a referenced character appears. Preserve the source page's exact panels, line art, lettering, speech bubbles, composition, and aspect ratio. The previous colorized page is continuity guidance only; never copy its composition into the current page."""
 
 PRICING = {
+    "gemini-3.1-flash-image": {
+        "date": "2026-08-08",
+        "currency": "USD",
+        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "input_per_million_tokens": 0.50,
+        "text_and_thinking_output_per_million_tokens": 3.00,
+        "output_image_each": 0.067,
+        "notes": "Standard paid tier, 1K output ($60/1M image tokens, $0.067 per 1K image). Explicit context caching is unsupported.",
+    },
     "gemini-3.1-flash-lite-image": {
         "date": "2026-08-08",
         "currency": "USD",

@@ -54,12 +54,20 @@ The completed smoke test is preserved in [`output/20260808-002733/`](output/2026
 
 The 18-page run is preserved in [`output/20260808-003106/`](output/20260808-003106/). It completed all pages in filename order, with each page after the first receiving the preceding generated page as context. See its [manifest](output/20260808-003106/manifest.json) for per-page hashes, usage, and cost.
 
+## Volume 1 comparison runs (2026-08-08)
+
+Two 5-page runs on Frieren vol. 1 (c001 p003–p008, `--skip-first 3 --limit 5`), identical settings except the model, for a head-to-head quality/cost comparison:
+
+- [`output/20260808-164132/`](output/20260808-164132/): `gemini-3.1-flash-lite-image` — **$0.1723 total ($0.0345/page)**.
+- [`output/20260808-165248/`](output/20260808-165248/): `gemini-3.1-flash-image` (Nano Banana 2) — **$0.3376 total ($0.0675/page)**, roughly 2× the Lite cost as expected from list pricing ($0.067 vs $0.0336 per 1K output image).
+
 ## Reproducibility and cost
 
 The manifest records the full command, model, effective reference mode, prompt and system instruction, dependency versions, cache metadata, all input/reference SHA-256 hashes and dimensions, output hashes, per-page usage metadata, and measured cost estimates. It is written after every successful page so partial runs remain inspectable.
 
 Pricing assumptions dated 2026-08-08:
 
+- `gemini-3.1-flash-image`: $0.067 per 1K output image ($60 per 1M image tokens) plus $0.50 per million input tokens and $3.00 per million text/thinking output tokens.
 - `gemini-3.1-flash-lite-image`: $0.0336 per 1K output image plus $0.25 per million input tokens and any text/thinking output. The fixed output portion is $0.6048 for 18 pages.
 
 These figures are paid-tier estimates, exclude taxes, and can change. Failed or retried API requests may incur charges not represented by a successful response's usage metadata.

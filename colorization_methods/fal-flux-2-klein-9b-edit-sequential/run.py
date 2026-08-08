@@ -73,6 +73,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int, default=1800)
     parser.add_argument("--num-inference-steps", type=int, default=4)
     parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        help=(
+            "CFG scale. Sent only when --endpoint is set (the fal schema has no "
+            "guidance_scale): the LoRA's undistilled base model wants ~4-5, the "
+            "plain distilled model ignores it."
+        ),
+    )
+    parser.add_argument(
+        "--lora-scale",
+        type=float,
+        help=(
+            "LoRA weight override (0.8-1.0 recommended). Sent only when "
+            "--endpoint is set and the server has the manga-colorization LoRA."
+        ),
+    )
+    parser.add_argument(
         "--output-format", choices=("jpeg", "png", "webp"), default="png"
     )
     parser.add_argument("--seed", type=int)
@@ -477,6 +494,11 @@ def run() -> None:
                     "enable_safety_checker": not args.disable_safety_checker,
                     "output_format": args.output_format,
                 }
+                if args.endpoint:
+                    if args.guidance_scale is not None:
+                        arguments["guidance_scale"] = args.guidance_scale
+                    if args.lora_scale is not None:
+                        arguments["lora_scale"] = args.lora_scale
                 if args.seed is not None:
                     arguments["seed"] = args.seed + chapter_sequence - 1
 

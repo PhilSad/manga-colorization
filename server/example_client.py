@@ -8,7 +8,11 @@ multipart contract implemented by `service.py`:
                        [current_page, reference_atlas, previous_page?]
     prompt:            str field
     width, height      int fields
-    num_inference_steps int field (Klein is step-distilled; 4 is the default)
+    num_inference_steps int field (Klein distilled default 4; the LoRA's base
+                       model wants ~20-50)
+    guidance_scale     float field (optional; ~4-5 for the LoRA's base model,
+                       ignored by the distilled model)
+    lora_scale         float field (optional; override the LoRA weight, 0.8-1.0)
     seed               int field (omit for random)
     output_format      "png" | "jpeg" | "webp"
 
@@ -25,6 +29,16 @@ One-page colorization smoke test (run from the repo root, server on spark):
                 silver hair is Frieren: silver-white hair, emerald green eyes,
                 white and dark-blue robe." \
       --output colorized-page1.png --width 1216 --height 1824 --steps 4
+
+Same page through the manga-colorization LoRA (base model + trigger word):
+
+    python server/example_client.py \
+      --endpoint http://spark:3000 \
+      --images data/chapter_134/0134-001.png data/refs/frieren_reference.webp \
+      --prompt "mngclranm, flat anime-style color, silver-white hair, emerald
+                green eyes" \
+      --output lora-page1.png --width 1216 --height 1824 \
+      --steps 20 --guidance-scale 4.0 --lora-scale 1.0
 
 Equivalent curl (same contract, useful for debugging):
 
@@ -84,6 +98,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1216, help="Output width (multiple of 16).")
     parser.add_argument("--height", type=int, default=1824, help="Output height (multiple of 16).")
     parser.add_argument("--steps", "--num-inference-steps", dest="steps", type=int, default=4)
+    parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=None,
+        help="CFG scale (base model with LoRA: ~4-5; ignored by the distilled model).",
+    )
+    parser.add_argument(
+        "--lora-scale",
+        type=float,
+        default=None,
+        help="LoRA weight override, e.g. 0.8-1.0 (ignored when the server has no LoRA).",
+    )
     parser.add_argument("--seed", type=int, default=None, help="Optional seed for reproducibility.")
     parser.add_argument(
         "--output-format", choices=("png", "jpeg", "webp"), default="png",
@@ -154,6 +180,10 @@ def main() -> int:
     }
     if args.seed is not None:
         fields["seed"] = str(args.seed)
+    if args.guidance_scale is not None:
+        fields["guidance_scale"] = str(args.guidance_scale)
+    if args.lora_scale is not None:
+        fields["lora_scale"] = str(args.lora_scale)
 
     body, content_type = _encode_multipart(fields, files)
     url = args.endpoint.rstrip("/") + "/edit"

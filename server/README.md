@@ -3,20 +3,25 @@
 Self-hosted replacement for the paid fal endpoint `fal-ai/flux-2/klein/9b/edit`,
 serving the same multi-image editing workflow used by `run.py` (current B&W page
 + labelled character-reference atlas + previous colorized page → colorized page).
+Optionally loads a LoRA (`manga_colorization.safetensors` by thedeoxen) on top of
+the undistilled **base** model for reference-driven manga colorization.
 
 - Framework: **BentoML** 1.4.x (type-hinted `@bentoml.service` + `@bentoml.api`).
 - Model: `black-forest-labs/FLUX.2-klein-9B` (gated, FLUX Non-Commercial License)
+  or, for the LoRA, `black-forest-labs/FLUX.2-klein-base-9B` (same license),
   via diffusers `Flux2KleinPipeline` 0.39 + torch 2.13.0+cu130 (aarch64).
 - Packaging: everything server-side lives in this directory and is built into a
-  **docker image**; the model weights are the only thing kept outside the image
-  (an "external module" downloaded to `models/` and mounted read-only).
+  **docker image**; the model weights and the LoRA are the only things kept
+  outside the image (external modules downloaded to `models/` and mounted
+  read-only).
 
 ```
 local machine (repo)                          DGX Spark 192.168.1.40
   run.py --endpoint http://spark:3000    -->   docker container flux2-klein:latest
     local_fal_client.py (fal shim)              bentoml serve  (port 3000)
-      POST /edit (multipart images+params)        Flux2KleinPipeline (BF16, 4 steps)
+      POST /edit (multipart images+params)        Flux2KleinPipeline (BF16)
                                                     weights mounted from models/
+                                                    optional LoRA (FLUX2_LORA_PATH)
 ```
 
 ## Prerequisites (once)
@@ -55,17 +60,64 @@ docker build -t flux2-klein:latest .          # arm64 build on the server
 docker compose up -d                          # or the docker run equivalent below
 ```
 
-Equivalent plain docker run:
+Equivalent plain docker run (LoRA deployment, base model):
 
 ```bash
 docker run -d --name flux2-klein --restart unless-stopped --gpus all \
   --shm-size 8g -p 3000:3000 \
-  -v "$PWD/models/FLUX.2-klein-9B:/models/flux2-klein:ro" \
+  -v "$PWD/models/FLUX.2-klein-base-9B:/models/flux2-klein:ro" \
+  -v "$PWD/models/FLUX.2-klein-lora:/models/flux2-klein-lora:ro" \
+  -e FLUX2_LORA_PATH=/models/flux2-klein-lora/manga_colorization.safetensors \
+  -e FLUX2_LORA_SCALE=1.0 \
+  -e FLUX2_GUIDANCE_SCALE=4.0 \
+  -e FLUX2_STEPS=20 \
   flux2-klein:latest
 ```
 
 First start loads the model into the GB10's 128 GB unified memory
-(≈ 1–3 min); subsequent restarts are faster.
+(≈ 1–3 min); subsequent restarts are faster. The base model + LoRA needs more
+steps than the distilled 4-step model: expect ≈ 5× slower per page at 20 steps.
+
+## 2b. Optional: manga-colorization-by-reference LoRA
+
+[`thedeoxen/FLUX.2-klein-9B-manga-colorization-by-reference-LORA`]
+(https://huggingface.co/thedeoxen/FLUX.2-klein-9B-manga-colorization-by-reference-LORA)
+(public, Apache-2.0) colorizes B&W manga pages using a color-reference image;
+rank-32, transformer-only, trigger word **`mngclranm`**.
+
+- **Trained on the undistilled base model** `black-forest-labs/FLUX.2-klein-base-9B`
+  (gated — accept the FLUX Non-Commercial License on the model page first). It is
+  NOT step-distilled: use ~20–50 `num_inference_steps` and `guidance_scale` ~4–5
+  (the ComfyUI workflow the author ships uses 20 steps / CFG 5 / LoRA weight 1.0).
+  The step-distilled `FLUX.2-klein-9B` ignores `guidance_scale` and runs 4 steps;
+  the LoRA technically loads there too (same transformer architecture) but is
+  off-label — the author's settings assume the base model.
+- Download the weights once on the host (no HF token needed):
+
+  ```bash
+  ./download_lora.sh                        # -> models/FLUX.2-klein-lora/
+  FLUX2_MODEL_ID=black-forest-labs/FLUX.2-klein-base-9B \
+    HF_TOKEN=hf_xxx ./download_model.sh     # -> models/FLUX.2-klein-base-9B/ (~35 GB)
+  ```
+
+- The `docker-compose.yml` in this repo is already wired for the LoRA deployment
+  (base model + LoRA mounts, `FLUX2_LORA_PATH`/`FLUX2_LORA_SCALE=1.0`/
+  `FLUX2_GUIDANCE_SCALE=4.0`/`FLUX2_STEPS=20`). Make sure BOTH model dirs exist
+  before `docker compose up -d`, otherwise the container will not start.
+- The server logs which LoRA it loaded at startup (`Loading LoRA ...`);
+  `FLUX2_LORA_PATH` is optional — unset it to serve the plain checkpoint.
+- Clients: `example_client.py` takes `--guidance-scale` and `--lora-scale`;
+  `run.py` accepts `--guidance-scale`/`--lora-scale`, forwarded to the server
+  only when `--endpoint` is set (fal's schema has no such fields). Example:
+
+  ```bash
+  python server/example_client.py \
+    --endpoint http://spark:3000 \
+    --images data/chapter_134/0134-001.png data/refs/frieren_reference.webp \
+    --prompt "mngclranm, flat anime-style color, silver-white hair, emerald green eyes" \
+    --width 1216 --height 1824 --steps 20 --guidance-scale 4.0 --lora-scale 1.0 \
+    --output lora-page1.png
+  ```
 
 ## 3. Verify
 
@@ -123,9 +175,11 @@ running server: produced a 1216×1824 RGB PNG in ~13 s.
 | field | type | notes |
 |---|---|---|
 | `images` | repeated file parts, all named `images` | order = `[current, atlas, previous?]`, same as fal |
-| `prompt` | text | |
+| `prompt` | text | include the trigger word `mngclranm` for the LoRA |
 | `width`, `height` | integer text | defaults 1216 / 1824 |
-| `num_inference_steps` | integer text | default 4 (Klein is step-distilled) |
+| `num_inference_steps` | integer text | default 4 (distilled) / 20 (LoRA compose); base model wants 20–50 |
+| `guidance_scale` | float text | default `FLUX2_GUIDANCE_SCALE` (4.0); ignored by the distilled model, ~4–5 for the LoRA base model |
+| `lora_scale` | float text | optional per-request LoRA weight override (0.8–1.0); ignored when no LoRA is loaded |
 | `seed` | integer text | omit for random |
 | `output_format` | text | `png` \| `jpeg` \| `webp` |
 
@@ -158,11 +212,14 @@ Response: raw image bytes in the requested format.
 
 - **$0 per call** (no fal pricing). Electricity estimate: DGX Spark ~350–400 W
   during inference; an 18-page run at ~10–20 min is roughly $0.01–0.02 at
-  $0.15/kWh. One-time disk: ~35 GB for the weights + ~15–20 GB image.
+  $0.15/kWh. One-time disk: ~35 GB for the base weights + ~165 MB for the LoRA
+  + ~15–20 GB image. The base model at 20–50 steps draws longer than the
+  distilled 4-step model (~20–60 s/page at 4 steps; ~5× at 20 steps).
 - fal comparison (measured 2026-08-08): 18-page chapter + page-18 recovery =
   $1.07955858 across 19 calls; local replaces that with ≈ $0 + energy.
 - **License**: FLUX Non-Commercial License — personal/local experimentation is
   fine; commercial use is not. Keep the repo's `LICENSE.md` with the weights.
+  The LoRA itself is Apache-2.0 (public).
 
 ## Known differences vs the fal endpoint
 
@@ -174,21 +231,35 @@ Response: raw image bytes in the requested format.
   replicated: this is the raw `FLUX.2-klein-9B` checkpoint with the same
   3-image input order. Validate parity by comparing page 1 against the fal
   smoke test (`output/20260808-010413/0134-001.png`, seed 1499077118).
+- The LoRA deployment replaces the distilled checkpoint with the undistilled
+  **base** model (as the LoRA author requires), so step count and guidance
+  behavior differ from the fal endpoint; outputs are not directly comparable
+  to the 4-step runs.
 - No auth on the endpoint: bind to the LAN as-is, or use an SSH tunnel
   (`ssh -N -L 3000:localhost:3000 spark`) and bind only locally.
 
 ## Troubleshooting / tuning
 
 - **Slow page times**: expected on a single GB10 (roughly 20–60 s/page at
-  1216×1824, 4 steps, BF16). Later optimizations: load the transformer in FP8
+  1216×1824, 4 steps, BF16; ~5× longer for the base model at 20 steps). Later
+  optimizations: load the transformer in FP8
   (`torch_dtype={"transformer": torch.float8_e4m3fn, "default": torch.bfloat16}`
   in `service.py`) or use `Flux2KleinKVPipeline` with a persistent KV cache of
   the constant reference atlas.
+- **LoRA not loaded**: check `docker inspect flux2-klein` → Mounts for
+  `models/FLUX.2-klein-lora`, and the container log for `Loading LoRA ...`;
+  `FLUX2_LORA_PATH` must be a .safetensors **file** path. diffusers 0.39
+  auto-converts the ai-toolkit key layout (`diffusion_model.double_blocks.*`)
+  to the Flux2 transformer — no manual remap needed.
+- **Distilled model ignoring guidance**: expected — diffusers logs a warning
+  and disables CFG for step-distilled checkpoints; the LoRA's base model uses
+  `guidance_scale` normally.
 - **OOM**: not expected on 128 GB unified memory (BF16 ≈ 35 GB). If it happens,
   switch the transformer to FP8 (above) or use `FLUX2_WIDTH/HEIGHT` env vars to
   lower the default canvas.
 - **Model not found at startup**: check the mount (`docker inspect flux2-klein`
-  → Mounts) and that `models/FLUX.2-klein-9B/model_index.json` exists.
+  → Mounts) and that the mounted `model_index.json` exists (e.g.
+  `models/FLUX.2-klein-base-9B/model_index.json`).
 - **GPU not used**: confirm `docker exec flux2-klein nvidia-smi` shows the GB10.
 - **Rebuild**: `docker compose down && docker compose up -d --build`.
 

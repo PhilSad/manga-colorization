@@ -13,6 +13,8 @@ HTTP contract (see server/service.py at the repo root):
       prompt                 str field
       width, height          int fields
       num_inference_steps    int field
+      guidance_scale         float field (optional; ~4-5 for the LoRA base model)
+      lora_scale             float field (optional; LoRA weight override)
       seed                   int field (omitted when None)
       output_format          str field
     response: raw image bytes in the requested format.
@@ -132,6 +134,12 @@ class LocalHandler:
         seed = self._arguments.get("seed")
         if seed is not None:
             fields["seed"] = str(seed)
+        guidance_scale = self._arguments.get("guidance_scale")
+        if guidance_scale is not None:
+            fields["guidance_scale"] = str(guidance_scale)
+        lora_scale = self._arguments.get("lora_scale")
+        if lora_scale is not None:
+            fields["lora_scale"] = str(lora_scale)
 
         body, content_type = _encode_multipart(fields, files)
         request = urllib.request.Request(

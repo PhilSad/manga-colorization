@@ -2,11 +2,24 @@
 #   docker build -t flux2-klein:latest .
 #   docker run -d --name flux2-klein --restart unless-stopped --gpus all \
 #     --shm-size 8g -p 3000:3000 \
-#     -v ./models/FLUX.2-klein-9B:/models/flux2-klein:ro \
+#     -v ./models/FLUX.2-klein-base-9B:/models/flux2-klein:ro \
+#     -v ./models/FLUX.2-klein-lora:/models/flux2-klein-lora:ro \
 #     flux2-klein:latest
 #
-# Note: the model directory must exist first (run ./download_model.sh).
-# The container needs no HF_TOKEN at runtime — weights are mounted, not fetched.
+# This config targets the LoRA deployment: the undistilled BASE model
+# (black-forest-labs/FLUX.2-klein-base-9B, gated — run ./download_model.sh with
+# FLUX2_MODEL_ID=black-forest-labs/FLUX.2-klein-base-9B) plus the
+# manga-colorization-by-reference LoRA (./download_lora.sh, public).
+# The base model is NOT step-distilled: it needs ~20-50 steps and
+# guidance_scale ~4-5, hence FLUX2_STEPS / FLUX2_GUIDANCE_SCALE below.
+#
+# To go back to the plain distilled model (4 steps, no LoRA), mount
+# ./models/FLUX.2-klein-9B instead, drop FLUX2_LORA_PATH, and set
+# FLUX2_STEPS=4 (guidance is ignored by the distilled model).
+#
+# Note: the model directories must exist first (run download_model.sh /
+# download_lora.sh). The container needs no HF_TOKEN at runtime — weights are
+# mounted, not fetched.
 services:
   flux2-klein:
     build: .
@@ -17,11 +30,16 @@ services:
       - "3000:3000"
     environment:
       FLUX2_MODEL_PATH: /models/flux2-klein
+      FLUX2_LORA_PATH: /models/flux2-klein-lora/manga_colorization.safetensors
+      FLUX2_LORA_SCALE: "1.0"
+      FLUX2_GUIDANCE_SCALE: "4.0"
+      FLUX2_STEPS: "20"
       # Persist Triton JIT-compiled kernels across container restarts
       # (first inference recompiles ~1 min if this volume is missing).
       TRITON_CACHE_DIR: /triton-cache
     volumes:
-      - ./models/FLUX.2-klein-9B:/models/flux2-klein:ro
+      - ./models/FLUX.2-klein-base-9B:/models/flux2-klein:ro
+      - ./models/FLUX.2-klein-lora:/models/flux2-klein-lora:ro
       - ./triton-cache:/triton-cache
     shm_size: 8g
     deploy:

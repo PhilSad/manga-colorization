@@ -12,10 +12,6 @@ This repository is a practical exploration of AI-assisted manga colorization. Fo
 
 The purpose is to compare methods on quality and cost, not only to produce attractive images.
 
-## Running colorization methods
-
-Never run colorization scripts or otherwise trigger a colorization job. Instead, provide the user with the full command needed to run it themselves, including any required options, input paths, and environment setup.
-
 ## Repository layout
 
 - `data/`: source manga pages, reference images, and other input assets. Keep original inputs unchanged.
@@ -79,9 +75,68 @@ Before considering a method complete, verify that its run entry point creates a 
 - Avoid modifying files under `data/`; write generated artifacts only under the method's timestamped output directory. The exception is the volume tooling in `script/`: `extract_pages.py` populates `data/page_per_volume/` from `data/volumes/`, and `merge_to_cbz.py` writes a new `.cbz` when a colorized folder is packed back. These scripts never alter the original `.cbz` files in `data/volumes/`.
 - Update the relevant method `README.md` when behavior, setup, quality, or cost assumptions change.
 
-# Available external server
+# Spark inference server
 
-You can run `ssh spark` to ssh to a DGX Spark server with 120GB of ram. You should only work in the folder `/home/phil/agent_workspace`
+The FLUX.2 Klein 9B model runs as a self-hosted BentoML inference server on the DGX Spark (`ssh spark`, 120 GB unified memory). The client code stays in this repository; only the inference happens on Spark.
+
+Optional LoRA: the server can load `manga_colorization.safetensors` (thedeoxen's manga-colorization-by-reference LoRA, trigger word `mngclranm`) on top of the undistilled `FLUX.2-klein-base-9B` model. That deployment needs the base weights (gated) + the LoRA (public) downloaded into `server/models/` on Spark and the compose env `FLUX2_LORA_PATH`/`FLUX2_GUIDANCE_SCALE`/`FLUX2_STEPS` set; see `server/README.md` §2b. Clients send `guidance_scale` and `lora_scale` (run.py forwards them only with `--endpoint`).
+
+## "Run on the spark" means use the inference server
+
+When the user says to run something "on the spark", they mean **use the Spark inference server as the compute backend for inference** — i.e. invoke the method's `run.py` from this repository with `--endpoint http://spark:3000`. Do **not** ssh into Spark to copy the repo there or start `nohup`-style background jobs on the Spark machine. At most, the only actions taken on Spark itself are Docker operations to manage the inference server container (start, stop, rebuild, inspect).
+
+## Checking if the server is already active
+
+From any machine that can reach Spark (the repo machine resolves `spark`):
+
+```bash
+curl -s http://spark:3000/healthz   # -> {"status":"ok",...} when up
+curl -s http://spark:3000/          # Swagger UI exposing the /edit schema
+```
+
+Or inspect the container directly on Spark:
+
+```bash
+ssh spark "docker ps --filter name=flux2-klein"   # STATUS should read "Up ... (healthy)"
+```
+
+## Endpoint
+
+- Base URL: `http://spark:3000` (BentoML, port 3000; `POST /edit`, multipart form-data: `images` file parts `[current, atlas, previous?]`, `prompt`, `width`, `height`, `num_inference_steps`, `guidance_scale`, `lora_scale`, `seed`, `output_format`).
+- No API key required; the method's manifest records self-hosted (zero per-call) pricing instead of fal pricing.
+- From the client machine: `--endpoint http://spark:3000`. From Spark itself use `http://127.0.0.1:3000`.
+- No auth on the endpoint; if needed, tunnel it: `ssh -N -L 3000:localhost:3000 spark` and point the client at `http://localhost:3000`.
+
+## Running a method against it
+
+Client-side (this repo), e.g. for the FLUX.2 Klein 9B edit method:
+
+```bash
+.venv/bin/python colorization_methods/fal-flux-2-klein-9b-edit-sequential/run.py \
+  --model black-forest-labs/FLUX.2-klein-9B \
+  --endpoint http://spark:3000 \
+  --width 1216 --height 1824 \       # FLUX VAE needs multiples of 16; 1200x1800 gets floored to 1200x1792
+  --num-inference-steps 4 \
+  --output-format png \
+  --input-dir data/chapter_134 \
+  --refs-dir data/refs \
+  --skip-first 3
+```
+
+The first request pays the model-loading cost (≈1–3 min); subsequent pages are fast. Cost of a run: $0 per call plus electricity (see `server/README.md`); do not compare these costs with fal pricing.
+
+## Docker management (the only thing to do ON Spark)
+
+The server is a docker container named `flux2-klein` (image `flux2-klein:latest`, weights mounted read-only from `models/FLUX.2-klein-9B` — never baked into the image). Sources and compose file live in `server/` in this repo.
+
+```bash
+ssh spark "cd /home/phil/agent_workspace/flux2-klein-server && docker compose up -d"          # start
+ssh spark "docker ps --filter name=flux2-klein"                                                # status / health
+ssh spark "docker exec flux2-klein nvidia-smi"                                                 # confirm GPU is used
+ssh spark "cd /home/phil/agent_workspace/flux2-klein-server && docker compose down && docker compose up -d --build"   # rebuild after changes
+```
+
+Note: the server sources live on Spark under `/home/phil/agent_workspace/flux2-klein-server`; if you change `server/` in the repo, sync it there (only that folder) before rebuilding.
 
 
 # Contribution guide

@@ -384,14 +384,14 @@ def _build_color_review(run_dir: Path, color_cases: list[dict], metadata: dict) 
         lines.append("")
         lines.append("### Generated image")
         lines.append("")
-        lines.append("![{} generated output]({})".format(case["id"],
-                                                         case["generated_image"]))
+        lines.append("![{} generated output](<{}>)".format(case["id"],
+                                                            case["generated_image"]))
         lines.append("")
         if case.get("input_crop"):
-            lines.append("Monochrome input crop: ![input]({})".format(case["input_crop"]))
+            lines.append("Monochrome input crop: ![input](<{}>)".format(case["input_crop"]))
             lines.append("")
         if case.get("atlas"):
-            lines.append("Atlas/reference used: ![atlas]({})".format(case["atlas"]))
+            lines.append("Atlas/reference used: ![atlas](<{}>)".format(case["atlas"]))
             lines.append("")
         lines.append("### Expected output")
         lines.append("")

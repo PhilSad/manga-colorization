@@ -242,6 +242,11 @@ def test_color_review_report_never_auto_verdicts(tmp_path):
     assert "magenta" in markdown or "purple" in markdown
     assert "light green hair" in markdown
     assert "Reviewed by a human" not in markdown  # no automated verdict wording
+    # Page names contain parens; image links must be angle-bracketed and
+    # resolve relative to the report.
+    for line in markdown.splitlines():
+        if "![" in line:
+            assert "](<" in line, f"link not angle-bracketed: {line}"
 
 
 def test_color_review_expected_text_comes_from_fixture(tmp_path):

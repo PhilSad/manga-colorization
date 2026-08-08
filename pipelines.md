@@ -14,24 +14,31 @@ stitched back onto the page.
 
 - **Run:** [`pipeline_v1/output/20260808-221331/`](pipeline_v1/output/20260808-221331/)
 - **Input:** `data/chapter_134/0134-004.png` (1200×1800) — 1 page, 5 panels
-- **Debug view (bbox + reading order + detected characters on the stitched
-  page):** [`annotated_colorized/0134-004.png`](pipeline_v1/output/20260808-221331/annotated_colorized/0134-004.png)
 - **Cost:** $0.00040965 OpenRouter (5 calls, all ok) + $0 FLUX (self-hosted);
   wall time 75 s
+
+| Page | Panels | Characters detected (per panel, reading order) | Debug view (bbox + chars on the stitched page) |
+|---|---|---|---|
+| `0134-004.png` | 5 | 1: Sein, Heiter · 2: Wirbel · 3: Sein · 4: Wirbel, Fern, Frieren · 5: Fern, Frieren, Wirbel | ![0134-004 debug](docs/pipeline_v1/ch134-0134-004-annotated.png) |
 
 ### Volume 1, chapter 1 (5 pages)
 
 - **Run:** [`pipeline_v1/output/20260808-223234/`](pipeline_v1/output/20260808-223234/)
 - **Input:** `data/page_per_volume/… v01 …/`, pages p003–p008 (1500×2250,
   incl. a 3000×2250 spread), `--skip-first 3 --limit 5` — 5 pages, 18 panels
-- **Debug views (bbox + reading order + detected characters on the stitched
-  pages):** [`annotated_colorized/`](pipeline_v1/output/20260808-223234/annotated_colorized/)
-  (p003, p004-p005, p006, p007, p008)
 - **Cost:** $0.00137551 OpenRouter (18 calls, all ok) + $0 FLUX (self-hosted);
   wall time 358 s
 - **Note:** p006 (a full-page illustration, ~2% ink, no panel frames) is
   detected as 0 panels and stays black & white; the p004-p005 spread is
   detected as a single large panel (2896×2256).
+
+| Page | Panels | Characters detected (per panel, reading order) | Debug view (bbox + chars on the stitched page) |
+|---|---|---|---|
+| `p003.png` | 6 | 1: Frieren, Fern, Himmel, Heiter · 2: Fern, Stark · 3: Himmel · 4: Sein · 5: Himmel · 6: Frieren | ![p003 debug](docs/pipeline_v1/vol1-p003.png) |
+| `p004-p005.png` | 1 | 1: Frieren | ![p004-p005 debug](docs/pipeline_v1/vol1-p004-p005.png) |
+| `p006.png` | 0 | — (full-page illustration, no panels) | ![p006 debug](docs/pipeline_v1/vol1-p006.png) |
+| `p007.png` | 7 | 1: none · 2: Frieren, Fern, Stark · 3: Eisen · 4: Himmel · 5: Heiter · 6: Frieren · 7: Frieren, Himmel, Heiter, Eisen | ![p007 debug](docs/pipeline_v1/vol1-p007.png) |
+| `p008.png` | 4 | 1: Himmel · 2: Himmel, Frieren, Eisen · 3: Sein · 4: Frieren, Sein | ![p008 debug](docs/pipeline_v1/vol1-p008.png) |
 
 ## What works
 

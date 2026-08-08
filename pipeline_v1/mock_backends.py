@@ -15,7 +15,8 @@ from characters import CharacterRecord
 from colorizer import ColorizeRecord
 from detection import PanelBox
 
-# Default 2x2 mock layout (used by `run.py --mock` on real pages).
+# Default 2x2 mock layout for a 1200x1800 page; scaled to the actual page
+# size by detect().
 DEFAULT_MOCK_BOXES = [
     PanelBox(600, 50, 1150, 550, 0.99),
     PanelBox(50, 50, 580, 550, 0.99),
@@ -23,15 +24,36 @@ DEFAULT_MOCK_BOXES = [
     PanelBox(50, 600, 580, 1750, 0.99),
 ]
 
+_LAYOUT_PAGE_SIZE = (1200, 1800)
+
 
 class MockPanelDetector:
-    """Returns the same canned boxes for every page."""
+    """Returns the same canned boxes for every page, scaled to the page
+    size (so the default 2x2 layout works on pages of any dimensions)."""
 
     def __init__(self, boxes: list[PanelBox] | None = None) -> None:
+        self.scale_to_page = boxes is None
         self.boxes = list(boxes) if boxes is not None else list(DEFAULT_MOCK_BOXES)
 
     def detect(self, page: Path) -> list[PanelBox]:
-        return list(self.boxes)
+        if not self.scale_to_page:
+            return list(self.boxes)
+        with Image.open(page) as image:
+            width, height = image.size
+        scale_x = width / _LAYOUT_PAGE_SIZE[0]
+        scale_y = height / _LAYOUT_PAGE_SIZE[1]
+        scaled = []
+        for box in self.boxes:
+            scaled.append(
+                PanelBox(
+                    x1=box.x1 * scale_x,
+                    y1=box.y1 * scale_y,
+                    x2=box.x2 * scale_x,
+                    y2=box.y2 * scale_y,
+                    confidence=box.confidence,
+                )
+            )
+        return scaled
 
 
 class MockCharacterDetector:

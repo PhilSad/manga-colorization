@@ -104,8 +104,35 @@ rank-32, transformer-only, trigger word **`mngclranm`**.
   (base model + LoRA mounts, `FLUX2_LORA_PATH`/`FLUX2_LORA_SCALE=1.0`/
   `FLUX2_GUIDANCE_SCALE=4.0`/`FLUX2_STEPS=20`). Make sure BOTH model dirs exist
   before `docker compose up -d`, otherwise the container will not start.
-- The server logs which LoRA it loaded at startup (`Loading LoRA ...`);
-  `FLUX2_LORA_PATH` is optional — unset it to serve the plain checkpoint.
+- **Choosing whether the LoRA is loaded** — this is decided when the container
+  starts, via the `FLUX2_LORA_PATH` env var. No rebuild needed, just restart
+  with the var set, empty, or removed:
+
+  ```bash
+  # LoRA loaded (base model + adapter)
+  docker compose up -d                            # compose already sets FLUX2_LORA_PATH
+
+  # LoRA NOT loaded — plain checkpoint (empty string is treated as unset)
+  FLUX2_LORA_PATH= docker compose up -d
+
+  # Same for the plain docker run: just omit the -e FLUX2_LORA_PATH flag
+  ```
+
+  The startup log confirms which mode is active: `Loading LoRA <path> at scale
+  ...` when the adapter is applied, nothing when it is skipped. If
+  `FLUX2_LORA_PATH` points at a missing file, the service fails fast at startup
+  (`FileNotFoundError`) instead of silently serving without the LoRA.
+
+  **Per-request override without restart:** every `/edit` call accepts
+  `lora_scale` even when a LoRA is loaded — `lora_scale=0` disables the adapter
+  for that single call (output = pure base model), `0.8–1.0` tunes the
+  color-transfer strength. Useful for A/B comparisons against the plain model.
+
+- **Caveat:** steps/guidance are *model*-dependent, not LoRA-dependent. The
+  compose defaults (`FLUX2_STEPS=20`, `FLUX2_GUIDANCE_SCALE=4.0`) are right for
+  the base model with or without the LoRA. If you switch the mount back to a
+  step-distilled checkpoint (`FLUX.2-klein-9B`/`-4B`), set `FLUX2_STEPS=4`
+  (guidance is ignored there). Clients can override both per request anyway.
 - Clients: `example_client.py` takes `--guidance-scale` and `--lora-scale`;
   `run.py` accepts `--guidance-scale`/`--lora-scale`, forwarded to the server
   only when `--endpoint` is set (fal's schema has no such fields). Example:

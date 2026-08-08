@@ -36,6 +36,43 @@ numbered intermediate directories (`1_panels/`, `2_characters/`,
 `3_colorized/`, `4_stitched/`) plus an incremental `manifest.json` recording the
 command, configuration, inputs, per-panel results and measured costs.
 
+```mermaid
+flowchart LR
+    P["manga page<br/>(black &amp; white)"]
+    R["data/refs<br/>character images"]
+
+    subgraph PANELS["1_panels/ · detection + extraction"]
+        DET["YOLO26n<br/>panel detection"] --> ORD["Japanese<br/>reading order"] --> CROP["panel crops<br/>+ panels.json"]
+    end
+
+    subgraph CHARS["2_characters/ · per panel"]
+        VLM["gemma-4-31b-it<br/>OpenRouter"] --> CJ["characters JSON"]
+    end
+
+    subgraph COLOR["3_colorized/ · per panel"]
+        ATL["filtered atlas<br/>(detected characters only)"] --> FLX["FLUX.2 Klein 9B + LoRA<br/>4 steps"]
+        CROP2["panel crop"] --> FLX
+    end
+
+    subgraph STITCH["4_stitched/"]
+        ST["paste at<br/>recorded boxes"]
+    end
+
+    P --> DET
+    R --> VLM
+    R --> ATL
+    CROP --> VLM
+    CROP --> CROP2
+    CJ --> ATL
+    FLX --> ST
+    P --> ST
+    ST --> OUT["colorized page<br/>(panels in color, rest B&amp;W)"]
+```
+
+> A panel with **no detected characters** is colorized without an atlas
+> (panel-only request). Pages without any panel (e.g. full-page illustrations)
+> are left untouched.
+
 1. **Panel detection** — [`YOLO26n`](https://huggingface.co/leoxs22/manga-panel-detector-yolo26n)
    (`leoxs22/manga-panel-detector-yolo26n`, Apache-2.0; weights auto-downloaded
    to `pipeline_v1/models/`) finds the panel boxes on the page; the `text`

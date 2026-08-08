@@ -94,6 +94,28 @@ curl -s http://localhost:3000/         # Swagger UI with the /edit schema
 1216×1824 is also exactly the size the fal endpoint produced, so outputs are
 directly comparable with the existing runs in `output/20260808-011051/`.
 
+## 5. Standalone example client
+
+[`example_client.py`](example_client.py) is a minimal, dependency-free
+(stdlib + Pillow) script that calls the server directly — useful for quick
+experiments without the full sequential pipeline:
+
+```bash
+python server/example_client.py \
+  --endpoint http://spark:3000 \
+  --images data/chapter_134/0134-001.png data/refs/frieren_reference.webp \
+  --prompt "Add flat anime-style color to the black-and-white manga page. \
+            Frieren has silver-white hair and emerald green eyes." \
+  --width 1216 --height 1824 --steps 4 --seed 42 \
+  --output colorized-page1.png
+```
+
+It normalizes each input to a true PNG before upload (source files may carry
+misleading extensions, e.g. JPEG data in `.png` containers) and supports
+`--seed`, `--output-format`, and `--prompt-file`. The docstring also shows the
+equivalent `curl` command for the same request. Verified 2026-08-08 against the
+running server: produced a 1216×1824 RGB PNG in ~13 s.
+
 ## API contract (what local_fal_client.py speaks)
 
 `POST /edit` with `multipart/form-data`:

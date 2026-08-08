@@ -14,9 +14,35 @@ A practical comparison of AI-assisted manga colorization services on **quality a
 
 | Method | Model / service | Output | Cost / page (measured) | Full chapter |
 |---|---|---|---|---|
-| [Gemini reference atlas + sequential context](colorization_methods/gemini-reference-cache-sequential/) | Google Gemini 3.1 Flash Lite Image (Nano Banana 2 Lite) | 848×1264 JPEG | **$0.03451** (18 pages, measured) | **$0.62113** |
-| [GPT Image 1 Mini low + sequential context](colorization_methods/openai-gpt-image-1-mini-low-sequential/) | OpenAI `gpt-image-1-mini`, `quality=low` | 1024×1536 JPEG | **$0.00827** (1-page smoke test only) | not measured — estimated ≈ $0.108 output + input tokens |
-| [fal FLUX.2 Klein 9B Edit + sequential context](colorization_methods/fal-flux-2-klein-9b-edit-sequential/) | fal `fal-ai/flux-2/klein/9b/edit`, 4 steps | 1216×1824 PNG | **$0.05676** (pages 2–18, estimated) | **$1.07956** (18 pages + 1 recovery call, estimated) |
+| [Gemini reference atlas + sequential context](research/colorization_methods/gemini-reference-cache-sequential/) | Google Gemini 3.1 Flash Lite Image (Nano Banana 2 Lite) | 848×1264 JPEG | **$0.03451** (18 pages, measured) | **$0.62113** |
+| [GPT Image 1 Mini low + sequential context](research/colorization_methods/openai-gpt-image-1-mini-low-sequential/) | OpenAI `gpt-image-1-mini`, `quality=low` | 1024×1536 JPEG | **$0.00827** (1-page smoke test only) | not measured — estimated ≈ $0.108 output + input tokens |
+| [fal FLUX.2 Klein 9B Edit + sequential context](research/colorization_methods/fal-flux-2-klein-9b-edit-sequential/) | fal `fal-ai/flux-2/klein/9b/edit`, 4 steps | 1216×1824 PNG | **$0.05676** (pages 2–18, estimated) | **$1.07956** (18 pages + 1 recovery call, estimated) |
+
+## Pipeline: panel-wise colorization (`pipeline_v1`)
+
+Current project state — a full colorization pipeline that colorizes **per panel**
+instead of per page: detect panels (YOLO26n), extract them numbered in Japanese
+reading order, detect the characters in each panel (OpenRouter
+`google/gemma-4-31b-it`), colorize each panel with the step-distilled FLUX.2
+Klein 9B + manga LoRA at 4 steps using an atlas **filtered to the detected
+characters**, then stitch the colorized panels back onto the page. Everything
+outside the panels stays black & white.
+
+Status: **v1 works end-to-end**. Two real runs (2026-08-08):
+
+- Chapter 134 smoke — 1 page / 5 panels: **$0.00040965** OpenRouter + $0 FLUX, 75 s
+- Volume 1, chapter 1 — 5 pages / 18 panels: **$0.00137551** OpenRouter + $0 FLUX, 358 s
+
+Debug views (bbox + reading order + detected characters on the colorized pages)
+for the volume-1 run:
+
+| p003 (6 panels) | p004-p005 (1 panel) | p006 (0 panels) | p007 (7 panels) | p008 (4 panels) |
+|---|---|---|---|---|
+| ![p003 debug](docs/pipeline_v1/vol1-p003.png) | ![p004-p005 debug](docs/pipeline_v1/vol1-p004-p005.png) | ![p006 debug](docs/pipeline_v1/vol1-p006.png) | ![p007 debug](docs/pipeline_v1/vol1-p007.png) | ![p008 debug](docs/pipeline_v1/vol1-p008.png) |
+
+Full evaluation (what works / what to improve) and the improvement backlog:
+[`pipelines.md`](pipelines.md). Setup and usage:
+[`pipeline_v1/README.md`](pipeline_v1/README.md).
 
 ## Before / after — page 1
 
@@ -32,7 +58,7 @@ Page 2 is the first page to receive **previous-page context**: each method is gi
 ![All methods, page 2](docs/all-methods-page2.jpg)
 
 
-Page 2 and later pages colorized with this strategy can be inspected in the full run directories ([Gemini `20260808-003106`](colorization_methods/gemini-reference-cache-sequential/output/20260808-003106/), [fal `20260808-011051`](colorization_methods/fal-flux-2-klein-9b-edit-sequential/output/20260808-011051/)); note these are local, gitignored artifacts, so only the page-1/page-2 samples above are tracked in this repository.
+Page 2 and later pages colorized with this strategy can be inspected in the full run directories ([Gemini `20260808-003106`](research/colorization_methods/gemini-reference-cache-sequential/output/20260808-003106/), [fal `20260808-011051`](research/colorization_methods/fal-flux-2-klein-9b-edit-sequential/output/20260808-011051/)); note these are local, gitignored artifacts, so only the page-1/page-2 samples above are tracked in this repository.
 
 ## Quality notes (sampled pages, full chapter where noted)
 

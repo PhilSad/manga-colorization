@@ -338,6 +338,31 @@ def test_only_panel_without_resume_still_stitches_selected_page(tmp_path):
     assert not (ctx.run_dir / "4_stitched" / "p002.png").exists()
 
 
+def test_only_panel_partial_page_stitches_selected_only(tmp_path):
+    """A from-scratch targeted run selecting one panel of a two-panel page
+    stitches that panel and leaves the other black & white (task 0001)."""
+    config = make_config(
+        tmp_path,
+        only_panels=("p001:panel_0001",),
+    )
+    backends = make_backends()
+    ctx = PipelineRunner(config, backends).run()
+
+    assert ctx.manifest["status"] == "completed"
+    totals = ctx.manifest["totals"]
+    assert totals["character_calls"] == 1
+    assert totals["flux_calls"] == 1
+    assert totals["pages_stitched"] == 1
+    stitch_record = ctx.manifest["steps"]["stitch"]["outputs"][0]
+    assert stitch_record["panels_stitched"] == 1
+    assert stitch_record["panels_skipped_black_white"] == ["panel_0002.png"]
+    with Image.open(ctx.run_dir / "4_stitched" / "p001.png") as image:
+        # Selected panel (right, x~300) colorized; un-selected (left) B&W.
+        r, g, b = image.getpixel((300, 100))
+        assert r > g == b
+        assert image.getpixel((100, 100)) == (128, 128, 128)  # untouched gray
+
+
 # ---------------------------------------------------------------------------
 # V1.1 page-level detection (task 0003) through the orchestrator
 

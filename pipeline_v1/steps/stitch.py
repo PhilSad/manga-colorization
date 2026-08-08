@@ -14,7 +14,7 @@ from PIL import Image
 from config import PipelineConfig
 from detection import PanelBox
 from run_context import RunContext, write_json
-from selection import page_selected
+from selection import page_selected, panel_selected
 from stitching import stitch_page
 from util import SUPPORTED_IMAGE_SUFFIXES, file_record
 
@@ -55,10 +55,19 @@ def run_stitch_step(
         with Image.open(source_page) as page_image:
             page_image = page_image.convert("RGB")
             pairs: list[tuple[PanelBox, Image.Image]] = []
+            skipped: list[str] = []
             for detection in geometry["detections"]:
                 crop_name = detection["crop"]
                 colorized_path = _find_colorized(colorized_page_dir, crop_name, extension)
                 if colorized_path is None:
+                    # Targeted rerun: un-selected panels of the page stay B&W
+                    # (only when --only-panel was used); otherwise this is an
+                    # error (missing colorize output).
+                    if config.only_panels and not panel_selected(
+                        page, Path(crop_name).stem, config.only_panels
+                    ):
+                        skipped.append(crop_name)
+                        continue
                     raise ValueError(f"missing colorized panel for {crop_name}")
                 with Image.open(colorized_path) as colorized_image:
                     pairs.append(
@@ -76,6 +85,7 @@ def run_stitch_step(
             "input": geometry["page"],
             "output": file_record(output_path),
             "panels_stitched": len(pairs),
+            "panels_skipped_black_white": skipped,
         })
     return {"outputs": outputs}
 

@@ -81,6 +81,10 @@ The FLUX.2 Klein 9B model runs as a self-hosted BentoML inference server on the 
 
 Optional LoRA: the server can load `manga_colorization.safetensors` (thedeoxen's manga-colorization-by-reference LoRA, trigger word `mngclranm`) on top of the undistilled `FLUX.2-klein-base-9B` model. That deployment needs the base weights (gated) + the LoRA (public) downloaded into `server/models/` on Spark and the compose env `FLUX2_LORA_PATH`/`FLUX2_GUIDANCE_SCALE`/`FLUX2_STEPS` set; see `server/README.md` §2b. Clients send `guidance_scale` and `lora_scale` (run.py forwards them only with `--endpoint`).
 
+## "Colorize a volume" means a small test run
+
+When the user asks to "colorize a volume" (or similar), they usually mean a quick test run, not the whole book: skip the first 3 pages (typically title/credits) and colorize only the next 5 pages. In terms of the `run.py` flags, that is `--skip-first 3 --limit 5`. Flag names may vary slightly between methods; check the target method's `run.py` (most use `--skip-first` and `--limit`). If in doubt about the intended page range, ask instead of colorizing the entire volume.
+
 ## "Run on the spark" means use the inference server
 
 When the user says to run something "on the spark", they mean **use the Spark inference server as the compute backend for inference** — i.e. invoke the method's `run.py` from this repository with `--endpoint http://spark:3000`. Do **not** ssh into Spark to copy the repo there or start `nohup`-style background jobs on the Spark machine. At most, the only actions taken on Spark itself are Docker operations to manage the inference server container (start, stop, rebuild, inspect).

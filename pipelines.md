@@ -45,9 +45,10 @@ stitched pages):
 - **Panel detection** — the YOLO26n detector finds the panel layout reliably
   and the reading-order numbering matches how the pages read (verified by eye
   on 0134-004 and on the volume pages).
-- **Character detection** — per-panel character lists are sensible and match
-  the story context (e.g. p003 detects Frieren/Fern/Himmel/Heiter/Sein/Stark,
-  p007 detects Eisen/Heiter/Himmel/Frieren).
+- **Character detection** — the calls are cheap and often identify distinctive
+  characters correctly, but the lists do not always match the story context.
+  For example, p003 panel 2 reports Fern/Stark during the hero-party flashback,
+  and p008 panel 3 reports Sein for Heiter.
 - **Colorization** — the distilled 9B + LoRA at 4 steps produces coherent
   colors per panel; each panel keeps its own composition and linework. It is
   also fast: 3.8–13.5 s per panel at chapter size, 71.7 s for the huge spread.
@@ -57,26 +58,45 @@ stitched pages):
 
 ## What to improve
 
-### Character detection misses characters
+### Character detection misses or confuses characters
 
 On chapter 134 some characters appearing in panels are **not in the reference
-set** (`data/refs/` has only 17 characters), so they can never be detected.
-The character detection is limited by the reference list.
+set** (`data/refs/` has only 17 canonical characters), so they can never be
+detected. Even characters that are present in the reference set can be confused
+when a crop removes page-level story context, as seen with Heiter/Sein and with
+the chapter-1 flashback cast.
 
 Ideas:
-- Use a complete character list for the series:
+- Keep a complete character list for the series, but pass only a cached
+  chapter-specific cast shortlist to each detection request:
   <https://frieren.fandom.com/wiki/Category:Characters>
-- Download the wiki pages describing each chapter and use them as hints for
-  which characters appear where.
+- Detect all numbered panels in one page-level call so the VLM can use dialogue
+  and neighboring panels as context; fall back to a per-panel call only for an
+  uncertain result.
+- Cache chapter descriptions or manually curated cast metadata as optional
+  hints rather than downloading them on every run.
 
-### Reference images have no colors
+### Colored references are not followed reliably
 
-The wiki character images are mostly line art / colorless, so the atlas does
-not actually tell the model the character's colors.
+The 18 files in `data/refs/` represent 17 canonical characters (Frieren has two
+filenames) and are already colored anime character sheets. The atlas therefore
+does carry canonical colors. The observed wrong colors — for example Frieren's
+silver hair becoming magenta — are failures to follow the reference, not missing
+reference information.
 
-Idea:
-- Colorize the references myself once (fix the canonical colors per character)
-  so the atlas carries real color information.
+The implementation currently passes detected names to the atlas builder but not
+to the FLUX text prompt. The prompt only asks the model to use the labelled atlas,
+so the four-step model must read the labels, associate each sheet with a manga
+figure, and infer all of the colors from the image.
+
+Ideas:
+- Store explicit canonical color profiles (hair, eyes, clothing, accessories,
+  and outfit/era variants) next to the references and inject the detected
+  characters' profiles directly into the FLUX prompt.
+- Keep the colored atlas as visual evidence, but do not rely on its labels as
+  the only connection between a character name and its palette.
+- Compare prompt/atlas variants on a small fixed set of failing panels with a
+  fixed seed before running another volume sample.
 
 ### Cross-panel consistency
 
@@ -84,10 +104,11 @@ Colors are chosen panel by panel; a character can end up with slightly
 different colors in different panels of the same page (or across pages).
 
 Ideas:
-- Add a second pass at the **page level** that harmonizes the colorized
-  panels.
-- Add the previously colorized panels to the model context (sequential
-  continuity like the whole-page methods).
+- First enforce the same explicit canonical color profiles in every panel and
+  use fixed seeds for reproducible comparisons.
+- Defer a generative page-level harmonization pass until prompt-level palette
+  conditioning has been measured; an extra pass can redraw linework or propagate
+  an already-wrong palette.
 
 ### Correctly detected character, wrong colors
 
@@ -95,6 +116,6 @@ Even when the character is correctly detected and its atlas entry is passed,
 the model does not always apply the right colors to it.
 
 Idea:
-- Add a verification agent that looks at the colorized panel + the atlas and
-  checks that each detected character received its canonical colors, and
-  re-colorizes when it did not.
+- If prompt-level conditioning is still insufficient, verify a contact sheet of
+  all colorized panels once per page and re-colorize only flagged panels, with a
+  one-retry limit. Avoid one paid verification call per panel.

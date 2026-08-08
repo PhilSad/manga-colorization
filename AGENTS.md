@@ -19,8 +19,11 @@ Never run colorization scripts or otherwise trigger a colorization job. Instead,
 ## Repository layout
 
 - `data/`: source manga pages, reference images, and other input assets. Keep original inputs unchanged.
+  - `data/volumes/`: raw manga volumes as `.cbz` archives (gitignored).
+  - `data/page_per_volume/`: pages extracted from the volumes, one directory per volume, original filenames preserved (natural sort = reading order; gitignored).
 - `colorization_methods/`: one self-contained directory per colorization method.
 - `methods.md`: the index and comparison table for all methods.
+- `script/`: utility scripts shared across methods, currently volume tooling: `extract_pages.py` (unpack `data/volumes/*.cbz` into `data/page_per_volume/`) and `merge_to_cbz.py` (pack a page folder back into a `.cbz`). Both are Python 3 stdlib-only.
 - `server/`: self-hosted inference server for the FLUX.2 Klein 9B method (BentoML, docker-packaged; weights are an external model dir mounted at runtime, never baked into the image). See `server/README.md`. The client side lives in the method directory (`local_fal_client.py` + `run.py --endpoint`).
 - `AGENTS.md`: these repository-wide instructions.
 - `.env`: contains the gemini api key and fal api key
@@ -73,7 +76,7 @@ Before considering a method complete, verify that its run entry point creates a 
 - Keep method-specific dependencies and configuration inside that method's directory where practical.
 - Never hard-code API keys or other secrets; load them from environment variables or an ignored local configuration file.
 - Use paths relative to the repository or the script location so runs work from any current working directory.
-- Avoid modifying files under `data/`; write generated artifacts only under the method's timestamped output directory.
+- Avoid modifying files under `data/`; write generated artifacts only under the method's timestamped output directory. The exception is the volume tooling in `script/`: `extract_pages.py` populates `data/page_per_volume/` from `data/volumes/`, and `merge_to_cbz.py` writes a new `.cbz` when a colorized folder is packed back. These scripts never alter the original `.cbz` files in `data/volumes/`.
 - Update the relevant method `README.md` when behavior, setup, quality, or cost assumptions change.
 
 # Available external server

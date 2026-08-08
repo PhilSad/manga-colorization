@@ -19,6 +19,7 @@ from typing import Any
 import fal_client
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+from tqdm import tqdm
 
 
 METHOD_DIR = Path(__file__).resolve().parent
@@ -99,7 +100,16 @@ def parse_args() -> argparse.Namespace:
         "--start-at",
         type=int,
         default=1,
-        help="One-based chapter page index at which to start.",
+        help=(
+            "One-based chapter page index at which to start, applied after "
+            "--skip-first (default 1)."
+        ),
+    )
+    parser.add_argument(
+        "--skip-first",
+        type=int,
+        default=0,
+        help="Skip the first N pages of the input folder before applying --start-at (default 0).",
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
@@ -132,6 +142,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--limit must be at least 1")
     if args.start_at < 1:
         parser.error("--start-at must be at least 1")
+    if args.skip_first < 0:
+        parser.error("--skip-first must be non-negative")
     if args.width < 1 or args.height < 1:
         parser.error("--width and --height must be positive")
     if args.num_inference_steps < 1:
@@ -269,7 +281,7 @@ def normalize_page_for_upload(source: Path, destination: Path) -> None:
 
 def package_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
-    for package in ("fal-client", "Pillow", "python-dotenv"):
+    for package in ("fal-client", "Pillow", "python-dotenv", "tqdm"):
         try:
             versions[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:
@@ -337,7 +349,7 @@ def run() -> None:
         for path in refs_dir.iterdir()
         if path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
     )
-    pages = all_pages[args.start_at - 1 :]
+    pages = all_pages[args.skip_first + args.start_at - 1 :]
     if args.limit:
         pages = pages[: args.limit]
     if not pages:
@@ -381,6 +393,7 @@ def run() -> None:
             "output_format": args.output_format,
             "seed": args.seed,
             "start_at": args.start_at,
+            "skip_first": args.skip_first,
             "initial_previous_page": (
                 str(previous_page_path) if previous_page_path else None
             ),
@@ -463,131 +476,143 @@ def run() -> None:
         manifest["status"] = "running"
         write_json(manifest_path, manifest)
 
-        for index, page_path in enumerate(pages):
-            page_number = index + 1
-            chapter_sequence = args.start_at + index
-            normalized_page = normalized_dir / f"{page_path.stem}.png"
-            normalize_page_for_upload(page_path, normalized_page)
-            current_url = fal_client.upload_file(str(normalized_page))
-            manifest["uploads"].append(
-                {
-                    "role": "current_black_and_white",
-                    "sequence": chapter_sequence,
-                    "path": str(normalized_page),
-                    "url": current_url,
+        progress = tqdm(
+            total=len(pages),
+            desc="Colorizing",
+            unit="page",
+            dynamic_ncols=True,
+        )
+        try:
+            for index, page_path in enumerate(pages):
+                page_number = index + 1
+                chapter_sequence = args.skip_first + args.start_at + index
+                progress.set_description(f"chapter page {chapter_sequence}")
+                progress.set_postfix_str(page_path.stem)
+                normalized_page = normalized_dir / f"{page_path.stem}.png"
+                normalize_page_for_upload(page_path, normalized_page)
+                current_url = fal_client.upload_file(str(normalized_page))
+                manifest["uploads"].append(
+                    {
+                        "role": "current_black_and_white",
+                        "sequence": chapter_sequence,
+                        "path": str(normalized_page),
+                        "url": current_url,
+                    }
+                )
+                manifest["totals"]["uploads"] += 1
+
+                image_urls = [current_url, atlas_url, style_url]
+                input_roles = [
+                    "current_black_and_white",
+                    "reference_atlas",
+                    "style_reference",
+                ]
+                if previous_remote_url is None:
+                    input_description = (
+                        "#1 is the CURRENT BLACK-AND-WHITE TARGET PAGE. #2 is the "
+                        "LABELLED CHARACTER REFERENCE ATLAS. #3 is the STYLE REFERENCE "
+                        "defining the target colorization style. There is no previous "
+                        "page; invent a coherent palette where #2 does not apply, "
+                        "matching the style of #3."
+                    )
+                else:
+                    image_urls.append(previous_remote_url)
+                    input_roles.append("previous_colorized_page")
+                    input_description = (
+                        "#1 is the CURRENT BLACK-AND-WHITE TARGET PAGE and is the only "
+                        "image to edit. #2 is the LABELLED CHARACTER REFERENCE ATLAS. "
+                        "#3 is the STYLE REFERENCE defining the target colorization "
+                        "style. #4 is the PREVIOUS COLORIZED PAGE and is continuity "
+                        "guidance only."
+                    )
+                contextual_prompt = f"{prompt}\n\n{input_description}"
+                arguments: dict[str, Any] = {
+                    "prompt": contextual_prompt,
+                    "image_urls": image_urls,
+                    "image_size": {"width": args.width, "height": args.height},
+                    "num_inference_steps": args.num_inference_steps,
+                    "num_images": 1,
+                    "enable_safety_checker": not args.disable_safety_checker,
+                    "output_format": args.output_format,
                 }
-            )
-            manifest["totals"]["uploads"] += 1
+                if args.seed is not None:
+                    arguments["seed"] = args.seed + chapter_sequence - 1
 
-            image_urls = [current_url, atlas_url, style_url]
-            input_roles = [
-                "current_black_and_white",
-                "reference_atlas",
-                "style_reference",
-            ]
-            if previous_remote_url is None:
-                input_description = (
-                    "#1 is the CURRENT BLACK-AND-WHITE TARGET PAGE. #2 is the "
-                    "LABELLED CHARACTER REFERENCE ATLAS. #3 is the STYLE REFERENCE "
-                    "defining the target colorization style. There is no previous "
-                    "page; invent a coherent palette where #2 does not apply, "
-                    "matching the style of #3."
-                )
-            else:
-                image_urls.append(previous_remote_url)
-                input_roles.append("previous_colorized_page")
-                input_description = (
-                    "#1 is the CURRENT BLACK-AND-WHITE TARGET PAGE and is the only "
-                    "image to edit. #2 is the LABELLED CHARACTER REFERENCE ATLAS. "
-                    "#3 is the STYLE REFERENCE defining the target colorization "
-                    "style. #4 is the PREVIOUS COLORIZED PAGE and is continuity "
-                    "guidance only."
-                )
-            contextual_prompt = f"{prompt}\n\n{input_description}"
-            arguments: dict[str, Any] = {
-                "prompt": contextual_prompt,
-                "image_urls": image_urls,
-                "image_size": {"width": args.width, "height": args.height},
-                "num_inference_steps": args.num_inference_steps,
-                "num_images": 1,
-                "enable_safety_checker": not args.disable_safety_checker,
-                "output_format": args.output_format,
-            }
-            if args.seed is not None:
-                arguments["seed"] = args.seed + chapter_sequence - 1
-
-            manifest["totals"]["api_calls"] += 1
-            write_json(manifest_path, manifest)
-            handler = fal_client.submit(args.model, arguments=arguments)
-            request_id = handler.request_id
-            manifest["active_request"] = {
-                "sequence": chapter_sequence,
-                "request_id": request_id,
-                "submitted_at": iso_now(),
-            }
-            write_json(manifest_path, manifest)
-            result = handler.get()
-
-            images = result.get("images") if isinstance(result, dict) else None
-            if not images or not images[0].get("url"):
-                raise RuntimeError("fal returned no output image URL")
-            remote_image = images[0]
-            remote_url = remote_image["url"]
-            output_path = run_dir / f"{page_path.stem}{output_extension}"
-            download_file(remote_url, output_path)
-            with Image.open(output_path) as generated:
-                output_dimensions = [generated.width, generated.height]
-                output_mime = Image.MIME.get((generated.format or "").upper())
-
-            cost = estimate_cost(len(image_urls), output_dimensions)
-            safety_flags = json_safe(result.get("has_nsfw_concepts"))
-            safety_blocked = bool(
-                isinstance(safety_flags, list) and any(safety_flags)
-            )
-            page_record = {
-                "sequence": chapter_sequence,
-                "status": "safety_blocked" if safety_blocked else "completed",
-                "input": file_record(page_path),
-                "normalized_input": file_record(normalized_page),
-                "request_image_roles": input_roles,
-                "request_image_urls": image_urls,
-                "previous_colorized_page": (
-                    str(previous_output) if previous_output else None
-                ),
-                "request_id": request_id,
-                "request_arguments": arguments,
-                "output": {
-                    **file_record(output_path),
-                    "mime_type": output_mime,
-                    "remote": json_safe(remote_image),
-                },
-                "fal_result": {
-                    "seed": result.get("seed"),
-                    "timings": json_safe(result.get("timings")),
-                    "has_nsfw_concepts": safety_flags,
-                    "prompt": result.get("prompt"),
-                },
-                "estimated_cost": cost,
-                "completed_at": iso_now(),
-            }
-            manifest["pages"].append(page_record)
-            manifest["totals"]["estimated_cost_usd"] = round(
-                manifest["totals"]["estimated_cost_usd"] + cost["estimated_usd"],
-                8,
-            )
-            manifest.pop("active_request", None)
-            if safety_blocked:
-                manifest["totals"]["safety_blocked_pages"] += 1
+                manifest["totals"]["api_calls"] += 1
                 write_json(manifest_path, manifest)
-                raise RuntimeError(
-                    f"fal safety checker blocked chapter page {chapter_sequence}; "
-                    f"the blocked output was preserved at {output_path}"
+                handler = fal_client.submit(args.model, arguments=arguments)
+                request_id = handler.request_id
+                manifest["active_request"] = {
+                    "sequence": chapter_sequence,
+                    "request_id": request_id,
+                    "submitted_at": iso_now(),
+                }
+                write_json(manifest_path, manifest)
+                result = handler.get()
+
+                images = result.get("images") if isinstance(result, dict) else None
+                if not images or not images[0].get("url"):
+                    raise RuntimeError("fal returned no output image URL")
+                remote_image = images[0]
+                remote_url = remote_image["url"]
+                output_path = run_dir / f"{page_path.stem}{output_extension}"
+                download_file(remote_url, output_path)
+                with Image.open(output_path) as generated:
+                    output_dimensions = [generated.width, generated.height]
+                    output_mime = Image.MIME.get((generated.format or "").upper())
+
+                cost = estimate_cost(len(image_urls), output_dimensions)
+                safety_flags = json_safe(result.get("has_nsfw_concepts"))
+                safety_blocked = bool(
+                    isinstance(safety_flags, list) and any(safety_flags)
                 )
-            manifest["totals"]["successful_pages"] += 1
-            write_json(manifest_path, manifest)
-            previous_remote_url = remote_url
-            previous_output = output_path
-            print(f"[{page_number}/{len(pages)}] wrote {output_path}", flush=True)
+                page_record = {
+                    "sequence": chapter_sequence,
+                    "status": "safety_blocked" if safety_blocked else "completed",
+                    "input": file_record(page_path),
+                    "normalized_input": file_record(normalized_page),
+                    "request_image_roles": input_roles,
+                    "request_image_urls": image_urls,
+                    "previous_colorized_page": (
+                        str(previous_output) if previous_output else None
+                    ),
+                    "request_id": request_id,
+                    "request_arguments": arguments,
+                    "output": {
+                        **file_record(output_path),
+                        "mime_type": output_mime,
+                        "remote": json_safe(remote_image),
+                    },
+                    "fal_result": {
+                        "seed": result.get("seed"),
+                        "timings": json_safe(result.get("timings")),
+                        "has_nsfw_concepts": safety_flags,
+                        "prompt": result.get("prompt"),
+                    },
+                    "estimated_cost": cost,
+                    "completed_at": iso_now(),
+                }
+                manifest["pages"].append(page_record)
+                manifest["totals"]["estimated_cost_usd"] = round(
+                    manifest["totals"]["estimated_cost_usd"] + cost["estimated_usd"],
+                    8,
+                )
+                manifest.pop("active_request", None)
+                if safety_blocked:
+                    manifest["totals"]["safety_blocked_pages"] += 1
+                    write_json(manifest_path, manifest)
+                    raise RuntimeError(
+                        f"fal safety checker blocked chapter page {chapter_sequence}; "
+                        f"the blocked output was preserved at {output_path}"
+                    )
+                manifest["totals"]["successful_pages"] += 1
+                write_json(manifest_path, manifest)
+                previous_remote_url = remote_url
+                previous_output = output_path
+                progress.update(1)
+                tqdm.write(f"[{page_number}/{len(pages)}] wrote {output_path}")
+        finally:
+            progress.close()
 
         manifest["status"] = "completed"
     except BaseException as exc:

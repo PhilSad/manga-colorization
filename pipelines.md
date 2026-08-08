@@ -17,9 +17,10 @@ stitched back onto the page.
 - **Cost:** $0.00040965 OpenRouter (5 calls, all ok) + $0 FLUX (self-hosted);
   wall time 75 s
 
-| Page | Panels | Characters detected (per panel, reading order) | Debug view (bbox + chars on the stitched page) |
-|---|---|---|---|
-| `0134-004.png` | 5 | 1: Sein, Heiter · 2: Wirbel · 3: Sein · 4: Wirbel, Fern, Frieren · 5: Fern, Frieren, Wirbel | ![0134-004 debug](docs/pipeline_v1/ch134-0134-004-annotated.png) |
+Debug view (bbox + reading order + detected characters on the colorized
+stitched page):
+
+![0134-004 debug](docs/pipeline_v1/ch134-0134-004-annotated.png)
 
 ### Volume 1, chapter 1 (5 pages)
 
@@ -32,13 +33,12 @@ stitched back onto the page.
   detected as 0 panels and stays black & white; the p004-p005 spread is
   detected as a single large panel (2896×2256).
 
-| Page | Panels | Characters detected (per panel, reading order) | Debug view (bbox + chars on the stitched page) |
-|---|---|---|---|
-| `p003.png` | 6 | 1: Frieren, Fern, Himmel, Heiter · 2: Fern, Stark · 3: Himmel · 4: Sein · 5: Himmel · 6: Frieren | ![p003 debug](docs/pipeline_v1/vol1-p003.png) |
-| `p004-p005.png` | 1 | 1: Frieren | ![p004-p005 debug](docs/pipeline_v1/vol1-p004-p005.png) |
-| `p006.png` | 0 | — (full-page illustration, no panels) | ![p006 debug](docs/pipeline_v1/vol1-p006.png) |
-| `p007.png` | 7 | 1: none · 2: Frieren, Fern, Stark · 3: Eisen · 4: Himmel · 5: Heiter · 6: Frieren · 7: Frieren, Himmel, Heiter, Eisen | ![p007 debug](docs/pipeline_v1/vol1-p007.png) |
-| `p008.png` | 4 | 1: Himmel · 2: Himmel, Frieren, Eisen · 3: Sein · 4: Frieren, Sein | ![p008 debug](docs/pipeline_v1/vol1-p008.png) |
+Debug views (bbox + reading order + detected characters on the colorized
+stitched pages):
+
+| p003 (6 panels) | p004-p005 (1 panel) | p006 (0 panels) | p007 (7 panels) | p008 (4 panels) |
+|---|---|---|---|---|
+| ![p003 debug](docs/pipeline_v1/vol1-p003.png) | ![p004-p005 debug](docs/pipeline_v1/vol1-p004-p005.png) | ![p006 debug](docs/pipeline_v1/vol1-p006.png) | ![p007 debug](docs/pipeline_v1/vol1-p007.png) | ![p008 debug](docs/pipeline_v1/vol1-p008.png) |
 
 ## What works
 

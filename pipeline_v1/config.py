@@ -57,10 +57,10 @@ class PipelineConfig:
     sleep_s: float = 2.0
     api_key_env: str = "OPENROUTER_API_KEY"
 
-    # Stage 4 — colorization (self-hosted FLUX.2 Klein 9B base + LoRA)
+    # Stage 4 — colorization (self-hosted FLUX.2 Klein 9B + LoRA)
     endpoint: str | None = DEFAULT_ENDPOINT
     colorizer_prompt_file: Path = DEFAULT_COLORIZER_PROMPT_FILE
-    flux_steps: int = 20
+    flux_steps: int = 4
     guidance_scale: float = 4.0
     lora_scale: float = 1.0
     seed: int | None = None
@@ -185,8 +185,9 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--atlas-columns", type=int,
                         help="Atlas grid columns (default: ceil(sqrt(n))).")
-    parser.add_argument("--num-inference-steps", type=int, default=20,
-                        help="FLUX inference steps (undistilled base + LoRA: 20-50).")
+    parser.add_argument("--num-inference-steps", type=int, default=4,
+                        help=("FLUX inference steps (step-distilled 9B + LoRA: 4; "
+                              "the undistilled base wants 20-50).")),
     parser.add_argument("--guidance-scale", type=float, default=4.0)
     parser.add_argument("--lora-scale", type=float, default=1.0)
     parser.add_argument("--seed", type=int)

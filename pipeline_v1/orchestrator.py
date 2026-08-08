@@ -108,12 +108,15 @@ class PipelineRunner:
                 "note": "Per-call cost is recorded in the 2_characters records.",
             },
             "colorization": {
-                "model": ("black-forest-labs/FLUX.2-klein-base-9B + thedeoxen "
-                          "manga-colorization-by-reference LoRA"),
+                "model": ("black-forest-labs/FLUX.2-klein-9B (step-distilled) + "
+                          "thedeoxen manga-colorization-by-reference LoRA"),
                 "hosting": "self-hosted BentoML server on the DGX Spark (see server/)",
+                "steps": 4,
                 "usd_per_call": 0.0,
                 "note": ("No per-call fee (electricity only, ~350-400 W during "
-                         "inference). Do not compare with paid API pricing."),
+                          "inference). Step-distilled model: guidance_scale is "
+                          "ignored by diffusers (CFG off). Do not compare with "
+                          "paid API pricing."),
             },
         }
 

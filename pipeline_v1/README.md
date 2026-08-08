@@ -17,9 +17,9 @@ Pipeline stages (per page):
    (same prompt as the
    [OpenRouter VLM method](../research/character_detection_methods/character-detection-openrouter-vlm/))
    → `2_characters/<page>/<panel>.json`
-4. **Colorize panel by panel** — self-hosted FLUX.2 Klein 9B base + thedeoxen
-   manga-colorization-by-reference LoRA (`mngclranm`) on the DGX Spark server
-   (same server as the
+4. **Colorize panel by panel** — self-hosted **step-distilled** FLUX.2 Klein 9B
+   + thedeoxen manga-colorization-by-reference LoRA (`mngclranm`, **4 steps**)
+   on the DGX Spark server (same server as the
    [LoRA method](../research/colorization_methods/flux-2-klein-9b-base-lora-edit-sequential/));
    the request is the panel (`#1`) + a labelled atlas of **only the detected
    characters** (`#2`); panels with no detected characters are colorized
@@ -40,8 +40,10 @@ overwritten) with the four numbered intermediate directories and an incremental
 
 - The YOLO weights (~15 MB) download automatically to `pipeline_v1/models/`
   on first use (Apache-2.0).
-- The FLUX.2 Klein 9B base + LoRA server must be running
+- The FLUX.2 Klein 9B (distilled) + LoRA server must be running
   (`curl http://spark:3000/healthz`); see [`server/README.md`](../server/README.md).
+  The compose deployment serves the step-distilled checkpoint with the LoRA
+  loaded at 4 steps (`FLUX2_STEPS=4`).
 - `OPENROUTER_API_KEY` must be in the repo `.env` (paid tier).
 
 ## Usage
@@ -71,8 +73,9 @@ Offline demo (mock backends, no API keys, no server):
 
 Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 `--from-step colorize`, `--resume <previous-run-dir>` (re-uses its step
-outputs), `--atlas-columns N`, `--num-inference-steps` (20–50 for the base
-model), `--guidance-scale` (~4–5), `--lora-scale` (0.8–1.0), `--seed`.
+outputs), `--atlas-columns N`, `--num-inference-steps` (4 for the
+step-distilled model; 20–50 if the server runs the undistilled base),
+`--lora-scale` (0.8–1.0), `--seed`.
 
 ## Output layout
 
@@ -99,8 +102,9 @@ colorize poorly (no upscaling). Pending a real-run assessment.
   manifest `totals.openrouter_cost_usd`. Reference: ~$0.00008/panel on
   `data/panels` (4 panels = $0.000333).
 - **Colorization** (self-hosted FLUX on Spark): **$0 per call** (electricity
-  only, ~350–400 W during inference; ~5× slower per call than the distilled
-  fal endpoint at 20 steps). Do not compare with paid API pricing.
+  only, ~350–400 W during inference). Step-distilled 9B + LoRA at 4 steps is
+  fast (roughly the fal 4-step endpoint's timing); the undistilled base would
+  be ~5× slower. Do not compare with paid API pricing.
 
 ## Testing
 

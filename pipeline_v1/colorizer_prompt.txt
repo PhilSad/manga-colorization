@@ -1,0 +1,15 @@
+mngclranm
+
+Use case: precise-object-edit
+Asset type: full-color manga panel
+Primary request: Add color to #1 only. Do not regenerate, reinterpret, or redraw it.
+
+Requirements:
+- #1 is the primary edit target. Preserve its exact {width}x{height} canvas, panel borders, line art, screentones, poses, facial expressions, backgrounds, lettering, and gutters pixel-for-pixel wherever possible.
+- Change grayscale values into color while retaining the original black inks and fine marks. Do not crop, rotate, rearrange, smooth, repaint, remove, or invent any story element.
+- {atlas_instruction}
+- For elements without reference evidence, invent harmonious, restrained anime colors that fit the scene.
+- Keep all existing text exactly legible and unchanged.
+- Return only the colorized version of #1 at exactly {width}x{height}.
+
+Avoid: altered linework, painterly restyling, softened details, changed anatomy, changed text, new objects, missing objects, crops, borders from reference images, labels from the atlas, or content copied from reference images.

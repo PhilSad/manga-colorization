@@ -5,6 +5,7 @@ torch==2.13.0+cu130
 transformers>=4.51,<5
 accelerate>=0.31
 safetensors>=0.8
+peft>=0.15
 pillow>=11
 huggingface-hub>=0.34
 python-multipart>=0.0.9

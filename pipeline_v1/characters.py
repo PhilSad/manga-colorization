@@ -233,6 +233,8 @@ class PageCharacterRecord:
     cost_usd: float = 0.0
     total_latency_s: float = 0.0
     error: str | None = None
+    page_response_text: str = ""      # raw page-level answer (provenance)
+    page_parse_ok: bool = False
 
 
 class CharacterDetector(Protocol):
@@ -395,11 +397,40 @@ class OpenRouterCharacterDetector:
             record.unpriced_calls += 1
 
         mapping = parse_page_mapping(result.text) if result.error is None else None
+        # An unparseable/empty page-level answer is a page-call failure, not a
+        # per-panel uncertainty: retry the page call once before falling back
+        # per panel (avoids an explosion of fallback calls).
+        if mapping is None and result.error is None:
+            print(
+                f"    page detection: page-level answer for {page.stem} did not parse "
+                f"(first 200 chars: {result.text[:200]!r}); retrying once",
+                flush=True,
+            )
+            retry = self._call(content)
+            record.page_calls += 1
+            record.cost_usd += retry.cost_usd or 0.0
+            record.total_latency_s += retry.latency_s
+            if retry.cost_usd is None:
+                record.unpriced_calls += 1
+            if retry.error is not None:
+                record.error = retry.error
+            else:
+                result = retry
+            mapping = parse_page_mapping(result.text) if result.error is None else None
+
+        record.page_response_text = result.text
+        record.page_parse_ok = mapping is not None
         mapping = mapping or {}
         expected_set = set(expected_panels)
         if result.error is not None:
             record.status = "error"
             record.error = result.error
+        if not record.page_parse_ok and result.error is None:
+            print(
+                f"    page detection: response for {page.stem} still did not parse; "
+                f"falling back per panel",
+                flush=True,
+            )
 
         for panel_key in expected_panels:
             entry = mapping.get(panel_key)

@@ -156,6 +156,14 @@ def evaluate_characters_case(run_dir: Path, fixture: dict, case: dict) -> dict:
             "id": case["id"], "stage": "characters", "page": page, "panel": panel,
             "status": "missing record", "matches": None,
         }
+    if doc.get("source") == "forced":
+        # A forced ground-truth identity is not a detection; it must never be
+        # scored as a detection result (task 0001).
+        return {
+            "id": case["id"], "stage": "characters", "page": page, "panel": panel,
+            "status": "forced ground truth, not a detection",
+            "source": "forced", "matches": None,
+        }
     detected = set(doc.get("characters", []))
     unknown_entries = list(doc.get("unknown_entries", []))
     unknown_present = bool(unknown_entries)

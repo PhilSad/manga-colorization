@@ -175,6 +175,20 @@ def _detect_page(
     if page_record.error is not None:
         totals["error_calls"] += page_record.page_calls
 
+    # Provenance: the raw page-level answer + parse outcome.
+    write_json(out_page_dir / "page_call.json", {
+        "page": page,
+        "expected_panels": expected,
+        "status": page_record.status,
+        "page_calls": page_record.page_calls,
+        "fallback_calls": page_record.fallback_calls,
+        "cost_usd": page_record.cost_usd,
+        "latency_s": round(page_record.total_latency_s, 3),
+        "parse_ok": page_record.page_parse_ok,
+        "response_text": page_record.page_response_text,
+        "error": page_record.error,
+    })
+
     docs: list[dict] = []
     for panel_path in needed:
         stem = panel_path.stem

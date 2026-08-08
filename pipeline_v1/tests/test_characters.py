@@ -574,6 +574,67 @@ def test_detect_page_rejects_extra_panel_keys(tmp_path):
     assert record.panels["panel_0002"].source == "fallback"
 
 
+def test_detect_page_retries_once_on_unparseable_answer(tmp_path):
+    """An unparseable page-level answer is retried once before per-panel
+    fallbacks, instead of exploding into one fallback per panel."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def garbage():
+        return FakeResponse("I think the heroes are here...", usage=FakeUsage(cost=0.0001))
+
+    def good():
+        return FakeResponse(
+            '{"panels": {"panel_0001": {"characters": ["Frieren"], '
+            '"uncertain": false}, "panel_0002": {"characters": ["Fern"], '
+            '"uncertain": false}}}',
+            usage=FakeUsage(cost=0.0002),
+        )
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([garbage, good]),
+    )
+    detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
+                     panel_prompt_file=PANEL_PROMPT_FILE)
+    record = detector.detect_page(
+        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    )
+    assert record.status == "ok"
+    assert record.page_calls == 2       # one retry, no per-panel fallbacks
+    assert record.fallback_calls == 0
+    assert record.cost_usd == pytest.approx(0.0003, abs=1e-9)
+    assert record.panels["panel_0001"].source == "page"
+    assert record.panels["panel_0002"].source == "page"
+    assert len(detector.client.chat.completions.calls) == 2
+
+
+def test_detect_page_still_falls_back_after_retry_fails(tmp_path):
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def garbage():
+        return FakeResponse("not json at all", usage=FakeUsage())
+
+    def fallback_answer():
+        return FakeResponse('{"characters": ["Fern"]}', usage=FakeUsage())
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([garbage, garbage, fallback_answer, fallback_answer]),
+    )
+    detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
+                     panel_prompt_file=PANEL_PROMPT_FILE)
+    record = detector.detect_page(
+        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    )
+    assert record.page_calls == 2
+    assert record.fallback_calls == 2   # both panels fall back after the retry
+    assert record.panels["panel_0001"].source == "fallback"
+
+
 def test_cast_shortlist_deterministic_and_offline(tmp_path):
     from characters import cast_shortlist_for
 

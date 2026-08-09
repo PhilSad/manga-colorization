@@ -20,6 +20,8 @@ The purpose is to compare methods on quality and cost, not only to produce attra
 - `research/colorization_methods/`: one self-contained directory per colorization method.
 - `research/character_detection_methods/`: one self-contained directory per character-detection method. Companion experiments (not colorizers): given a panel or page, they list which reference characters appear in it, e.g. via vision-language models. They follow the same conventions as colorization methods (timestamped `output/` runs, manifests, `methods.md` entry).
 - `methods.md`: the index and comparison table for all methods.
+- `pipelines.md`: the index and comparison of full colorization pipelines (the pipeline-level counterpart of `methods.md`); contains the evaluation write-ups of `pipeline_v1`.
+- `pipeline_v1/`: the panel-wise colorization pipeline (a pipeline, not a method — it composes the research methods as library modules). See the `# pipeline_v1` section below.
 - `script/`: utility scripts shared across methods, currently volume tooling: `extract_pages.py` (unpack `data/volumes/*.cbz` into `data/page_per_volume/`) and `merge_to_cbz.py` (pack a page folder back into a `.cbz`). Both are Python 3 stdlib-only.
 - `scrape_frieren_wiki.py` + `frieren_wiki_dataset/`: scraper for the Frieren wiki (MediaWiki API) and its output dataset (per-chapter page counts, summaries, characters in order of appearance). Rerun with `python3 scrape_frieren_wiki.py`; see the dataset's `README.md`.
 - `associate_chapters_to_pages.py`: maps chapters to page-file ranges in `data/page_per_volume/` (filename chapter tags + padding rule, wiki-count fallback for the mislabeled v09, overrides for missing counts). Writes `frieren_wiki_dataset/chapter_page_map.json` + `chapter_pages.csv`.
@@ -147,6 +149,66 @@ ssh spark "cd /home/phil/agent_workspace/flux2-klein-server && docker compose do
 
 Note: the server sources live on Spark under `/home/phil/agent_workspace/flux2-klein-server`; if you change `server/` in the repo, sync it there (only that folder) before rebuilding.
 
+# pipeline_v1
+
+`pipeline_v1/` is the full panel-wise manga colorization pipeline. It is a
+pipeline, not a method: it composes the research methods as library modules
+(character-detection via OpenRouter VLM, FLUX.2 Klein colorization), so it is
+documented in `pipelines.md`, not `methods.md`. Per page it:
+
+1. **Detect panels** — YOLO26n (`leoxs22/manga-panel-detector-yolo26n`, weights
+   auto-downloaded to `pipeline_v1/models/`). Zero-detection pages get a
+   blank-ink check; sparse full-page art gets one synthetic full-page box
+   (`provenance: full-page-fallback`), effectively blank pages are skipped.
+2. **Extract in Japanese reading order** (right-to-left, top-to-bottom) —
+   crops `panel_0001.png …` + `panels.json` + `overlay.png` → `1_panels/<page>/`.
+3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`, one
+   paid call per page mapping numbered panels to canonical characters; missing/
+   invalid/`uncertain` panels get a cropped-panel fallback. `--detection-mode
+   page|panel|panel-page` selects page-level (V1.1 default), one-call-per-panel
+   (V1), or one-call-per-panel with the full page as context. An optional
+   cached chapter cast shortlist (`--cast-key`) focuses the prompt →
+   `2_characters/<page>/<panel>.json`.
+4. **Colorize panel by panel** — step-distilled FLUX.2 Klein 9B + thedeoxen
+   manga-colorization-by-reference LoRA (`mngclranm`, 4 steps) on the Spark
+   server; the request is the panel + a labelled atlas of **only the detected
+   characters** + an explicit canonical-palette instruction rendered from
+   `character_profiles.json`. Panels with no detected characters are colorized
+   panel-only. Oversized inputs are scaled to the megapixel cap
+   (`--max-megapixels`, default 2.0 MP) → `3_colorized/<page>/`.
+5. **Stitch** — each colorized panel resized back to its original box and
+   pasted onto the page; everything outside the panels stays black & white →
+   `4_stitched/<page>.png`.
+
+- Entry point: `pipeline_v1/run.py`; full usage in `pipeline_v1/README.md`,
+  module map and design decisions in `pipeline_v1/ARCHITECTURE.md`.
+- Run conventions: same as methods — each invocation creates a fresh
+  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the four
+  numbered intermediate directories and an incremental `manifest.json`
+  (command, config, prompt/profile hashes, per-step records, measured costs).
+  `output/` and `models/` are gitignored.
+- A "colorize a volume" request also means `--skip-first 3 --limit 5` here
+  (see above); run against Spark with `--endpoint http://spark:3000`.
+- Useful flags: `--steps panels,characters`, `--from-step colorize`,
+  `--resume <previous-run-dir>`, `--atlas-columns N`, `--num-inference-steps`
+  (4 for the step-distilled model), `--lora-scale`, `--seed`, `--detection-mode`,
+  `--cast-key`, `--only-panel PAGE:PANEL` (targeted rerun),
+  `--force-characters PAGE:PANEL=Name` (ground-truth identities, no paid
+  call), `--workers N` (parallel page-level detection).
+- Requirements: `OPENROUTER_API_KEY` in `.env` (paid detection) and the Spark
+  FLUX server running (`curl http://spark:3000/healthz`). Offline demo without
+  any of that: `pipeline_v1/run.py --mock --limit 1` (mock backends). Tests:
+  `.venv/bin/pytest pipeline_v1/tests -q` (fully offline; the real smoke test
+  is `pipeline_v1/scripts/smoke_real.sh` and is not part of pytest).
+- Cost: character detection ~$0.00008/panel (measured via `usage.cost`, paid
+  OpenRouter tier; recorded in `2_characters/` and the manifest
+  `totals.openrouter_cost_usd`); colorization $0 per call (self-hosted FLUX on
+  Spark, electricity only).
+- Evaluation: `pipeline_v1/evaluate.py --run <run_dir>` auto-scores the fixed
+  detection cases (`evaluation/v1_1_cases.json`, exact TP/FP/FN) and writes a
+  human-review color report (`evaluation/color_review.md`, no automated color
+  verdict). Quality write-ups, run tables, and remaining known failures live in
+  `pipelines.md`; debug views are in `docs/pipeline_v1/`.
 
 # Contribution guide
 

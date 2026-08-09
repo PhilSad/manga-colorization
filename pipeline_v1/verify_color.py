@@ -27,6 +27,7 @@ API_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_VERIFY_MODEL = "openai/gpt-5.6-luna"
 
 VERIFY_PROMPT_FILE = Path(__file__).resolve().parent / "verify_l2r_prompt.txt"
+PALETTE_PROMPT_FILE = Path(__file__).resolve().parent / "verify_palette_prompt.txt"
 
 # Status values: verified | mismatch | unparseable | error
 VERIFIED = "verified"
@@ -87,6 +88,36 @@ def parse_l2r_verdict(text: str) -> dict | None:
     return {
         "left_to_right_matches": matches,
         "per_position": cleaned,
+        "notes": str(data.get("notes", "") or ""),
+    }
+
+
+def parse_palette_verdict(text: str) -> dict | None:
+    """Parse `{"adheres": bool, "missing_required": [...],
+    "present_forbidden": [...], "notes"}` for COL-001..003 (palette
+    adherence). Returns None for unparseable/malformed answers."""
+    if not text:
+        return None
+    data = _extract_json_object(text.strip())
+    if not isinstance(data, dict) or "adheres" not in data:
+        return None
+    raw = data["adheres"]
+    if isinstance(raw, bool):
+        adheres = raw
+    elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+        adheres = raw.strip().lower() == "true"
+    else:
+        return None
+
+    def _as_str_list(value) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    return {
+        "adheres": adheres,
+        "missing_required": _as_str_list(data.get("missing_required")),
+        "present_forbidden": _as_str_list(data.get("present_forbidden")),
         "notes": str(data.get("notes", "") or ""),
     }
 
@@ -173,19 +204,7 @@ class LeftToRightVerifier:
             encoding="utf-8"
         )
         prompt = build_l2r_prompt(template, left_to_right)
-
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": prompt},
-        ]
-        for image in (colorized, input_crop):
-            if image is None or not Path(image).is_file():
-                continue
-            mime = _mime(Path(image))
-            b64 = base64.b64encode(Path(image).read_bytes()).decode()
-            content.append(
-                {"type": "image_url",
-                 "image_url": {"url": f"data:{mime};base64,{b64}"}}
-            )
+        content = _content_with_images(prompt, (colorized, input_crop))
 
         result = call_vlm(
             self.client, self.model, content,
@@ -224,6 +243,153 @@ class LeftToRightVerifier:
             error=result.error,
             finished_at=_iso_now(),
         )
+
+
+@dataclass
+class PaletteVerifyRecord:
+    """Result of one palette-adherence verification call (COL-001..003)."""
+
+    status: str                       # verified | mismatch | unparseable | error
+    adheres: bool | None
+    missing_required: list[str]
+    present_forbidden: list[str]
+    notes: str
+    response_text: str
+    usage: dict[str, int]
+    cost_usd: float | None
+    cost_source: str
+    latency_s: float
+    model_returned: str | None
+    attempts: int
+    error: str | None = None
+    finished_at: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "adheres": self.adheres,
+            "missing_required": self.missing_required,
+            "present_forbidden": self.present_forbidden,
+            "notes": self.notes,
+            "response_text": self.response_text,
+            "usage": self.usage,
+            "cost_usd": self.cost_usd,
+            "cost_source": self.cost_source,
+            "latency_s": round(self.latency_s, 3),
+            "model_returned": self.model_returned,
+            "attempts": self.attempts,
+            "error": self.error,
+            "finished_at": self.finished_at,
+        }
+
+
+class PaletteVerifier:
+    """OpenRouter VLM that checks a colorized panel against a fixture's
+    required/forbidden palette (COL-001..003 palette adherence)."""
+
+    def __init__(
+        self,
+        model: str = DEFAULT_VERIFY_MODEL,
+        api_key: str = "",
+        api_base: str = API_BASE,
+        client: Any = None,  # injected OpenAI-compatible client (tests)
+        max_tokens: int = 1024,
+        temperature: float = 0.0,
+        prompt_template: str | None = None,
+    ) -> None:
+        self.model = model
+        self.api_key = api_key
+        self.api_base = api_base
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        if client is not None:
+            self.client = client
+        else:
+            from openai import OpenAI
+
+            self.client = OpenAI(api_key=api_key, base_url=api_base)
+        self.prompt_template = prompt_template
+
+    def verify(
+        self,
+        colorized: Path,
+        input_crop: Path | None,
+        required_colors: list[str],
+        forbidden_colors: list[str],
+    ) -> PaletteVerifyRecord:
+        """Ask the VLM whether the colorized panel adheres to the required
+        palette and avoids the forbidden colors. One paid OpenRouter call."""
+        template = self.prompt_template or PALETTE_PROMPT_FILE.read_text(
+            encoding="utf-8"
+        )
+        prompt = (
+            template
+            .replace("{required}", "\n".join(f"- {c}" for c in required_colors))
+            .replace("{forbidden}", "\n".join(f"- {c}" for c in forbidden_colors))
+        )
+        content = _content_with_images(prompt, (colorized, input_crop))
+
+        result = call_vlm(
+            self.client, self.model, content,
+            max_tokens=self.max_tokens, temperature=self.temperature,
+        )
+        parsed = parse_palette_verdict(result.text) if result.error is None else None
+
+        if result.error is not None:
+            status = ERROR
+            adheres = None
+            missing: list[str] = []
+            forbidden: list[str] = []
+            notes = ""
+        elif parsed is None:
+            status = UNPARSEABLE
+            adheres = None
+            missing = []
+            forbidden = []
+            notes = ""
+        else:
+            adheres = parsed["adheres"]
+            missing = parsed["missing_required"]
+            forbidden = parsed["present_forbidden"]
+            notes = parsed["notes"]
+            status = VERIFIED if adheres else MISMATCH
+
+        return PaletteVerifyRecord(
+            status=status,
+            adheres=adheres,
+            missing_required=missing,
+            present_forbidden=forbidden,
+            notes=notes,
+            response_text=result.text,
+            usage=result.usage,
+            cost_usd=result.cost_usd,
+            cost_source=result.cost_source,
+            latency_s=result.latency_s,
+            model_returned=result.model_returned,
+            attempts=result.attempts,
+            error=result.error,
+            finished_at=_iso_now(),
+        )
+
+
+def _content_with_images(
+    prompt: str,
+    images: tuple[Path | None, ...],
+) -> list[dict[str, Any]]:
+    """Text + base64 data-URL images for an OpenAI-compatible chat request."""
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": prompt},
+    ]
+    for image in images:
+        if image is None or not Path(image).is_file():
+            continue
+        mime = _mime(Path(image))
+        b64 = base64.b64encode(Path(image).read_bytes()).decode()
+        content.append(
+            {"type": "image_url",
+             "image_url": {"url": f"data:{mime};base64,{b64}"}}
+        )
+    return content
 
 
 def _mime(path: Path) -> str:

@@ -6,4 +6,7 @@ requires-python = ">=3.11"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: real-network integration test (no mocks: real OpenRouter gemma detection, real FLUX colorize on Spark, real gpt-5.6-luna validation, real YOLO). Inputs are committed in tests/data/; artifacts and measured costs land in tests/output/YYYYMMDD-HHMMSS/. Skipped unless explicitly run with -m integration.",
+]

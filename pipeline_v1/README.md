@@ -134,23 +134,43 @@ recorded per call.
   with each generated COL-* image, the fixture's expected output, and
   `Pending user review` checkboxes. With `--verify`, COL-004 (palette
   geography) is instead **resolved automatically**: the evaluator asks an
-  OpenRouter VLM — `openai/gpt-5.6-luna`, the vision model chosen for V1.2
-  problem 1 in `ideas.md` — whether the left-to-right hair-color assignment
-  of the generated panel is true (green Heiter / blue Himmel / white-pink
-  Frieren / yellow Eisen), sending the colorized panel plus the monochrome
-  crop. The verdict (`VLM verified: pass/fail`, `VLM unparseable`, `VLM
-  error`), the per-position observations, the prompt, and `usage.cost` are
-  recorded in `report.json` and rendered in `color_review.md`; COL-001..003
-  (no `left_to_right` expectation) always stay human-review.
+  OpenRouter VLM — `openai/gpt-5.6-luna` — whether the left-to-right
+  hair-color assignment of the generated panel is true (green Heiter / blue
+  Himmel / white-pink Frieren / yellow Eisen), sending the colorized panel
+  plus the monochrome crop. The verdict, per-position observations, prompt
+  and `usage.cost` are recorded in `report.json` and rendered in
+  `color_review.md`; COL-001..003 (no `left_to_right` expectation) always
+  stay human-review.
 
   ```bash
   .venv/bin/python pipeline_v1/evaluate.py --run <run_dir> --verify
   ```
 
-  Verification is a paid OpenRouter call per resolved case (measured
-  `usage.cost` ≈ $0.0003–0.001 per call on the 1216×1824 p013 panel,
-  recorded in `color.verification`); COL-001..003 and cases without a
-  generated image are never charged.
+- **Integration suite** (`pytest -m integration`, excluded from plain
+  pytest): stage-isolated, **no mocks, real API calls**, one timestamped
+  output dir per session under `tests/output/YYYYMMDD-HHMMSS/` with a
+  manifest of per-case records and measured `usage.cost`. Inputs are
+  committed under `tests/data/` (pre-cropped panels + the one layout page;
+  regenerate with `tests/prepare_integration_data.py`):
+
+  - `test_integration_detection.py` (DET-001..004, OOV-001): the committed
+    crop -> real OpenRouter `google/gemma-4-31b-it` panel detection ->
+    assert the fixture's character set. Currently 1/5 pass — the four
+    failures are the fixture's documented V1 baselines (flashback cast,
+    multi-character collapse, missed Heiter, Clematis forced to Denken).
+  - `test_integration_color.py` (COL-001..004, SIZE-001): the committed
+    crop + `forced_characters` -> real FLUX.2 Klein 9B on Spark -> real
+    `openai/gpt-5.6-luna` validation (palette adherence for COL-001..003,
+    left-to-right for COL-004). Live run 2026-08-09: COL-003/COL-004 pass
+    (the V1.2 palette-geography bug is gone at seed 1337), COL-001/002 fail
+    (Frieren's hair renders lavender-purple, forbidden); SIZE-001 asserts
+    the 1600x1248 request cap.
+  - `test_integration_layout.py` (LAY-001..002): the committed page -> real
+    YOLO26n, reusing the pipeline's blank-check/full-page fallback policy.
+
+  The colorize tests need the Spark server up and `OPENROUTER_API_KEY`
+  (detection + validation); missing prerequisites skip their tests with a
+  printed reason. Measured suite cost ≈ $0.002–0.003 per full run.
 - `character_profiles.json` + `profiles.py` — canonical names, identity cues
   (detection hints), palette descriptions (FLUX prompt conditioning),
   reference files, aliases, variants.
@@ -171,15 +191,24 @@ recorded per call.
 ## Testing
 
 ```bash
-.venv/bin/pytest pipeline_v1/tests -q
+.venv/bin/pytest pipeline_v1/tests -q            # offline unit tests (default)
+.venv/bin/pytest pipeline_v1/tests -m integration   # real-network integration suite
 ```
 
-Fully offline: unit tests per stage plus an end-to-end suite running the whole
-pipeline with mock backends on a synthetic manga page, including page-level
-character detection, targeted reruns (`--only-panel` / `--resume
---from-step`), forced ground-truth identities, full-page fallback, blank-page
-skip, and the megapixel cap. The real smoke test (real YOLO + OpenRouter +
-Spark) is `pipeline_v1/scripts/smoke_real.sh` and is **not** part of pytest.
+Offline (no network, $0): unit tests per stage plus an end-to-end suite
+running the whole pipeline with mock backends on a synthetic manga page,
+including page-level character detection, targeted reruns (`--only-panel` /
+`--resume --from-step`), forced ground-truth identities, full-page fallback,
+blank-page skip, and the megapixel cap. Integration tests are marked
+`integration` and excluded by default (`addopts = "-m 'not integration'"`).
+
+**Integration suite** — no mocks, real API calls, one timestamped output
+`tests/output/YYYYMMDD-HHMMSS/` per session (see the V1.1 evaluation section
+above). Skipped whenever a prerequisite is missing (`OPENROUTER_API_KEY`,
+Spark server), printed reason; plain `pytest` never touches the network.
+
+The real smoke run (real YOLO + OpenRouter + Spark) is
+`pipeline_v1/scripts/smoke_real.sh` and is **not** part of pytest.
 
 ## Reproducibility
 

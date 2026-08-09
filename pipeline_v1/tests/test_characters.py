@@ -727,6 +727,10 @@ def test_detect_panels_with_page_all_ok(tmp_path):
     assert first_content[1]["type"] == "image_url"
     assert first_content[2]["type"] == "image_url"
     assert first_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    second_content = detector.client.chat.completions.calls[1]["messages"][0][
+        "content"
+    ]
+    assert first_content[1]["image_url"]["url"] != second_content[1]["image_url"]["url"]
 
 
 def test_detect_panels_with_page_uncertain_falls_back(tmp_path):

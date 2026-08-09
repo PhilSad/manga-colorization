@@ -332,8 +332,8 @@ Findings:
   DET-002 modal `{Frieren, Heiter, Himmel}` — misses a hero-party member).
 - **OOV-001 stays unsolved in every mode/model**: Clematis is forced to
   Denken/Wirbel/Heiter and never reported unknown.
-- **Recommendation**: switch the pipeline default from `page` to
-  `panel-page-cast` with `google/gemma-4-31b-it` — panel-page at ~$0.0001/
+- **Default adopted**: the pipeline now defaults to `panel-page` with
+  `google/gemma-4-31b-it` — panel-page at ~$0.0001/
   case-rep and ~5 s per panel is worth ~5× a page call, and the new
   `panel-page-cast` mode additionally auto-restricts each page's prompt to
   its chapter cast (via `chapter_page_map.json`), which excludes look-alikes

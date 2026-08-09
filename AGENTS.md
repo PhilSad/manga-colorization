@@ -165,11 +165,12 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`, one
    paid call per page mapping numbered panels to canonical characters; missing/
    invalid/`uncertain` panels get a cropped-panel fallback. `--detection-mode
-   page|panel|panel-page|panel-page-cast` selects page-level (V1.1 default),
+   page|panel|panel-page|panel-page-cast` selects page-level (V1.1),
    one-call-per-panel (V1), one-call-per-panel with the full page as context,
-   or the same with an **automatically derived per-chapter cast shortlist**
-   (the page's chapter via `frieren_wiki_dataset/chapter_page_map.json` —
-   fixes mislabeled v09 tags; `--cast-key` overrides the derivation) so
+   or the same with an **automatically derived per-chapter cast shortlist**.
+   `panel-page` is the default. `panel-page-cast` derives that shortlist from
+   the page's chapter via `frieren_wiki_dataset/chapter_page_map.json` —
+   fixing mislabeled v09 tags; `--cast-key` overrides the derivation, so
    look-alike characters outside the chapter cast cannot be guessed (e.g.
    Flamme on p130 of ch. 5). An optional cached chapter cast shortlist
    (`--cast-key`) focuses the prompt → `2_characters/<page>/<panel>.json`.

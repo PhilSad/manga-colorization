@@ -69,7 +69,7 @@ class PipelineConfig:
     # V1 per-panel behaviour; per-panel calls that send the full page as
     # context plus the target panel (panel-page); or panel-page with an
     # automatically derived per-chapter cast shortlist (panel-page-cast).
-    detection_mode: str = "page"  # page | panel | panel-page | panel-page-cast
+    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast
     vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
     chapter_casts_file: Path = DEFAULT_CHAPTER_CASTS_FILE
@@ -255,7 +255,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         help="Panel+page prompt (detection_mode='panel-page' calls).")
     parser.add_argument("--detection-mode",
                         choices=("page", "panel", "panel-page", "panel-page-cast"),
-                        default="page",
+                        default="panel-page",
                         help="page: one paid call per page with per-panel fallbacks "
                              "(V1.1); panel: V1 behaviour, one call per panel; "
                              "panel-page: one call per panel sending the full page as "

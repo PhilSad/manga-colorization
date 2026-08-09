@@ -1,11 +1,11 @@
 """Pipeline stage 3: character detection (per panel or per page).
 
-Default (`detection_mode="page"`, task 0003): one paid call per page mapping
+V1.1 (`detection_mode="page"`, task 0003): one paid call per page mapping
 numbered panels to canonical characters, with cropped-panel fallbacks for
 missing/invalid/uncertain results. `detection_mode="panel"` keeps the V1
-one-call-per-panel behaviour. `detection_mode="panel-page"` (V1.2) keeps the
-one-call-per-panel granularity but sends the full page as context plus the
-target panel, with the same cropped-panel fallback as page mode.
+one-call-per-panel behaviour. `detection_mode="panel-page"` (V1.2, default)
+keeps the one-call-per-panel granularity but sends the full page as context
+plus the target panel, with the same cropped-panel fallback as page mode.
 `detection_mode="panel-page-cast"` is panel-page with an automatically derived
 per-chapter cast shortlist (the page's chapter via `chapter_page_map.json`;
 `--cast-key` overrides the derivation): the panel-page prompt is rendered for

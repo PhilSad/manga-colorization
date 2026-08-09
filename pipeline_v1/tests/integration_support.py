@@ -5,8 +5,9 @@ The suite is stage-isolated: every case takes a fixed committed input from
 `tests/data/` (a pre-cropped panel, or a full page for the layout stage) and
 exercises ONE real backend — never a mocked one and never the whole pipeline:
 
-- detection (DET-*, OOV-*): the committed panel crop -> real OpenRouter
-  `google/gemma-4-31b-it` panel detection -> assert the character set.
+- detection (DET-*, OOV-*): the durable source page + real reading-order
+  extraction -> real OpenRouter `google/gemma-4-31b-it` panel-page detection
+  (full page context plus committed target crop) -> assert the character set.
 - color (COL-*, SIZE-*): the committed crop + `forced_characters` -> real
   FLUX.2 Klein 9B colorization on the Spark server -> real
   `openai/gpt-5.6-luna` validation of the output.
@@ -38,6 +39,7 @@ CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
 
 PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
+PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 
 # Real models used by the suite (override via env).
 DETECTION_MODEL = "google/gemma-4-31b-it"
@@ -93,8 +95,7 @@ def page_path(filename: str) -> Path:
 
 
 def build_panel_detector(api_key: str, model: str = DETECTION_MODEL):
-    """Real OpenRouter character detector prepared for panel-only detection
-    (the committed crop as the only image, V1 panel prompt)."""
+    """Real OpenRouter character detector prepared for panel-page detection."""
     from characters import OpenRouterCharacterDetector
 
     detector = OpenRouterCharacterDetector(model=model, api_key=api_key)
@@ -102,8 +103,56 @@ def build_panel_detector(api_key: str, model: str = DETECTION_MODEL):
         REFS_DIR,
         prompt_file=PAGE_PROMPT_FILE,
         panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
     )
     return detector
+
+
+def build_page_dir(fixture: dict, alias: str, work_dir: Path) -> tuple[Path, Path]:
+    """Extract one fixture page exactly as the real pipeline's panels step does.
+
+    Returns ``(source_page, panels_dir)`` suitable for
+    ``OpenRouterCharacterDetector.detect_panels_with_page``.
+    """
+    from detection import YoloPanelDetector
+    from extraction import save_panels
+    from panel_ordering import reading_order
+    from PIL import Image
+    from util import sha256
+
+    source_page = (REPO_ROOT / fixture["aliases"][alias]).resolve()
+    boxes = YoloPanelDetector().detect(source_page)
+    order = reading_order(boxes)
+    ordered = [boxes[index] for index in order]
+    if not ordered:
+        raise RuntimeError(f"{alias}: panel detector returned no panels")
+
+    panels_dir = work_dir / alias
+    panels_dir.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_page) as image:
+        records = save_panels(image.convert("RGB"), ordered, panels_dir, inset=0)
+    detections = [
+        {
+            "panel_index": index,
+            "box": [round(box.x1), round(box.y1), round(box.x2), round(box.y2)],
+            "confidence": round(box.confidence, 4),
+            "crop": record["filename"],
+            "provenance": "yolo",
+        }
+        for index, (box, record) in enumerate(zip(ordered, records), start=1)
+    ]
+    write_json(panels_dir / "panels.json", {
+        "page": source_page.name,
+        "page_path": str(source_page),
+        "page_sha256": sha256(source_page),
+        "detection_order_into_reading_order": order,
+        "detections": detections,
+        "reading_order": [item["panel_index"] for item in detections],
+        "blank_page": False,
+        "skip_reason": None,
+        "full_page_fallback": False,
+    })
+    return source_page, panels_dir
 
 
 def build_colorizer(endpoint: str):

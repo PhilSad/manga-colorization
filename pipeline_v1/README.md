@@ -16,11 +16,12 @@ Pipeline stages (per page):
 2. **Extract in Japanese reading order** — right-to-left, top-to-bottom
    banding; crops `panel_0001.png …` + `panels.json` (boxes + order) +
    `overlay.png` debug image → `1_panels/<page>/`
-3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`,
-   one paid call per page mapping numbered panels to canonical characters
-   (V1.1, task 0003); missing/invalid/`uncertain` panels get a cropped-panel
-   fallback. `--detection-mode panel` keeps the V1 one-call-per-panel
-   behaviour; `--detection-mode panel-page` (V1.2) keeps one call per panel
+3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`.
+   The default `panel-page` mode makes one call per panel and sends the full
+   numbered page as context plus the target panel; missing/invalid/`uncertain`
+   results get a cropped-panel fallback. `--detection-mode panel` keeps the V1
+   panel-only behaviour; `--detection-mode page` makes one call per page;
+   `--detection-mode panel-page` (V1.2) keeps one call per panel
    but sends the full page as global context plus the target panel, with the
    same cropped-panel fallback as page mode. An optional cached
    chapter cast shortlist (`--cast-key`)

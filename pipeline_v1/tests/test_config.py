@@ -25,8 +25,8 @@ def test_parse_args_defaults():
     assert config.output_format == "png"
     assert config.atlas_columns is None
     assert config.to_dict()["input_dir"]
-    # V1.1 defaults
-    assert config.detection_mode == "page"
+    # V1.2 defaults
+    assert config.detection_mode == "panel-page"
     assert config.cast_key is None
     assert config.full_page_fallback is True
     assert config.blank_ink_threshold == 0.005

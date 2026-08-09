@@ -5,16 +5,16 @@ only image, prompt listing the canonical reference characters (hints come from
 the shared character profiles, task 0002) and asking for exactly
 `{"characters": ["Name1", ...]}`.
 
-V1.1 behaviour (`detection_mode="page"`, default, task 0003): one paid call
+V1.1 behaviour (`detection_mode="page"`, task 0003): one paid call
 per page. The full page is sent with the panels numbered in reading order
 (same numbers the extraction uses); the model returns a strict per-panel
 mapping. Missing, invalid, or explicitly `uncertain` panel entries trigger a
 cropped-panel fallback call (the V1 per-panel prompt). An optional cached
 chapter cast shortlist (`--cast-key`) replaces the full roster in the prompt.
 
-V1.2 behaviour (`detection_mode="panel-page"`): one paid call per panel that
-sends the full page (numbered, target panel highlighted) as global context
-*plus* the cropped panel. Each panel keeps the same cropped-panel fallback as
+V1.2 behaviour (`detection_mode="panel-page"`, default): one paid call per
+panel that sends the full page (numbered, target panel highlighted) as global
+context *plus* the cropped panel. Each panel keeps the same cropped-panel fallback as
 page mode: unparseable, `uncertain`, or unknown-character answers fall back to
 the V1 per-panel prompt.
 
@@ -688,9 +688,6 @@ class OpenRouterCharacterDetector:
 
         page_image, boxes = _page_geometry(panels_dir)
         annotated = _annotated_page(page_image, panels_dir)
-        page_info = file_record(annotated)
-        page_b64 = base64.b64encode(annotated.read_bytes()).decode()
-        page_mime = page_info["mime_type"]
 
         for panel_key in tqdm(
             expected_panels,
@@ -714,7 +711,9 @@ class OpenRouterCharacterDetector:
             content = [
                 {"type": "text", "text": panel_page_prompt},
                 {"type": "image_url",
-                 "image_url": {"url": f"data:{page_mime};base64,{page_b64}"}},
+                 "image_url": {
+                     "url": f"data:image/png;base64,{_b64(highlighted)}"
+                 }},
                 {"type": "image_url",
                  "image_url": {"url": f"data:{info['mime_type']};base64,{_b64(panel.read_bytes())}"}},
             ]

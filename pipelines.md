@@ -183,6 +183,79 @@ cast — where the cast is Frieren/Fern (panel 4 even kept Frieren but forced
 Fern to Flamme). Recorded as the six-panel page set **DET-005..010** in the
 evaluation fixture, with the observed misdetections as per-case baselines.
 
+### Detection model sweep — panel-only mode (2026-08-09, live OpenRouter)
+
+Three models × 4 reps over all 11 DET/OOV cases on the same committed
+panel-only crops and V1 panel prompt as `test_integration_detection.py`
+(temperature 0.2). Script: `pipeline_v1/tests/sweep_detection_models.py`
+(`--re-render` regenerates the tables from a saved summary); per-call records
+in `pipeline_v1/tests/output/20260809-204754/`. Total cost of the sweep:
+$0.10. Pass = exact character set + `unknown_present` semantics.
+
+| Case | expected | google/gemma-4-31b-it | openai/gpt-5.6-luna | xiaomi/mimo-v2.5 |
+|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | 0/4 | 1/4 | 0/4 (3 parse-fail) |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | 0/4 | 2/4 (1 parse-fail) | 0/4 (4 parse-fail) |
+| DET-003 | Heiter | 3/4 | 0/4 | 2/4 (1 parse-fail) |
+| DET-004 | Frieren, Heiter | 1/4 | 0/4 (3 parse-fail) | 0/4 (4 parse-fail) |
+| OOV-001 | — | 0/4 | 0/4 | 0/4 (4 parse-fail) |
+| DET-005 | — | 4/4 | 4/4 | 4/4 |
+| DET-006 | Frieren | 4/4 | 2/4 | 4/4 |
+| DET-007 | Frieren | 4/4 | 4/4 | 4/4 |
+| DET-008 | Frieren, Fern | 0/4 | 2/4 (1 parse-fail) | 0/4 (4 parse-fail) |
+| DET-009 | Frieren, Fern | 2/4 | 2/4 (1 parse-fail) | 1/4 (3 parse-fail) |
+| DET-010 | Frieren | 0/4 | 0/4 | 3/4 (1 parse-fail) |
+| **Total** | | **18/44** | **17/44** | **18/44** |
+
+Modal (most frequent) detection per model over the 4 reps:
+
+| Case | expected | gemma-4-31b-it | gpt-5.6-luna | mimo-v2.5 |
+|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | Fern, Stark (4/4) | Frieren, Wirbel (1/4) | ∅ (3/4) |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | Heiter, Himmel (2/4) | Eisen, Frieren, Heiter, Himmel (2/4) | ∅ (4/4) |
+| DET-003 | Heiter | Heiter (3/4) | Denken (4/4) | Heiter (2/4) |
+| DET-004 | Frieren, Heiter | Frieren (2/4) | ∅ (3/4) | ∅ (4/4) |
+| OOV-001 | — | Heiter (4/4) | Heiter (3/4) | ∅ (4/4) |
+| DET-005 | — | ∅ (4/4) | ∅ (4/4) | ∅ (4/4) |
+| DET-006 | Frieren | Frieren (4/4) | Frieren (2/4) | Frieren (4/4) |
+| DET-007 | Frieren | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) |
+| DET-008 | Frieren, Fern | Frieren, Serie (3/4) | Fern, Frieren (2/4) | ∅ (4/4) |
+| DET-009 | Frieren, Fern | Fern, Frieren (2/4) | Fern, Frieren (2/4) | ∅ (3/4) |
+| DET-010 | Frieren | Fern (2/4) | Serie (4/4) | Frieren (3/4) |
+
+Aggregates over all case-reps (TP/FP/FN on known characters):
+
+| model | pass | precision | recall | parse-fail | cost | avg latency |
+|---|---|---|---|---|---|---|
+| google/gemma-4-31b-it | 18/44 (41%) | 0.574 | 0.547 | 0 | $0.0031 | 2.8 s |
+| openai/gpt-5.6-luna | 17/44 (39%) | 0.611 | 0.516 | 6 | $0.0135 | 6.0 s |
+| xiaomi/mimo-v2.5 | 18/44 (41%) | 0.889 | 0.250 | 24 | $0.0838 | 13.3 s |
+
+Findings:
+
+- **Pass rates are tied (18/17/18 of 44), failure modes are not.** gemma is
+  deterministic and stable on the p130 panels (DET-005/006/007 4/4) and
+  cheapest (≈4× less than luna, ≈27× less than mimo per call). luna is the
+  only model that sometimes produces the full hero party on DET-002 (modal
+  `{Eisen, Frieren, Heiter, Himmel}` 2/4) but it fails the single-character
+  Heiter close-up (DET-003: Denken 4/4) that gemma passes 3/4.
+- **mimo-v2.5 is unusable in panel-only mode**: 24/44 calls returned
+  unparseable JSON (it rarely emits the strict `{"characters": [...]}`
+  format). Its apparent 0.889 precision is refusal-to-guess (modal ∅ on most
+  cases) at the cost of the worst recall (0.250) and highest price/latency.
+- **p130 stays hard for all three in panel-only mode** — and the ground truth
+  holds up: a neutral free-form VLM description of the DET-008/010 crops
+  (dark-haired girl + hexagonal barrier = Fern; adult white-haired elf with
+  pointed ears = Frieren) confirms the fixture. The confusions
+  Fern→Serie/Flamme and Frieren→Fern/Aura/Serie are look-alike errors driven
+  by the manga's dark Fern hair vs the pale anime Fern in `data/refs/`.
+- **OOV-001 remains unsolved by every model**: gemma/luna force Heiter/Wirbel
+  instead of reporting the unknown Clematis; mimo returns ∅/unparseable,
+  which fails the `unknown_present` assertion too.
+- **Verdict**: keep `google/gemma-4-31b-it` as the production detector
+  (equal pass rate, best price/latency/stability). luna is worth re-testing
+  with page-level context for the flashback-era cases; mimo-v2.5 is out.
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run

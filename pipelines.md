@@ -368,6 +368,17 @@ closest member; the unknown-identity contract is untouched by casting.
 | DET-010 | Frieren | 3/4 | 4/4 |
 | **Total** | | **38/44** | **39/44** |
 
+**Temperature-0 follow-up** (2026-08-09, gemma, 4 reps, records in
+`pipeline_v1/tests/output/20260809-232133/`): with detection temperature set
+from 0.2 → **0.0**, plain panel-page scores **40/44 (91%)** — the best result
+of any mode/model so far: all 10 character cases pass 4/4 (DET-008/010, which
+still flipped at 0.2, are now deterministic), precision 0.941, **recall 1.0**
+(zero false negatives over 44 case-reps), zero fallbacks, zero parse-fails,
+$0.0042. Sampling noise, not mode weakness, was the remaining cause of the
+DET-007/008/010 misses at 0.2. OOV-001 remains the sole failure (Denken
+forced 4/4). Sweep runs are now threaded (`--workers`, default 8): the 4-rep
+panel-page sweep dropped from ~15 min sequential to ~4.5 min at 16 workers.
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run

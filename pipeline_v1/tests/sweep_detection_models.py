@@ -44,6 +44,7 @@ import json
 import os
 import sys
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -170,6 +171,9 @@ def main() -> int:
                         help="comma-separated modes: panel,page,panel-page,"
                              "panel-page-cast")
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
+    parser.add_argument("--workers", type=int, default=8,
+                        help="parallel detection threads (1 = sequential); items "
+                             "within one rep run concurrently, reps stay ordered")
     parser.add_argument("--output-dir", default=None,
                         help="explicit output dir (default: timestamped)")
     parser.add_argument("--re-render", default=None,
@@ -211,6 +215,7 @@ def main() -> int:
             "models": models,
             "modes": modes,
             "reps": args.reps,
+            "workers": args.workers,
             "cases": [c["id"] for c in cases],
             "prompt": ("V1 panel prompt (panel), page prompt (page), "
                        "panel-page prompt (panel-page); same as the pipeline"),
@@ -224,15 +229,22 @@ def main() -> int:
     print(f"cases: {[c['id'] for c in cases]} | models: {models} | modes: {modes}")
 
     page_dirs = build_page_dirs(fixture, output_dir / ".pages")
+    # Map each case to its alias page (page/panel-page modes call per page).
+    cases_by_alias: dict[str, list[dict]] = {}
+    for case in cases:
+        cases_by_alias.setdefault(case["input"]["source_page"], []).append(case)
+    aliases = sorted(cases_by_alias)
     per_mode_model: dict[tuple[str, str], dict] = {}
 
     for mode in modes:
         for model in models:
             print(f"\n== mode={mode} model={model} "
-                  f"({args.reps} reps x {len(cases)} cases)", flush=True)
+                  f"({args.reps} reps x {len(cases)} cases, "
+                  f"workers={args.workers})", flush=True)
             detector = OpenRouterCharacterDetector(
                 model=model, api_key=api_key,
                 chapter_casts_file=CHAPTER_CASTS_FILE,
+                workers=args.workers,
             )
             detector.prepare(
                 REFS_DIR,
@@ -240,128 +252,56 @@ def main() -> int:
                 panel_prompt_file=PANEL_PROMPT_FILE,
                 panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
             )
-            method = ("detect_page" if mode == "page"
-                      else "detect_panels_with_page"
-                      if mode in ("panel-page", "panel-page-cast")
-                      else "detect")
             rows: list[dict] = []
             page_totals: dict[str, dict] = {}
 
-            for rep in range(1, args.reps + 1):
-                if mode == "panel":
-                    for case in cases:
-                        cid = case["id"]
-                        record = detector.detect(crop_path(cid), REFS_DIR)
-                        verdict = eval_case(case, record)
-                        row = {
-                            "mode": mode, "model": model, "rep": rep,
-                            "case": cid,
-                            "expected": sorted(case["expected"]["characters"]),
-                            "detected": sorted(record.characters),
-                            "unknown_entries": record.unknown_entries,
-                            "status": record.status, "source": record.source,
-                            "page_parse_ok": None, "fallback": False,
-                            **verdict,
-                            "cost_usd": record.cost_usd,
-                            "cost_source": record.cost_source,
-                            "latency_s": round(record.latency_s, 3),
-                            "model_returned": record.model_returned,
-                            "error": record.error,
+            pool = (ThreadPoolExecutor(
+                max_workers=args.workers, thread_name_prefix="sweep"
+            ) if args.workers > 1 else None)
+            try:
+                for rep in range(1, args.reps + 1):
+                    # Items within one rep are independent (distinct crops, or
+                    # distinct pages with their own page dirs), so reps stay
+                    # ordered and no two threads touch the same annotated page.
+                    items: list = list(cases) if mode == "panel" else list(aliases)
+                    if pool is None:
+                        for item in items:
+                            item_rows, pt = _run_item(
+                                mode, model, rep, item, detector,
+                                fixture, page_dirs, cases_by_alias,
+                            )
+                            rows.extend(item_rows)
+                            _merge_page_totals(page_totals, pt)
+                    else:
+                        futures = {
+                            pool.submit(
+                                _run_item, mode, model, rep, item, detector,
+                                fixture, page_dirs, cases_by_alias,
+                            ): item for item in items
                         }
-                        manifest["records"].append(row)
-                        rows.append(row)
-                        tag = "PASS" if verdict["pass"] else "fail"
-                        print(f"  {cid} rep{rep}: {sorted(record.characters)} {tag} "
-                              f"(${record.cost_usd or 0:.6f}, "
-                              f"{record.latency_s:.1f}s)", flush=True)
-                else:
-                    # page / panel-page: one page-scoped call per alias.
-                    cases_by_alias: dict[str, list[dict]] = {}
-                    for case in cases:
-                        cases_by_alias.setdefault(
-                            case["input"]["source_page"], []).append(case)
-                    for alias, alias_cases in cases_by_alias.items():
-                        page_dir = page_dirs[alias]
-                        page_path = (REPO_ROOT / fixture["aliases"][alias]).resolve()
-                        geometry = json.loads(
-                            (page_dir / "panels.json").read_text(encoding="utf-8")
-                        )
-                        expected = panel_keys_for(len(geometry["detections"]))
-                        cast_key = None
-                        if mode == "panel-page-cast":
-                            from characters import cast_key_for_page
+                        for future in as_completed(futures):
+                            item_rows, pt = future.result()
+                            rows.extend(item_rows)
+                            _merge_page_totals(page_totals, pt)
+            finally:
+                if pool is not None:
+                    pool.shutdown()
 
-                            cast_key = cast_key_for_page(
-                                page_path, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
-                            )
-                            if hasattr(detector, "set_cast"):
-                                detector.set_cast(cast_key)
-                        if cast_key is not None:
-                            page_record = getattr(detector, method)(
-                                page_path, page_dir, expected, REFS_DIR,
-                                cast_key=cast_key,
-                            )
-                        else:
-                            page_record = getattr(detector, method)(
-                                page_path, page_dir, expected, REFS_DIR
-                            )
-                        pt = page_totals.setdefault(alias, {
-                            "page_calls": 0, "fallback_calls": 0,
-                            "cost_usd": 0.0, "latency_s": 0.0,
-                        })
-                        pt["page_calls"] += page_record.page_calls
-                        pt["fallback_calls"] += page_record.fallback_calls
-                        pt["cost_usd"] = round(
-                            pt["cost_usd"] + (page_record.cost_usd or 0.0), 8)
-                        pt["latency_s"] = round(
-                            pt["latency_s"] + page_record.total_latency_s, 3)
-                        for case in alias_cases:
-                            cid = case["id"]
-                            panel_key = case["input"]["panel"]
-                            record = page_record.panels.get(panel_key)
-                            if record is None:
-                                record = _missing_record(panel_key)
-                            verdict = eval_case(case, record)
-                            if mode == "page":
-                                # cost/latency attributed at page level: share
-                                # equally across the page's panels.
-                                share = max(1, len(expected))
-                                cost = (page_record.cost_usd or 0.0) / share
-                                lat = page_record.total_latency_s / share
-                            else:
-                                cost = record.cost_usd
-                                lat = record.latency_s
-                            row = {
-                                "mode": mode, "model": model, "rep": rep,
-                                "case": cid,
-                                "expected": sorted(case["expected"]["characters"]),
-                                "detected": sorted(record.characters),
-                                "unknown_entries": record.unknown_entries,
-                                "status": record.status, "source": record.source,
-                                "page_parse_ok": page_record.page_parse_ok,
-                                "fallback": record.source == "fallback",
-                                "cast_key": cast_key,
-                                **verdict,
-                                "cost_usd": round(cost, 8) if cost is not None else None,
-                                "cost_source": (record.cost_source if mode == "panel-page"
-                                                else "page-level-share"),
-                                "latency_s": round(lat, 3),
-                                "model_returned": record.model_returned,
-                                "error": record.error,
-                            }
-                            manifest["records"].append(row)
-                            rows.append(row)
-                            tag = "PASS" if verdict["pass"] else "fail"
-                            fbk = " (fallback)" if record.source == "fallback" else ""
-                            print(f"  {cid} rep{rep}: {sorted(record.characters)} "
-                                  f"{tag}{fbk} (${cost or 0:.6f}, {lat:.1f}s)",
-                                  flush=True)
-                write_json(output_dir / "manifest.json", manifest)  # incremental
-
+            manifest["records"].extend(rows)
             per_mode_model[(mode, model)] = _aggregate(rows)
             manifest["totals"][f"{mode}|{model}"] = \
                 per_mode_model[(mode, model)]["aggregate"]
             write_json(output_dir / "manifest.json", manifest)
+
+            agg = per_mode_model[(mode, model)]["aggregate"]
+            print(f"  -> {agg['passes']}/{agg['case_reps']} pass "
+                  f"(P={agg['precision']} R={agg['recall']}, "
+                  f"${agg['cost_usd']:.4f}, {agg['latency_avg_s']:.1f}s avg)",
+                  flush=True)
+            for case in cases:
+                info = per_mode_model[(mode, model)]["by_case"][case["id"]]
+                print(f"     {case['id']}: {info['passes']}/{args.reps} "
+                      f"modal={info['modal_detection'] or '∅'}", flush=True)
 
     summary = {
         "kind": "detection-model-mode-sweep",
@@ -426,6 +366,119 @@ def _missing_record(panel_key: str):
         model_returned=None, attempts=0,
         error=f"missing panel record {panel_key}", source="missing",
     )
+
+
+def _merge_page_totals(page_totals: dict, pt: dict | None) -> None:
+    """Merge one item's page-call totals into the mode-level map (main thread)."""
+    if not pt:
+        return
+    for alias, delta in pt.items():
+        entry = page_totals.setdefault(alias, {
+            "page_calls": 0, "fallback_calls": 0, "cost_usd": 0.0, "latency_s": 0.0,
+        })
+        entry["page_calls"] += delta["page_calls"]
+        entry["fallback_calls"] += delta["fallback_calls"]
+        entry["cost_usd"] = round(entry["cost_usd"] + delta["cost_usd"], 8)
+        entry["latency_s"] = round(entry["latency_s"] + delta["latency_s"], 3)
+
+
+def _run_item(
+    mode: str,
+    model: str,
+    rep: int,
+    item,
+    detector,
+    fixture: dict,
+    page_dirs: dict[str, Path],
+    cases_by_alias: dict[str, list[dict]],
+) -> tuple[list[dict], dict | None]:
+    """One work item: a (rep, case) panel call or a (rep, alias) page-scoped
+    call. Returns (row dicts, page-totals delta or None). Runs in a worker
+    thread: items of one rep touch distinct crops / distinct page dirs, so no
+    two threads write the same annotated page; the detector's prompt reads are
+    lock-guarded and panel-page prompts render per call."""
+    rows: list[dict] = []
+    if mode == "panel":
+        case = item
+        cid = case["id"]
+        record = detector.detect(crop_path(cid), REFS_DIR)
+        verdict = eval_case(case, record)
+        rows.append({
+            "mode": mode, "model": model, "rep": rep, "case": cid,
+            "expected": sorted(case["expected"]["characters"]),
+            "detected": sorted(record.characters),
+            "unknown_entries": record.unknown_entries,
+            "status": record.status, "source": record.source,
+            "page_parse_ok": None, "fallback": False, "cast_key": None,
+            **verdict,
+            "cost_usd": record.cost_usd, "cost_source": record.cost_source,
+            "latency_s": round(record.latency_s, 3),
+            "model_returned": record.model_returned, "error": record.error,
+        })
+        return rows, None
+
+    alias = item
+    page_dir = page_dirs[alias]
+    page_path = (REPO_ROOT / fixture["aliases"][alias]).resolve()
+    geometry = json.loads((page_dir / "panels.json").read_text(encoding="utf-8"))
+    expected = panel_keys_for(len(geometry["detections"]))
+    cast_key = None
+    if mode == "panel-page-cast":
+        from characters import cast_key_for_page
+
+        cast_key = cast_key_for_page(
+            page_path, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
+        )
+        if hasattr(detector, "set_cast"):
+            detector.set_cast(cast_key)
+    if cast_key is not None:
+        page_record = detector.detect_panels_with_page(
+            page_path, page_dir, expected, REFS_DIR, cast_key=cast_key
+        )
+    else:
+        method = "detect_page" if mode == "page" else "detect_panels_with_page"
+        page_record = getattr(detector, method)(
+            page_path, page_dir, expected, REFS_DIR
+        )
+    pt = {alias: {
+        "page_calls": page_record.page_calls,
+        "fallback_calls": page_record.fallback_calls,
+        "cost_usd": page_record.cost_usd or 0.0,
+        "latency_s": page_record.total_latency_s,
+    }}
+    for case in cases_by_alias[alias]:
+        cid = case["id"]
+        panel_key = case["input"]["panel"]
+        record = page_record.panels.get(panel_key)
+        if record is None:
+            record = _missing_record(panel_key)
+        verdict = eval_case(case, record)
+        if mode == "page":
+            # cost/latency attributed at page level: share across the page's
+            # panels (the page call serves all of them).
+            share = max(1, len(expected))
+            cost = (page_record.cost_usd or 0.0) / share
+            lat = page_record.total_latency_s / share
+        else:
+            cost = record.cost_usd
+            lat = record.latency_s
+        rows.append({
+            "mode": mode, "model": model, "rep": rep, "case": cid,
+            "expected": sorted(case["expected"]["characters"]),
+            "detected": sorted(record.characters),
+            "unknown_entries": record.unknown_entries,
+            "status": record.status, "source": record.source,
+            "page_parse_ok": page_record.page_parse_ok,
+            "fallback": record.source == "fallback",
+            "cast_key": cast_key,
+            **verdict,
+            "cost_usd": round(cost, 8) if cost is not None else None,
+            "cost_source": (record.cost_source if mode == "panel-page"
+                            else "page-level-share"),
+            "latency_s": round(lat, 3),
+            "model_returned": record.model_returned, "error": record.error,
+        })
+    return rows, pt
 
 
 def _aggregate(rows: list[dict]) -> dict:

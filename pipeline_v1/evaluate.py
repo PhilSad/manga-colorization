@@ -10,12 +10,17 @@ Detection cases (DET-*, OOV-*) are scored automatically: character arrays are
 compared as sets, with exact true positives / false positives / false
 negatives and precision/recall. Color cases (COL-*) produce a review report
 with the generated image and the fixture's expected output; the verdict is
-always left to the user (`Pending user review`) — no code path in this tool
-assigns a pass/fail. LAY-* and SIZE-* assert the recorded geometry and
-request-size policy.
+left to the user (`Pending user review`) unless `--verify` is given, in which
+case cases with an `expected.left_to_right` spatial palette (COL-004, palette
+geography) are resolved by asking an OpenRouter VLM
+(`openai/gpt-5.6-luna`) whether the left-to-right hair-color assignment of
+the generated panel is true (one paid call per case; verdict, per-position
+observations, and `usage.cost` are recorded in the report). LAY-* and SIZE-*
+assert the recorded geometry and request-size policy.
 
 Usage:
     python pipeline_v1/evaluate.py --run <run_dir> [--cases <fixture.json>]
+    python pipeline_v1/evaluate.py --run <run_dir> --verify   # VLM-resolve COL-004
     python pipeline_v1/evaluate.py --validate-cases            # schema check only
 """
 
@@ -38,6 +43,14 @@ REPO_ROOT = PIPELINE_DIR.parent
 
 PENDING = "Pending user review"
 MISSING = "missing output"
+
+# Verifier status -> review_status label (COL-004 resolution via the VLM).
+VERIFY_STATUS_LABEL = {
+    "verified": "VLM verified: pass",
+    "mismatch": "VLM verified: fail",
+    "unparseable": "VLM unparseable",
+    "error": "VLM error",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -222,13 +235,14 @@ def _find_generated(run_dir: Path, page: str, panel: str) -> Path | None:
     return None
 
 
-def evaluate_color_case(run_dir: Path, fixture: dict, case: dict) -> dict:
+def evaluate_color_case(run_dir: Path, fixture: dict, case: dict,
+                        verifier=None) -> dict:
     page = page_stem_of(fixture, case)
     panel = case["input"]["panel"]
     generated = _find_generated(run_dir, page, panel)
     input_crop = run_dir / "1_panels" / page / f"{panel}.png"
     atlas = run_dir / "3_colorized" / page / f"{panel}_atlas.jpg"
-    return {
+    result = {
         "id": case["id"], "stage": "color", "page": page, "panel": panel,
         "forced_characters": case["input"].get("forced_characters", []),
         "review_status": PENDING if generated is not None else MISSING,
@@ -238,6 +252,22 @@ def evaluate_color_case(run_dir: Path, fixture: dict, case: dict) -> dict:
         "expected": case["expected"],
         "failure": case.get("failure"),
     }
+    expected = case["expected"]
+    if expected.get("left_to_right") and verifier is not None and generated is not None:
+        # Resolve the palette-geography case: ask the VLM whether the
+        # left-to-right hair-color assignment of the generated panel is true.
+        record = verifier.verify(
+            generated,
+            input_crop if input_crop.is_file() else None,
+            expected["left_to_right"],
+        )
+        verification = record.to_dict()
+        verification["model"] = verifier.model
+        result["verification"] = verification
+        result["review_status"] = VERIFY_STATUS_LABEL.get(
+            record.status, PENDING
+        )
+    return result
 
 
 def evaluate_layout_case(run_dir: Path, fixture: dict, case: dict) -> dict:
@@ -378,8 +408,9 @@ def _build_color_review(run_dir: Path, color_cases: list[dict], metadata: dict) 
         metadata.get("started_at"), metadata.get("finished_at")))
     lines.append("")
     lines.append("Each section below is one generated variant of a COL-* case. "
-                 "The evaluator never assigns a verdict: mark Pass/Fail yourself "
-                 "and add notes.")
+                 "Cases with a `--verify` VLM verdict are resolved automatically "
+                 "(status below); the others stay human-review: mark Pass/Fail "
+                 "yourself and add notes.")
     lines.append("")
 
     for case in color_cases:
@@ -398,6 +429,37 @@ def _build_color_review(run_dir: Path, color_cases: list[dict], metadata: dict) 
             lines.append("**Review status:** {} (no generated image in this run)"
                          .format(MISSING))
             lines.append("")
+            continue
+        verification = case.get("verification")
+        if verification is not None:
+            # VLM-resolved case (COL-004 and friends): the verdict replaces the
+            # human Pass/Fail checkboxes.
+            lines.append("**Review status:** {} ({})".format(
+                case["review_status"], verification.get("model")))
+            lines.append("")
+            lines.append("### VLM verification (resolves this case)")
+            lines.append("")
+            lines.append("- **Verdict:** {} ({}).".format(
+                case["review_status"], verification.get("model")))
+            lines.append("- **Cost:** ${} ({}, {} tokens).".format(
+                verification.get("cost_usd"),
+                verification.get("cost_source"),
+                verification.get("usage", {}).get("total_tokens", "?")))
+            per_position = verification.get("per_position") or []
+            if per_position:
+                lines.append("- **Per-position observations:**")
+                lines.append("")
+                lines.append("| # | character | expected hair | observed hair | matches |")
+                lines.append("|---|-----------|---------------|---------------|---------|")
+                for entry in per_position:
+                    lines.append("| {} | {} | {} | {} | {} |".format(
+                        entry.get("position", ""), entry.get("character", ""),
+                        entry.get("expected_hair", ""), entry.get("observed_hair", ""),
+                        entry.get("matches", "")))
+                lines.append("")
+            if verification.get("notes"):
+                lines.append("VLM notes: " + verification["notes"])
+                lines.append("")
             continue
         lines.append("**Review status:** " + PENDING)
         lines.append("")
@@ -429,7 +491,10 @@ def _build_color_review(run_dir: Path, color_cases: list[dict], metadata: dict) 
 # ---------------------------------------------------------------------------
 # Entry point
 
-def run_evaluation(run_dir: Path, cases_path: Path = DEFAULT_CASES) -> dict:
+def run_evaluation(run_dir: Path, cases_path: Path = DEFAULT_CASES,
+                   verifier=None, verify_model: str | None = None) -> dict:
+    """Evaluate a run. Pass a `verify_color.LeftToRightVerifier` to resolve
+    COL-* cases with `expected.left_to_right` via a paid VLM call (COL-004)."""
     run_dir = Path(run_dir)
     if not (run_dir / "manifest.json").is_file():
         raise ValueError(f"not a pipeline run directory: {run_dir}")
@@ -444,7 +509,9 @@ def run_evaluation(run_dir: Path, cases_path: Path = DEFAULT_CASES) -> dict:
         if stage == "characters":
             detection_cases.append(evaluate_characters_case(run_dir, fixture, case))
         elif stage == "color":
-            color_cases.append(evaluate_color_case(run_dir, fixture, case))
+            color_cases.append(
+                evaluate_color_case(run_dir, fixture, case, verifier=verifier)
+            )
         elif stage == "layout":
             layout_cases.append(evaluate_layout_case(run_dir, fixture, case))
         elif stage == "size":
@@ -461,6 +528,27 @@ def run_evaluation(run_dir: Path, cases_path: Path = DEFAULT_CASES) -> dict:
     totals["recall"] = round(tp / (tp + fn), 4) if (tp + fn) else None
     totals["cases_scored"] = len(scored)
 
+    verification_records = [
+        c["verification"] for c in color_cases if "verification" in c
+    ]
+    verification = None
+    if verifier is not None:
+        verification = {
+            "model": verify_model or getattr(verifier, "model", None),
+            "cases_verified": len(verification_records),
+            "pass": sum(1 for r in verification_records
+                         if r["status"] == "verified"),
+            "fail": sum(1 for r in verification_records
+                         if r["status"] == "mismatch"),
+            "unparseable": sum(1 for r in verification_records
+                                if r["status"] == "unparseable"),
+            "errors": sum(1 for r in verification_records
+                           if r["status"] == "error"),
+            "cost_usd": round(
+                sum((r.get("cost_usd") or 0.0) for r in verification_records), 8
+            ),
+        }
+
     metadata = _run_metadata(run_dir)
     report = {
         "run_directory": str(run_dir),
@@ -469,9 +557,13 @@ def run_evaluation(run_dir: Path, cases_path: Path = DEFAULT_CASES) -> dict:
         "detection": {"cases": detection_cases, "totals": totals},
         "color": {
             "cases": color_cases,
-            "verdict_mode": "human review only",
+            "verdict_mode": (
+                "VLM verification ({})".format(verification["model"])
+                if verification is not None else "human review only"
+            ),
             "pending_count": sum(1 for c in color_cases
                                  if c["review_status"] == PENDING),
+            "verification": verification,
         },
         "layout": {"cases": layout_cases},
         "size": {"cases": size_cases},
@@ -502,8 +594,24 @@ def _print_report(report: dict) -> None:
     print(f"  totals: tp={totals['tp']} fp={totals['fp']} fn={totals['fn']} "
           f"precision={totals['precision']} recall={totals['recall']}")
     color = report["color"]
-    print(f"Color (human review only): {color['pending_count']} pending, "
-          f"{len(color['cases']) - color['pending_count']} missing")
+    missing_count = sum(1 for case in color["cases"]
+                        if case["review_status"] == MISSING)
+    verified_count = sum(1 for case in color["cases"]
+                         if case.get("verification"))
+    print(f"Color ({color['verdict_mode']}): {color['pending_count']} pending, "
+          f"{verified_count} VLM-resolved, {missing_count} missing")
+    for case in color["cases"]:
+        if case.get("verification"):
+            verification = case["verification"]
+            print(f"  {case['id']}: {case['review_status']} "
+                  f"(cost ${verification.get('cost_usd')})")
+    if color.get("verification"):
+        verification = color["verification"]
+        print("  verification totals: {} case(s), pass={} fail={} "
+              "unparseable={} errors={}, cost ${}".format(
+                  verification["cases_verified"], verification["pass"],
+                  verification["fail"], verification["unparseable"],
+                  verification["errors"], verification["cost_usd"]))
     for case in report["layout"]["cases"] + report["size"]["cases"]:
         print(f"  {case['id']}: matches={case.get('matches')}")
 
@@ -517,6 +625,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="validate the fixture schema and exit")
     parser.add_argument("--check-inputs", action="store_true",
                         help="also require non-generated input files to exist")
+    parser.add_argument("--verify", action="store_true",
+                        help="resolve COL-* cases with expected.left_to_right "
+                             "(COL-004, palette geography) by asking an OpenRouter "
+                             "VLM whether the left-to-right hair-color assignment "
+                             "of the generated panel is true (one paid call per case)")
+    parser.add_argument("--verify-model", default=None,
+                        help="VLM for --verify (default: openai/gpt-5.6-luna)")
+    parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY",
+                        help="env var holding the OpenRouter API key (default: "
+                             "OPENROUTER_API_KEY, loaded from the repo .env)")
     args = parser.parse_args(argv)
 
     if args.validate_cases:
@@ -531,7 +649,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.run is None:
         parser.error("--run is required (or use --validate-cases)")
-    report = run_evaluation(args.run, args.cases)
+
+    verifier = None
+    verify_model = None
+    if args.verify:
+        from dotenv import load_dotenv
+
+        from verify_color import DEFAULT_VERIFY_MODEL, LeftToRightVerifier
+
+        verify_model = args.verify_model or DEFAULT_VERIFY_MODEL
+        load_dotenv(REPO_ROOT / ".env")
+        api_key = os.getenv(args.api_key_env)
+        if not api_key:
+            parser.error(
+                f"--verify needs {args.api_key_env} "
+                f"(set it or add it to {REPO_ROOT / '.env'})"
+            )
+        verifier = LeftToRightVerifier(model=verify_model, api_key=api_key)
+        print(f"[verify] resolving left-to-right palette cases with {verify_model}",
+              file=sys.stderr)
+
+    report = run_evaluation(args.run, args.cases, verifier=verifier,
+                            verify_model=verify_model)
     _print_report(report)
     print(f"\nreport:        {args.run / 'evaluation' / 'report.json'}")
     print(f"color review:  {args.run / 'evaluation' / 'color_review.md'}")

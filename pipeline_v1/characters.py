@@ -647,115 +647,132 @@ class OpenRouterCharacterDetector:
     # -- shared OpenAI call machinery --------------------------------------
 
     def _call(self, content: list[dict[str, Any]]) -> "_CallResult":
-        from openai import APIError, APIConnectionError, BadRequestError, RateLimitError
+        """One chat completion call (shared machinery in `call_vlm`)."""
+        return call_vlm(
+            self.client, self.model, content,
+            max_tokens=self.max_tokens, temperature=self.temperature,
+        )
 
-        messages = [{"role": "user", "content": content}]
-        response_format: str | None = "json_object"
-        attempts = 0
-        while True:
-            attempts += 1
-            kwargs: dict[str, Any] = {
-                "model": self.model,
-                "messages": messages,
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature,
-            }
-            if response_format:
-                kwargs["response_format"] = {"type": response_format}
-            started = time.monotonic()
-            try:
-                response = self.client.chat.completions.create(**kwargs)
-            except BadRequestError as error:
-                message = str(error)
-                unsupported_format = response_format == "json_object" and (
-                    "response_format" in message
-                    or "json_object" in message
-                    or "json" in message.lower()
-                )
-                if unsupported_format and attempts <= 2:
-                    print(
-                        "    response_format=json_object unsupported, retrying without it",
-                        flush=True,
-                    )
-                    response_format = None
-                    attempts = 0
-                    continue
-                return _CallResult(
-                    text="", usage={}, cost_usd=None, cost_source="unavailable",
-                    latency_s=time.monotonic() - started, model_returned=None,
-                    attempts=attempts, error=f"BadRequestError: {error}",
-                )
-            except RateLimitError as error:
-                if attempts >= MAX_ATTEMPTS:
-                    return _CallResult(
-                        text="", usage={}, cost_usd=None, cost_source="unavailable",
-                        latency_s=time.monotonic() - started, model_returned=None,
-                        attempts=attempts, error=f"RateLimitError: {error}",
-                    )
-                headers = getattr(getattr(error, "response", None), "headers", {}) or {}
-                retry_after = headers.get("retry-after")
-                delay = float(retry_after) if retry_after else BASE_BACKOFF_S * attempts
-                print(
-                    f"    rate limited (attempt {attempts}), retrying in {delay:.0f}s",
-                    flush=True,
-                )
-                time.sleep(delay)
-                continue
-            except (APIConnectionError, APIError) as error:
-                if attempts >= MAX_ATTEMPTS:
-                    return _CallResult(
-                        text="", usage={}, cost_usd=None, cost_source="unavailable",
-                        latency_s=time.monotonic() - started, model_returned=None,
-                        attempts=attempts,
-                        error=f"{type(error).__name__}: {error}",
-                    )
-                delay = BASE_BACKOFF_S * attempts
-                print(
-                    f"    transient error (attempt {attempts}): {type(error).__name__}, "
-                    f"retrying in {delay:.0f}s",
-                    flush=True,
-                )
-                time.sleep(delay)
-                continue
-            except Exception as error:  # noqa: BLE001 - record anything else
-                return _CallResult(
-                    text="", usage={}, cost_usd=None, cost_source="unavailable",
-                    latency_s=time.monotonic() - started, model_returned=None,
-                    attempts=attempts, error=f"{type(error).__name__}: {error}",
-                )
 
-            latency = time.monotonic() - started
-            usage = getattr(response, "usage", None)
-            usage_record: dict[str, int] = {}
-            cost_usd: float | None = None
-            cost_source = "unavailable"
-            if usage is not None:
-                usage_record = {
-                    "prompt_tokens": usage.prompt_tokens,
-                    "completion_tokens": usage.completion_tokens,
-                    "total_tokens": usage.total_tokens,
-                }
-                cost_value = getattr(usage, "cost", None)
-                if cost_value is None:
-                    raw_usage = getattr(usage, "model_extra", None) or {}
-                    cost_value = raw_usage.get("cost")
-                if cost_value is not None:
-                    try:
-                        cost_usd = round(float(cost_value), 8)
-                        cost_source = "usage.cost"
-                    except (TypeError, ValueError):
-                        cost_usd = None
-            text = (
-                response.choices[0].message.content or ""
-                if response.choices
-                else ""
+def call_vlm(
+    client: Any,
+    model: str,
+    content: list[dict[str, Any]],
+    max_tokens: int = 1024,
+    temperature: float = 0.2,
+) -> "_CallResult":
+    """One OpenAI-compatible chat completion with retry/backoff and
+    `usage.cost` accounting (OpenRouter). Shared by character detection
+    (characters.py) and color verification (verify_color.py)."""
+    from openai import APIError, APIConnectionError, BadRequestError, RateLimitError
+
+    messages = [{"role": "user", "content": content}]
+    response_format: str | None = "json_object"
+    attempts = 0
+    while True:
+        attempts += 1
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if response_format:
+            kwargs["response_format"] = {"type": response_format}
+        started = time.monotonic()
+        try:
+            response = client.chat.completions.create(**kwargs)
+        except BadRequestError as error:
+            message = str(error)
+            unsupported_format = response_format == "json_object" and (
+                "response_format" in message
+                or "json_object" in message
+                or "json" in message.lower()
             )
+            if unsupported_format and attempts <= 2:
+                print(
+                    "    response_format=json_object unsupported, retrying without it",
+                    flush=True,
+                )
+                response_format = None
+                attempts = 0
+                continue
             return _CallResult(
-                text=text, usage=usage_record, cost_usd=cost_usd,
-                cost_source=cost_source, latency_s=latency,
-                model_returned=getattr(response, "model", None),
-                attempts=attempts, error=None,
+                text="", usage={}, cost_usd=None, cost_source="unavailable",
+                latency_s=time.monotonic() - started, model_returned=None,
+                attempts=attempts, error=f"BadRequestError: {error}",
             )
+        except RateLimitError as error:
+            if attempts >= MAX_ATTEMPTS:
+                return _CallResult(
+                    text="", usage={}, cost_usd=None, cost_source="unavailable",
+                    latency_s=time.monotonic() - started, model_returned=None,
+                    attempts=attempts, error=f"RateLimitError: {error}",
+                )
+            headers = getattr(getattr(error, "response", None), "headers", {}) or {}
+            retry_after = headers.get("retry-after")
+            delay = float(retry_after) if retry_after else BASE_BACKOFF_S * attempts
+            print(
+                f"    rate limited (attempt {attempts}), retrying in {delay:.0f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
+        except (APIConnectionError, APIError) as error:
+            if attempts >= MAX_ATTEMPTS:
+                return _CallResult(
+                    text="", usage={}, cost_usd=None, cost_source="unavailable",
+                    latency_s=time.monotonic() - started, model_returned=None,
+                    attempts=attempts,
+                    error=f"{type(error).__name__}: {error}",
+                )
+            delay = BASE_BACKOFF_S * attempts
+            print(
+                f"    transient error (attempt {attempts}): {type(error).__name__}, "
+                f"retrying in {delay:.0f}s",
+                flush=True,
+            )
+            time.sleep(delay)
+            continue
+        except Exception as error:  # noqa: BLE001 - record anything else
+            return _CallResult(
+                text="", usage={}, cost_usd=None, cost_source="unavailable",
+                latency_s=time.monotonic() - started, model_returned=None,
+                attempts=attempts, error=f"{type(error).__name__}: {error}",
+            )
+
+        latency = time.monotonic() - started
+        usage = getattr(response, "usage", None)
+        usage_record: dict[str, int] = {}
+        cost_usd: float | None = None
+        cost_source = "unavailable"
+        if usage is not None:
+            usage_record = {
+                "prompt_tokens": usage.prompt_tokens,
+                "completion_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+            }
+            cost_value = getattr(usage, "cost", None)
+            if cost_value is None:
+                raw_usage = getattr(usage, "model_extra", None) or {}
+                cost_value = raw_usage.get("cost")
+            if cost_value is not None:
+                try:
+                    cost_usd = round(float(cost_value), 8)
+                    cost_source = "usage.cost"
+                except (TypeError, ValueError):
+                    cost_usd = None
+        text = (
+            response.choices[0].message.content or ""
+            if response.choices
+            else ""
+        )
+        return _CallResult(
+            text=text, usage=usage_record, cost_usd=cost_usd,
+            cost_source=cost_source, latency_s=latency,
+            model_returned=getattr(response, "model", None),
+            attempts=attempts, error=None,
+        )
 
 
 @dataclass

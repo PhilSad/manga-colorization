@@ -132,7 +132,25 @@ recorded per call.
 - `evaluate.py --run <run_dir>` — auto-scores detection cases (set
   comparison, exact TP/FP/FN) and writes `<run>/evaluation/color_review.md`
   with each generated COL-* image, the fixture's expected output, and
-  `Pending user review` checkboxes (no automated color verdict).
+  `Pending user review` checkboxes. With `--verify`, COL-004 (palette
+  geography) is instead **resolved automatically**: the evaluator asks an
+  OpenRouter VLM — `openai/gpt-5.6-luna`, the vision model chosen for V1.2
+  problem 1 in `ideas.md` — whether the left-to-right hair-color assignment
+  of the generated panel is true (green Heiter / blue Himmel / white-pink
+  Frieren / yellow Eisen), sending the colorized panel plus the monochrome
+  crop. The verdict (`VLM verified: pass/fail`, `VLM unparseable`, `VLM
+  error`), the per-position observations, the prompt, and `usage.cost` are
+  recorded in `report.json` and rendered in `color_review.md`; COL-001..003
+  (no `left_to_right` expectation) always stay human-review.
+
+  ```bash
+  .venv/bin/python pipeline_v1/evaluate.py --run <run_dir> --verify
+  ```
+
+  Verification is a paid OpenRouter call per resolved case (measured
+  `usage.cost` ≈ $0.0003–0.001 per call on the 1216×1824 p013 panel,
+  recorded in `color.verification`); COL-001..003 and cases without a
+  generated image are never charged.
 - `character_profiles.json` + `profiles.py` — canonical names, identity cues
   (detection hints), palette descriptions (FLUX prompt conditioning),
   reference files, aliases, variants.

@@ -1,0 +1,24 @@
+You are verifying the output of a manga colorization pipeline.
+
+Provided images:
+- #1: the colorized panel (the output under review)
+- #2: the original monochrome panel crop (linework and character-position reference)
+
+From left to right, the panel should show these characters with these hair colors:
+{left_to_right}
+
+Carefully inspect image #1 (the colorized panel) and answer: is the
+left-to-right hair-color assignment true? Characters may be partially
+cropped at the panel edges; judge by the hair colors actually rendered on
+each character, leftmost to rightmost. A uniform color wash over the whole
+panel, or swapped/blended palettes between characters, counts as a
+mismatch.
+
+Answer in JSON only, with no extra text:
+{{
+  "left_to_right_matches": true or false,
+  "per_position": [
+    {{"position": 1, "character": "Name", "expected_hair": "color", "observed_hair": "what you see", "matches": true or false}}
+  ],
+  "notes": "short explanation, especially for any mismatch"
+}}

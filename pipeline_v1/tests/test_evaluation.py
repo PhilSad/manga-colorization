@@ -7,8 +7,11 @@ fallback (LAY-001), blank-page skip (LAY-002), and oversized-input capping
 (SIZE-001).
 
 Detection cases are scored automatically (set comparison with exact
-TP/FP/FN). Color cases only produce a human-review Markdown report: no code
-path may assign a pass/fail verdict.
+TP/FP/FN). Color cases produce a human-review Markdown report by default; no
+code path may assign a pass/fail verdict unless `--verify` is given, in which
+case COL-004 (palette geography) is resolved by an injected
+`verify_color.LeftToRightVerifier` (an OpenRouter VLM asking whether the
+left-to-right hair-color assignment of the generated panel is true).
 """
 
 from __future__ import annotations
@@ -280,6 +283,166 @@ def test_color_review_expected_text_comes_from_fixture(tmp_path):
     assert "black clerical robe with gold trim" in markdown
     assert "Sein's brown-hair/purple-blue outfit palette" in markdown
     assert "text, linework" in markdown
+
+
+def test_color_verification_resolves_col_004_with_vlm(tmp_path):
+    """COL-004 is resolved by asking the VLM whether the left-to-right hair
+    colors are true: the verdict replaces `Pending user review`, and the call
+    details (model, cost, per-position observations) land in the report."""
+    import evaluate
+    from tests.test_characters import FakeClient, FakeResponse, FakeUsage
+    from verify_color import LeftToRightVerifier
+
+    run = _build_run_dir(tmp_path)
+    fixture = load_fixture()
+    p013 = resolve_alias(fixture, "P013").stem
+
+    # Colorized output + monochrome input crop for COL-004 (p013 panel_0002).
+    out_dir = run / "3_colorized" / p013
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (60, 180, 60)).save(out_dir / "panel_0002.png")
+    crop_dir = run / "1_panels" / p013
+    crop_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("L", (64, 64), 128).save(crop_dir / "panel_0002.png")
+
+    def ok():
+        return FakeResponse(
+            json.dumps({
+                "left_to_right_matches": True,
+                "per_position": [
+                    {"position": 1, "character": "Heiter",
+                     "expected_hair": "light green",
+                     "observed_hair": "light green", "matches": True},
+                    {"position": 2, "character": "Himmel",
+                     "expected_hair": "light blue",
+                     "observed_hair": "light blue", "matches": True},
+                    {"position": 3, "character": "Frieren",
+                     "expected_hair": "white-pink",
+                     "observed_hair": "white-pink", "matches": True},
+                    {"position": 4, "character": "Eisen",
+                     "expected_hair": "yellow",
+                     "observed_hair": "yellow", "matches": True},
+                ],
+                "notes": "green, blue, white-pink, yellow left to right",
+            }),
+            usage=FakeUsage(prompt=120, completion=60, cost=0.00006),
+        )
+
+    verifier = LeftToRightVerifier(
+        model="openai/gpt-5.6-luna", api_key="dummy",
+        client=FakeClient([ok]),
+    )
+    report = evaluate.run_evaluation(
+        run, FIXTURE_PATH, verifier=verifier,
+        verify_model="openai/gpt-5.6-luna",
+    )
+
+    color = {c["id"]: c for c in report["color"]["cases"]}
+    case = color["COL-004"]
+    assert case["review_status"] == "VLM verified: pass"
+    assert case["verification"]["left_to_right_matches"] is True
+    assert case["verification"]["model"] == "openai/gpt-5.6-luna"
+    assert case["verification"]["cost_usd"] == 0.00006
+    assert case["verification"]["cost_source"] == "usage.cost"
+    assert len(case["verification"]["per_position"]) == 4
+    # The verifier saw the colorized panel and the monochrome crop.
+    calls = verifier.client.chat.completions.calls
+    assert len(calls) == 1
+    content = calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == ["text", "image_url", "image_url"]
+    assert "Heiter" in content[0]["text"]
+
+    # COL-001..003 carry no left_to_right expectation -> never VLM-resolved.
+    assert color["COL-001"]["review_status"] in \
+        ("Pending user review", "missing output")
+    assert "verification" not in color["COL-001"]
+
+    verification = report["color"]["verification"]
+    assert verification["model"] == "openai/gpt-5.6-luna"
+    assert verification["cases_verified"] == 1
+    assert verification["pass"] == 1 and verification["fail"] == 0
+    assert verification["cost_usd"] == 0.00006
+    assert report["color"]["verdict_mode"] == \
+        "VLM verification (openai/gpt-5.6-luna)"
+
+    markdown = (run / "evaluation" / "color_review.md").read_text(encoding="utf-8")
+    assert "**Review status:** VLM verified: pass (openai/gpt-5.6-luna)" in markdown
+    assert "### VLM verification (resolves this case)" in markdown
+    assert "observed hair" in markdown
+    assert "VLM notes: green, blue, white-pink, yellow left to right" in markdown
+    # The resolved case drops the human checkboxes; the other COL-* cases have
+    # no generated output in this fixture run.
+    assert "Pending user review" not in markdown
+    assert "[ ] Pass" not in markdown and "[ ] Fail" not in markdown
+    assert markdown.count("**Review status:** missing output") == 3
+
+
+def test_color_verification_mismatch_is_a_fail(tmp_path):
+    """A VLM answering 'the left-to-right hair colors are not true' marks the
+    case as VLM verified: fail (the uniform-blue-wash failure COL-004 guards
+    against)."""
+    import evaluate
+    from tests.test_characters import FakeClient, FakeResponse, FakeUsage
+    from verify_color import LeftToRightVerifier
+
+    run = _build_run_dir(tmp_path)
+    fixture = load_fixture()
+    p013 = resolve_alias(fixture, "P013").stem
+    out_dir = run / "3_colorized" / p013
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (40, 80, 200)).save(out_dir / "panel_0002.png")
+
+    def nope():
+        return FakeResponse(
+            '{"left_to_right_matches": false, "per_position": [], '
+            '"notes": "uniform blue wash over all four characters"}',
+            usage=FakeUsage(cost=0.00005),
+        )
+
+    verifier = LeftToRightVerifier(
+        model="openai/gpt-5.6-luna", api_key="dummy",
+        client=FakeClient([nope]),
+    )
+    report = evaluate.run_evaluation(run, FIXTURE_PATH, verifier=verifier)
+
+    case = {c["id"]: c for c in report["color"]["cases"]}["COL-004"]
+    assert case["review_status"] == "VLM verified: fail"
+    assert case["verification"]["left_to_right_matches"] is False
+    assert case["verification"]["notes"] == \
+        "uniform blue wash over all four characters"
+    verification = report["color"]["verification"]
+    assert verification["pass"] == 0 and verification["fail"] == 1
+    assert verification["cost_usd"] == 0.00005
+
+
+def test_color_verification_unparseable_and_error_do_not_fail(tmp_path):
+    """A VLM that cannot parse or errors out leaves the case unresolved with
+    an explicit status (never a silent pass)."""
+    import evaluate
+    from tests.test_characters import FakeClient, FakeResponse, FakeUsage
+    from verify_color import LeftToRightVerifier
+
+    run = _build_run_dir(tmp_path)
+    fixture = load_fixture()
+    p013 = resolve_alias(fixture, "P013").stem
+    out_dir = run / "3_colorized" / p013
+    out_dir.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), "gray").save(out_dir / "panel_0002.png")
+
+    def garbage():
+        return FakeResponse("I cannot parse this panel", usage=FakeUsage())
+
+    verifier = LeftToRightVerifier(
+        model="openai/gpt-5.6-luna", api_key="dummy",
+        client=FakeClient([garbage]),
+    )
+    report = evaluate.run_evaluation(run, FIXTURE_PATH, verifier=verifier)
+    case = {c["id"]: c for c in report["color"]["cases"]}["COL-004"]
+    assert case["review_status"] == "VLM unparseable"
+    assert case["verification"]["left_to_right_matches"] is None
+    verification = report["color"]["verification"]
+    assert verification["unparseable"] == 1
+    assert verification["pass"] == 0 and verification["fail"] == 0
 
 
 def test_evaluation_distinguishes_detection_and_color_errors(tmp_path):

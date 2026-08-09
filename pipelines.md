@@ -176,6 +176,13 @@ reference vocabulary and the model forced her to **Wirbel** instead of leaving
 her unknown. The page-level prompt instructs unknown characters to be reported
 as `uncertain`, but the model does not comply reliably.
 
+Run 20260809-091129 (panel-page detection over volume 1) exposed a second
+look-alike confusion: on **p130** (ch. 5 "Killing Magic") 4 of 6 panels were
+detected as **Flamme** — Frieren's look-alike master, who is not in chapter 5's
+cast — where the cast is Frieren/Fern (panel 4 even kept Frieren but forced
+Fern to Flamme). Recorded as the six-panel page set **DET-005..010** in the
+evaluation fixture, with the observed misdetections as per-case baselines.
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run
@@ -246,7 +253,9 @@ real gpt-5.6-luna validation, real YOLO; one timestamped run per session in
   unknown). Panel-only mode cannot meet the fixture's expectations for the
   flashback-era cases — the V1.1 page-level mode is why those were fixed
   before; the integration suite keeps the crop-only contract and tracks the
-  failures.
+  failures. The fixture has since grown **DET-005..010** (volume-1 p130's six
+  panels, Flamme/Frieren look-alike confusion observed in panel-page run
+  20260809-091129); their panel-only verdicts are pending the next live run.
 - **Color: 3/5 pass, with a confirmed real defect.** COL-003 (Heiter) passes.
   **COL-004 passes** — the live left-to-right palette is true at seed 1337
   (green / blue / pale white-lavender / golden yellow-brown), i.e. the V1.2

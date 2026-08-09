@@ -9,7 +9,7 @@ Fixed inputs for the real-network integration suite (`pytest -m integration`). R
 
 ```json
 {
-  "generated_at": "2026-08-09T11:12:48+02:00",
+  "generated_at": "2026-08-09T20:39:52+02:00",
   "detector": "leoxs22/manga-panel-detector-yolo26n",
   "confidence": 0.25,
   "panel_inset": 0,
@@ -198,6 +198,48 @@ Fixed inputs for the real-network integration suite (`pytest -m integration`). R
           12,
           713,
           1367,
+          2250
+        ]
+      ]
+    },
+    "P130": {
+      "source": "/home/phil/code/perso/manga_colorization/data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c005 (v01) - p130 [VIZ Media] [Digital] [1r0n].png",
+      "panels": 6,
+      "boxes": [
+        [
+          138,
+          0,
+          1364,
+          656
+        ],
+        [
+          738,
+          690,
+          1500,
+          1199
+        ],
+        [
+          738,
+          1235,
+          1499,
+          1646
+        ],
+        [
+          132,
+          689,
+          717,
+          1648
+        ],
+        [
+          869,
+          1682,
+          1500,
+          2056
+        ],
+        [
+          129,
+          1682,
+          847,
           2250
         ]
       ]

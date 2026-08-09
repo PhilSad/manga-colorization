@@ -1,4 +1,4 @@
-"""Real-network character-detection integration tests (DET-001..004, OOV-001).
+"""Real-network character-detection integration tests (DET-001..010, OOV-001).
 
 Stage-isolated by design: the input is the committed **pre-cropped panel**
 (`tests/data/panels/<case_id>.png`, produced by the real reading-order
@@ -30,7 +30,8 @@ from integration_support import (
 
 pytestmark = pytest.mark.integration
 
-DETECTION_CASES = ["DET-001", "DET-002", "DET-003", "DET-004", "OOV-001"]
+DETECTION_CASES = ["DET-001", "DET-002", "DET-003", "DET-004", "OOV-001",
+                  "DET-005", "DET-006", "DET-007", "DET-008", "DET-009", "DET-010"]
 
 
 @pytest.mark.parametrize("case_id", DETECTION_CASES)

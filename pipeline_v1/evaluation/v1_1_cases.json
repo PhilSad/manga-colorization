@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "V1.1/V1.2 fixed evaluation set: real V1/V1.1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, palette geography, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets; COL-004 additionally asserts the left-to-right spatial palette assignment.",
+  "description": "V1.1/V1.2 fixed evaluation set: real V1/V1.1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, palette geography, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets; COL-004 additionally asserts the left-to-right spatial palette assignment. DET-005..010 cover volume-1 p130's six panels (Flamme/Frieren look-alike confusion, see per-case notes).",
   "aliases": {
     "P003": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].png",
     "P004_005": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].png",
@@ -8,6 +8,7 @@
     "P007": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n].png",
     "P008": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p008 [VIZ Media] [Digital] [1r0n].png",
     "P013": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p013 [VIZ Media] [Digital] [1r0n].png",
+    "P130": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c005 (v01) - p130 [VIZ Media] [Digital] [1r0n].png",
     "CH134_004": "data/chapter_134/0134-004.png"
   },
   "cases": [
@@ -46,6 +47,60 @@
       "expected": {"characters": ["Frieren", "Heiter"], "unknown_present": false},
       "baseline": {"characters": ["Frieren", "Sein"]},
       "note": "One correct identity plus one confused identity."
+    },
+    {
+      "id": "DET-005",
+      "stage": "characters",
+      "failure": "no-character-panel",
+      "input": {"source_page": "P130", "panel": "panel_0001"},
+      "expected": {"characters": [], "unknown_present": false},
+      "baseline": {"characters": []},
+      "note": "P130 (ch. 5 'Killing Magic', Größe Forest training) top panel is scenery only: must detect no characters. Negative control of the six-panel page set; previous panel-page run 20260809-091129 returned empty correctly."
+    },
+    {
+      "id": "DET-006",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P130", "panel": "panel_0002"},
+      "expected": {"characters": ["Frieren"], "unknown_present": false},
+      "baseline": {"characters": ["Flamme"]},
+      "note": "Frieren forced to her look-alike master Flamme (same silver hair). Flamme is not in chapter 5's cast; observed in panel-page run 20260809-091129."
+    },
+    {
+      "id": "DET-007",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P130", "panel": "panel_0003"},
+      "expected": {"characters": ["Frieren"], "unknown_present": false},
+      "baseline": {"characters": ["Flamme"]},
+      "note": "Same Flamme/Frieren confusion as DET-006 on the next panel."
+    },
+    {
+      "id": "DET-008",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P130", "panel": "panel_0004"},
+      "expected": {"characters": ["Frieren", "Fern"], "unknown_present": false},
+      "baseline": {"characters": ["Frieren", "Flamme"]},
+      "note": "Fern forced to Flamme and the real Fern missed (Frieren kept). Observed in panel-page run 20260809-091129."
+    },
+    {
+      "id": "DET-009",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P130", "panel": "panel_0005"},
+      "expected": {"characters": ["Frieren", "Fern"], "unknown_present": false},
+      "baseline": {"characters": ["Frieren", "Fern"]},
+      "note": "Regression guard: previously correct (Frieren,Fern); keeps the six-panel page set complete."
+    },
+    {
+      "id": "DET-010",
+      "stage": "characters",
+      "failure": "known-character-confusion",
+      "input": {"source_page": "P130", "panel": "panel_0006"},
+      "expected": {"characters": ["Frieren"], "unknown_present": false},
+      "baseline": {"characters": ["Flamme"]},
+      "note": "Same Flamme/Frieren confusion as DET-006/007 on the last panel."
     },
     {
       "id": "OOV-001",

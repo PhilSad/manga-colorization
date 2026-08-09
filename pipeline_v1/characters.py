@@ -372,7 +372,7 @@ class OpenRouterCharacterDetector:
         panel_prompt_template: str | None = None,
         panel_page_prompt_template: str | None = None,
         max_tokens: int = 1024,
-        temperature: float = 0.2,
+        temperature: float = 0.0,
         client: Any = None,  # injected OpenAI-compatible client (tests)
         profiles_file: Path | None = None,
         chapter_casts_file: Path | None = None,
@@ -785,7 +785,7 @@ def call_vlm(
     model: str,
     content: list[dict[str, Any]],
     max_tokens: int = 1024,
-    temperature: float = 0.2,
+    temperature: float = 0.0,
 ) -> "_CallResult":
     """One OpenAI-compatible chat completion with retry/backoff and
     `usage.cost` accounting (OpenRouter). Shared by character detection

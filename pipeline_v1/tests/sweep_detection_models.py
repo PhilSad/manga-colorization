@@ -215,7 +215,7 @@ def main() -> int:
             "prompt": ("V1 panel prompt (panel), page prompt (page), "
                        "panel-page prompt (panel-page); same as the pipeline"),
             "max_tokens": 1024,
-            "temperature": 0.2,
+            "temperature": 0.0,
         },
         "records": [],
         "totals": {},

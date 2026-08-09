@@ -61,7 +61,7 @@ class PipelineConfig:
     vlm_prompt_file: Path = DEFAULT_VLM_PROMPT_FILE
     vlm_panel_prompt_file: Path = DEFAULT_VLM_PANEL_PROMPT_FILE
     max_tokens: int = 1024
-    temperature: float = 0.2
+    temperature: float = 0.0
     sleep_s: float = 1.0
     workers: int = 1               # parallel character-detection threads (1 = sequential)
     api_key_env: str = "OPENROUTER_API_KEY"
@@ -276,7 +276,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--profiles-file", type=Path, default=DEFAULT_PROFILES_FILE,
                         help="Canonical character profiles (task 0002).")
     parser.add_argument("--max-tokens", type=int, default=1024)
-    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--temperature", type=float, default=0.0,
+                        help="OpenRouter sampling temperature for detection (0 = mostly deterministic)")
     parser.add_argument("--sleep", type=float, default=1.0,
                         help="Seconds between OpenRouter calls (rate-limit backoff "
                              "is handled by the client; ignored when --workers > 1).")

@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from profiles import hint_text, load_profiles
+from tqdm import tqdm
 from util import file_record
 
 API_BASE = "https://openrouter.ai/api/v1"
@@ -563,7 +564,11 @@ class OpenRouterCharacterDetector:
         page_b64 = base64.b64encode(annotated.read_bytes()).decode()
         page_mime = page_info["mime_type"]
 
-        for panel_key in expected_panels:
+        for panel_key in tqdm(
+            expected_panels,
+            desc=f"characters: {page.stem} (panel-page)",
+            unit="panel", leave=False,
+        ):
             panel = _find_panel_file(panels_dir, panel_key)
             if panel is None:
                 fallback = self._fallback_panel(panel_key, panels_dir, refs_dir)

@@ -22,6 +22,7 @@ from pathlib import Path
 from config import PipelineConfig
 from run_context import RunContext, write_json
 from selection import forced_names_for, page_selected, panel_selected
+from tqdm import tqdm
 from util import SUPPORTED_IMAGE_SUFFIXES
 
 
@@ -74,7 +75,9 @@ def run_characters_step(
     characters_dir = ctx.step_dir("characters")
     records: list[dict] = []
     totals = _new_totals()
-    for page_dir in page_dirs:
+    for page_dir in tqdm(
+        page_dirs, desc="characters: pages", unit="page", leave=False
+    ):
         page = page_dir.name
         if config.only_panels and not page_selected(page, config.only_panels):
             continue
@@ -125,10 +128,11 @@ def run_characters_step(
             _merge_totals(totals, page_totals)
             records.extend(docs)
         elif needed:
-            for panel_path in needed:
-                print(
-                    f"  characters: {page}/{panel_path.name} ...", flush=True
-                )
+            for panel_path in tqdm(
+                needed,
+                desc=f"characters: {page} (panel mode)",
+                unit="panel", leave=False,
+            ):
                 record = detector.detect(panel_path, config.refs_dir)
                 doc = record.to_dict(panel_path, page=page)
                 write_json(out_page_dir / f"{panel_path.stem}.json", doc)

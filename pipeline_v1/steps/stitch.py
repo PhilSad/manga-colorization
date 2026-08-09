@@ -16,6 +16,7 @@ from detection import PanelBox
 from run_context import RunContext, write_json
 from selection import page_selected, panel_selected
 from stitching import stitch_page
+from tqdm import tqdm
 from util import SUPPORTED_IMAGE_SUFFIXES, file_record
 
 
@@ -36,7 +37,9 @@ def run_stitch_step(
         raise ValueError("no panels to stitch; run the 'panels' step first")
 
     outputs: list[dict] = []
-    for page_dir in page_dirs:
+    for page_dir in tqdm(
+        page_dirs, desc="stitch: pages", unit="page", leave=False
+    ):
         page = page_dir.name
         if config.only_panels and not page_selected(page, config.only_panels):
             continue

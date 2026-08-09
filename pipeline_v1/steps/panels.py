@@ -24,6 +24,7 @@ from extraction import draw_overlay, save_panels
 from panel_ordering import reading_order
 from run_context import RunContext, write_json
 from selection import page_selected
+from tqdm import tqdm
 from util import sha256
 
 
@@ -57,7 +58,9 @@ def run_panels_step(
 
     pages_dir = ctx.step_dir("panels")
     page_records: list[dict] = []
-    for page_path in pages:
+    for page_path in tqdm(
+        pages, desc="panels: detect+extract", unit="page", leave=False
+    ):
         with Image.open(page_path) as page:
             page = page.convert("RGB")
             detections = detector.detect(page_path)

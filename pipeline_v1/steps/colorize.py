@@ -21,6 +21,7 @@ from pathlib import Path
 from config import STEP_DIRS, PipelineConfig
 from run_context import RunContext, write_json
 from selection import page_selected, panel_selected
+from tqdm import tqdm
 from util import SUPPORTED_IMAGE_SUFFIXES
 
 
@@ -66,7 +67,9 @@ def run_colorize_step(
         "error_calls": 0,
         "total_latency_s": 0.0,
     }
-    for page_dir in page_dirs:
+    for page_dir in tqdm(
+        page_dirs, desc="colorize: pages", unit="page", leave=False
+    ):
         page = page_dir.name
         if config.only_panels and not page_selected(page, config.only_panels):
             continue
@@ -92,7 +95,10 @@ def run_colorize_step(
             panels = all_panels
 
         fresh_stems: set[str] = set()
-        for panel_path in panels:
+        panels_bar = tqdm(
+            panels, desc=f"colorize: {page}", unit="panel", leave=False
+        )
+        for panel_path in panels_bar:
             stem = panel_path.stem
             characters = names_by_panel.get(stem, [])
             atlas_path = out_dir / f"{stem}_atlas.jpg"
@@ -102,10 +108,11 @@ def run_colorize_step(
             )
             output_path = out_dir / f"{stem}{extension}"
             palette = palette_instruction(characters, profiles)
-            print(
-                f"  colorize: {page}/{panel_path.name} characters={characters} "
-                f"atlas={'yes' if atlas else 'no'} palette={'yes' if palette else 'no'} ...",
-                flush=True,
+            panels_bar.set_postfix(
+                panel=panel_path.name,
+                characters=",".join(characters) or "-",
+                atlas="yes" if atlas else "no",
+                palette="yes" if palette else "no",
             )
             record = colorizer.colorize(
                 panel_path, atlas, output_path, palette_instruction=palette

@@ -20,6 +20,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from tqdm import tqdm
+
 from config import STEP_DIRS, STEP_ORDER, PipelineConfig
 from run_context import RunContext, iso_now, package_versions
 
@@ -51,12 +53,26 @@ class PipelineRunner:
         if self.config.resume:
             self._copy_resumed_outputs(ctx)
         try:
-            for step in self._steps_to_run():
-                if self._step_has_outputs(ctx, step):
-                    print(f"== step {step}: outputs already present, skipping ==",
-                          flush=True)
-                    continue
-                self._run_one(ctx, step)
+            steps = self._steps_to_run()
+            steps_bar = (
+                tqdm(steps, desc="steps", unit="step", leave=False)
+                if len(steps) >= 2
+                else None
+            )
+            try:
+                for index, step in enumerate(steps_bar or steps, start=1):
+                    if steps_bar is not None:
+                        steps_bar.set_description(
+                            f"steps: {index}/{len(steps)} ({step})"
+                        )
+                    if self._step_has_outputs(ctx, step):
+                        print(f"== step {step}: outputs already present, skipping ==",
+                              flush=True)
+                        continue
+                    self._run_one(ctx, step)
+            finally:
+                if steps_bar is not None:
+                    steps_bar.close()
             ctx.manifest["totals"]["wall_time_s"] = round(time.monotonic() - started, 1)
             ctx.set_status("completed")
         except KeyboardInterrupt:

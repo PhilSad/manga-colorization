@@ -113,6 +113,22 @@ output/<YYYYMMDD-HHMMSS>/
 └── manifest.json
 ```
 
+## Debug annotation of a run
+
+`scripts/annotate_stitch.py` renders a debug copy of a completed run's
+`4_stitched/` pages with a colored bounding box per panel and a label with the
+panel name + the characters detected for it (from `2_characters/`); panels
+that were stitched from their original B&W crop (`--stitch-bw-fallback`) get
+an orange box and a `[B&W fallback]` tag (read from the run's `manifest.json`).
+Output goes to `<run-dir>/5_debug/` with a per-page `summary.json`:
+
+```bash
+.venv/bin/python pipeline_v1/scripts/annotate_stitch.py \
+    --run-dir pipeline_v1/output/20260809-125148
+# options: --output-dir, --page SUBSTR (repeatable filter), --font-size,
+#          --bbox-width
+```
+
 ## Size policy
 
 Each panel is colorized at the resolution **closest to its original size with

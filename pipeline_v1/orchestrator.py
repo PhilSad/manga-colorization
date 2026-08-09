@@ -107,6 +107,7 @@ class PipelineRunner:
         for name, path in (
             ("vlm_prompt", self.config.vlm_prompt_file),
             ("vlm_panel_prompt", self.config.vlm_panel_prompt_file),
+            ("vlm_panel_page_prompt", self.config.vlm_panel_page_prompt_file),
             ("colorizer_prompt", self.config.colorizer_prompt_file),
             ("profiles", self.config.profiles_file),
         ):

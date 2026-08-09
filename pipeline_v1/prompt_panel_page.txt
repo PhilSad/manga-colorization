@@ -1,0 +1,20 @@
+You are an expert analyst of the manga "Frieren: Beyond Journey's End" (Sousou no Frieren).
+
+Two images are provided:
+1. A single full black-and-white manga page with each panel numbered in Japanese reading order (a numbered badge is overlaid on each panel); the target panel is additionally outlined with a thick blue border.
+2. A crop of that target panel only.
+
+Identify which reference characters appear in the target panel (the cropped image). Use the full page as context — dialogue, neighboring panels, flashbacks, and the character's era/outfit — to disambiguate identity.
+
+Reference characters (canonical name — distinguishing hints):
+{characters}{cast_shortlist}
+Rules:
+- Count a character as present when they clearly appear in the panel, even partially (face, distinctive hairstyle, silhouette, or outfit), and you are reasonably confident of the identity.
+- Use only the exact canonical names from the list above.
+- Use page-level context (dialogue, neighboring panels, flashbacks) to disambiguate characters and their era/outfit.
+- If a clearly visible character is NOT in the reference list, leave them out of "characters" and set "uncertain": true.
+- If none of the reference characters appear in the panel, output an empty "characters" list.
+- Do not invent characters or names.
+
+Respond with ONLY a JSON object, no commentary, no markdown, in exactly this shape:
+{"characters": ["Name1", "Name2"], "uncertain": false}

@@ -36,6 +36,7 @@ DEFAULT_ENDPOINT = "http://spark:3000"
 DEFAULT_VLM_MODEL = "google/gemma-4-31b-it"
 DEFAULT_VLM_PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 DEFAULT_VLM_PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
+DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 DEFAULT_COLORIZER_PROMPT_FILE = PIPELINE_DIR / "colorizer_prompt.txt"
 DEFAULT_PROFILES_FILE = PIPELINE_DIR / "character_profiles.json"
 DEFAULT_CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
@@ -60,9 +61,11 @@ class PipelineConfig:
     temperature: float = 0.2
     sleep_s: float = 1.0
     api_key_env: str = "OPENROUTER_API_KEY"
-    # V1.1 (task 0003): one paid call per page with per-panel fallbacks, or
-    # the V1 per-panel behaviour.
-    detection_mode: str = "page"  # "page" | "panel"
+    # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
+    # V1 per-panel behaviour; or per-panel calls that send the full page as
+    # context plus the target panel (panel-page).
+    detection_mode: str = "page"  # "page" | "panel" | "panel-page"
+    vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
     chapter_casts_file: Path = DEFAULT_CHAPTER_CASTS_FILE
 
@@ -119,6 +122,7 @@ class PipelineConfig:
             "sleep_s": self.sleep_s,
             "api_key_env": self.api_key_env,
             "detection_mode": self.detection_mode,
+            "vlm_panel_page_prompt_file": str(self.vlm_panel_page_prompt_file),
             "cast_key": self.cast_key,
             "chapter_casts_file": str(self.chapter_casts_file),
             "endpoint": self.endpoint,
@@ -183,8 +187,8 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError(
             f"--from-step must be one of {STEP_ORDER}, got {config.from_step!r}"
         )
-    if config.detection_mode not in ("page", "panel"):
-        raise ValueError("--detection-mode must be 'page' or 'panel'")
+    if config.detection_mode not in ("page", "panel", "panel-page"):
+        raise ValueError("--detection-mode must be 'page', 'panel' or 'panel-page'")
     if config.blank_ink_threshold < 0 or config.blank_ink_threshold >= 1:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
     if config.max_megapixels <= 0:
@@ -226,9 +230,15 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--vlm-panel-prompt-file", type=Path,
                         default=DEFAULT_VLM_PANEL_PROMPT_FILE,
                         help="Per-panel fallback prompt (cropped-panel fallback calls).")
-    parser.add_argument("--detection-mode", choices=("page", "panel"), default="page",
+    parser.add_argument("--vlm-panel-page-prompt-file", type=Path,
+                        default=DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE,
+                        help="Panel+page prompt (detection_mode='panel-page' calls).")
+    parser.add_argument("--detection-mode", choices=("page", "panel", "panel-page"),
+                        default="page",
                         help="page: one paid call per page with per-panel fallbacks (V1.1); "
-                             "panel: V1 behaviour, one call per panel.")
+                             "panel: V1 behaviour, one call per panel; "
+                             "panel-page: one call per panel sending the full page as "
+                             "context plus the target panel (per-panel fallback).")
     parser.add_argument("--cast-key", default=None,
                         help="chapter_casts.json shortlist key (e.g. c001, ch134).")
     parser.add_argument("--colorizer-prompt-file", type=Path,
@@ -298,6 +308,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             vlm_model=args.vlm_model,
             vlm_prompt_file=args.vlm_prompt_file,
             vlm_panel_prompt_file=args.vlm_panel_prompt_file,
+            vlm_panel_page_prompt_file=args.vlm_panel_page_prompt_file,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             sleep_s=args.sleep,

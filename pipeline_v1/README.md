@@ -20,7 +20,10 @@ Pipeline stages (per page):
    one paid call per page mapping numbered panels to canonical characters
    (V1.1, task 0003); missing/invalid/`uncertain` panels get a cropped-panel
    fallback. `--detection-mode panel` keeps the V1 one-call-per-panel
-   behaviour. An optional cached chapter cast shortlist (`--cast-key`)
+   behaviour; `--detection-mode panel-page` (V1.2) keeps one call per panel
+   but sends the full page as global context plus the target panel, with the
+   same cropped-panel fallback as page mode. An optional cached
+   chapter cast shortlist (`--cast-key`)
    focuses the prompt; identity hints come from the shared character
    profiles (task 0002) → `2_characters/<page>/<panel>.json`
 4. **Colorize panel by panel** — self-hosted **step-distilled** FLUX.2 Klein 9B
@@ -83,7 +86,8 @@ Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 outputs; with `--from-step` only the earlier step outputs are copied, task
 0001), `--atlas-columns N`, `--num-inference-steps` (4 for the
 step-distilled model; 20–50 if the server runs the undistilled base),
-`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel`,
+`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page`
+(panel-page = one call per panel with the full page as context, `prompt_panel_page.txt`),
 `--cast-key c001` (chapter cast shortlist), `--no-full-page-fallback`,
 `--max-megapixels 2.0` (FLUX request cap),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),

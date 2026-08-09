@@ -3,9 +3,11 @@
 Default (`detection_mode="page"`, task 0003): one paid call per page mapping
 numbered panels to canonical characters, with cropped-panel fallbacks for
 missing/invalid/uncertain results. `detection_mode="panel"` keeps the V1
-one-call-per-panel behaviour. Panels with forced ground-truth identities
-(`--force-characters`, task 0001) never make a paid call. `--only-panel`
-restricts which panels are processed.
+one-call-per-panel behaviour. `detection_mode="panel-page"` (V1.2) keeps the
+one-call-per-panel granularity but sends the full page as context plus the
+target panel, with the same cropped-panel fallback as page mode. Panels with
+forced ground-truth identities (`--force-characters`, task 0001) never make a
+paid call. `--only-panel` restricts which panels are processed.
 
 Writes one JSON record per panel into `2_characters/<page>/` plus a flat
 `summary.json` with call/cost totals split into page and fallback calls.
@@ -104,9 +106,21 @@ def run_characters_step(
         page_capable = config.detection_mode == "page" and hasattr(
             detector, "detect_page"
         )
+        panel_page_capable = config.detection_mode == "panel-page" and hasattr(
+            detector, "detect_panels_with_page"
+        )
         if page_capable and needed:
             docs, page_totals = _detect_page(
                 ctx, config, detector, page, page_dir, needed, out_page_dir
+            )
+            _merge_totals(totals, page_totals)
+            records.extend(docs)
+        elif panel_page_capable and needed:
+            docs, page_totals = _detect_page(
+                ctx, config, detector, page, page_dir, needed, out_page_dir,
+                method="detect_panels_with_page",
+                provenance="panel_page_calls.json",
+                label="panel+page",
             )
             _merge_totals(totals, page_totals)
             records.extend(docs)
@@ -146,8 +160,17 @@ def _detect_page(
     page_dir: Path,
     needed: list[Path],
     out_page_dir: Path,
+    *,
+    method: str = "detect_page",
+    provenance: str = "page_call.json",
+    label: str = "page-level",
 ) -> tuple[list[dict], dict]:
-    """One page-level detection call for `needed` panels + fallbacks."""
+    """Page-scoped detection calls for `needed` panels + fallbacks.
+
+    `method` selects the detector entry point (`detect_page` for one call per
+    page, `detect_panels_with_page` for one panel+page call per panel);
+    `provenance`/`label` tune the recorded call file and progress output.
+    """
     from run_context import read_json
 
     totals = _new_totals()
@@ -155,11 +178,11 @@ def _detect_page(
     page_image = Path(geometry["page_path"])
     expected = [panel.stem for panel in needed]
     print(
-        f"  characters: {page} page-level detection "
+        f"  characters: {page} {label} detection "
         f"(panels {expected}) ...",
         flush=True,
     )
-    page_record = detector.detect_page(
+    page_record = getattr(detector, method)(
         page_image, page_dir, expected, config.refs_dir
     )
     totals["page_calls"] += page_record.page_calls
@@ -176,7 +199,7 @@ def _detect_page(
         totals["error_calls"] += page_record.page_calls
 
     # Provenance: the raw page-level answer + parse outcome.
-    write_json(out_page_dir / "page_call.json", {
+    write_json(out_page_dir / provenance, {
         "page": page,
         "expected_panels": expected,
         "status": page_record.status,

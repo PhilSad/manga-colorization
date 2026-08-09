@@ -12,6 +12,12 @@ mapping. Missing, invalid, or explicitly `uncertain` panel entries trigger a
 cropped-panel fallback call (the V1 per-panel prompt). An optional cached
 chapter cast shortlist (`--cast-key`) replaces the full roster in the prompt.
 
+V1.2 behaviour (`detection_mode="panel-page"`): one paid call per panel that
+sends the full page (numbered, target panel highlighted) as global context
+*plus* the cropped panel. Each panel keeps the same cropped-panel fallback as
+page mode: unparseable, `uncertain`, or unknown-character answers fall back to
+the V1 per-panel prompt.
+
 Parsing, validation, retry policy, and per-call cost accounting (`usage.cost`
 from OpenRouter) are shared with the standalone research method
 `character-detection-openrouter-vlm`.
@@ -154,6 +160,23 @@ def parse_page_mapping(text: str) -> dict[str, dict[str, Any]] | None:
     return mapping
 
 
+def parse_panel_with_page(text: str) -> dict | None:
+    """Parse the panel+page answer `{"characters": [...], "uncertain": bool}`.
+
+    Same per-panel shape as `parse_characters` plus an optional `uncertain`
+    flag; returns None for unparseable/malformed answers.
+    """
+    if not text:
+        return None
+    data = _extract_json_object(text.strip())
+    if not isinstance(data, dict) or not isinstance(data.get("characters"), list):
+        return None
+    return {
+        "characters": [str(item) for item in data["characters"]],
+        "uncertain": bool(data.get("uncertain", False)),
+    }
+
+
 def validate_characters(
     parsed: list[Any] | None, canonical: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -269,6 +292,7 @@ class OpenRouterCharacterDetector:
         api_base: str = API_BASE,
         prompt_template: str | None = None,
         panel_prompt_template: str | None = None,
+        panel_page_prompt_template: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.2,
         client: Any = None,  # injected OpenAI-compatible client (tests)
@@ -281,6 +305,7 @@ class OpenRouterCharacterDetector:
         self.api_base = api_base
         self.prompt_template = prompt_template
         self.panel_prompt_template = panel_prompt_template
+        self.panel_page_prompt_template = panel_page_prompt_template
         self.max_tokens = max_tokens
         self.temperature = temperature
         if client is not None:
@@ -296,12 +321,14 @@ class OpenRouterCharacterDetector:
         self.profiles: dict = {}
         self.prompt: str = ""
         self.panel_prompt: str = ""
+        self.panel_page_prompt: str = ""
 
     def prepare(
         self,
         refs_dir: Path,
         prompt_file: Path | None = None,
         panel_prompt_file: Path | None = None,
+        panel_page_prompt_file: Path | None = None,
     ) -> None:
         """Load the canonical list, profiles, cast shortlist and build the
         prompts once per run."""
@@ -324,6 +351,14 @@ class OpenRouterCharacterDetector:
             panel_template = Path(panel_prompt_file).read_text(encoding="utf-8")
         self.panel_prompt = build_prompt(
             panel_template or "", self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
+        panel_page_template = self.panel_page_prompt_template
+        if panel_page_template is None and panel_page_prompt_file is not None:
+            panel_page_template = Path(panel_page_prompt_file).read_text(encoding="utf-8")
+        self.panel_page_prompt = build_prompt(
+            panel_page_template or "", self.canonical,
             profiles=self.profiles, cast_shortlist=shortlist,
         )
 
@@ -484,15 +519,8 @@ class OpenRouterCharacterDetector:
     def _fallback_panel(
         self, panel_key: str, panels_dir: Path, refs_dir: Path
     ) -> CharacterRecord:
-        panel = panels_dir / f"{panel_key}.png"
-        if not panel.is_file():
-            # try any supported extension
-            for suffix in SUPPORTED_IMAGE_SUFFIXES:
-                candidate = panels_dir / f"{panel_key}{suffix}"
-                if candidate.is_file():
-                    panel = candidate
-                    break
-        if not panel.is_file():
+        panel = _find_panel_file(panels_dir, panel_key)
+        if panel is None:
             return CharacterRecord(
                 status="error", characters=[], unknown_entries=[],
                 response_text="", usage={}, cost_usd=None, cost_source="unavailable",
@@ -502,6 +530,111 @@ class OpenRouterCharacterDetector:
             )
         record = self.detect(panel, refs_dir)
         record.source = "fallback"
+        return record
+
+    # -- panel+page (V1.2) -----------------------------------------------
+
+    def detect_panels_with_page(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+    ) -> PageCharacterRecord:
+        """One paid call per panel: the full page (numbered, target panel
+        highlighted) as global context *plus* the cropped panel.
+
+        Per-panel fallback (same as page mode): unparseable answers, explicit
+        `uncertain`, unknown-character entries, and call errors fall back to
+        the V1 panel-only prompt call.
+        """
+        if not self.canonical:
+            self.prepare(refs_dir)
+        if not self.panel_page_prompt:
+            raise ValueError(
+                "panel-page detection needs a panel-page prompt "
+                "(--vlm-panel-page-prompt-file)"
+            )
+        record = PageCharacterRecord(status="ok", page=page.stem)
+
+        page_image, boxes = _page_geometry(panels_dir)
+        annotated = _annotated_page(page_image, panels_dir)
+        page_info = file_record(annotated)
+        page_b64 = base64.b64encode(annotated.read_bytes()).decode()
+        page_mime = page_info["mime_type"]
+
+        for panel_key in expected_panels:
+            panel = _find_panel_file(panels_dir, panel_key)
+            if panel is None:
+                fallback = self._fallback_panel(panel_key, panels_dir, refs_dir)
+                record.fallback_calls += 1
+                record.cost_usd += fallback.cost_usd or 0.0
+                record.total_latency_s += fallback.latency_s
+                if fallback.cost_usd is None:
+                    record.unpriced_calls += 1
+                record.panels[panel_key] = fallback
+                record.status = "partial" if record.status == "ok" else record.status
+                continue
+
+            highlighted = _highlighted_page(annotated, boxes, panel_key)
+            info = file_record(panel)
+            content = [
+                {"type": "text", "text": self.panel_page_prompt},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{page_mime};base64,{page_b64}"}},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:{info['mime_type']};base64,{_b64(panel.read_bytes())}"}},
+            ]
+            result = self._call(content)
+            record.page_calls += 1
+            record.cost_usd += result.cost_usd or 0.0
+            record.total_latency_s += result.latency_s
+            if result.cost_usd is None:
+                record.unpriced_calls += 1
+
+            known: list[str] = []
+            unknown: list[str] = []
+            uncertain = False
+            parsed = parse_panel_with_page(result.text) if result.error is None else None
+            if parsed is not None:
+                known, unknown = validate_characters(
+                    parsed["characters"], self.canonical
+                )
+                uncertain = parsed["uncertain"]
+
+            if (
+                result.error is None
+                and parsed is not None
+                and not uncertain
+                and not unknown
+            ):
+                record.panels[panel_key] = CharacterRecord(
+                    status="ok",
+                    characters=known,
+                    unknown_entries=[],
+                    response_text=result.text,
+                    usage=result.usage,
+                    cost_usd=result.cost_usd,
+                    cost_source=result.cost_source,
+                    latency_s=result.latency_s,
+                    model_returned=result.model_returned,
+                    attempts=result.attempts,
+                    error=None,
+                    finished_at=_iso_now(),
+                    source="panel-page",
+                    uncertain=False,
+                )
+                continue
+
+            # Fallback: panel-only prompt (V1), mirrors page-mode behaviour.
+            record.status = "partial" if record.status == "ok" else record.status
+            fallback = self._fallback_panel(panel_key, panels_dir, refs_dir)
+            record.fallback_calls += 1
+            record.cost_usd += fallback.cost_usd or 0.0
+            record.total_latency_s += fallback.latency_s
+            if fallback.cost_usd is None:
+                record.unpriced_calls += 1
+            record.panels[panel_key] = fallback
         return record
 
     # -- shared OpenAI call machinery --------------------------------------
@@ -630,6 +763,21 @@ class _CallResult:
     error: str | None
 
 
+def _page_geometry(panels_dir: Path) -> tuple[Path, list]:
+    """(page image path, panel boxes in reading order) from panels.json."""
+    geometry_path = panels_dir / "panels.json"
+    if not geometry_path.is_file():
+        raise ValueError(f"missing {geometry_path}; cannot annotate page for detection")
+    geometry = json.loads(geometry_path.read_text(encoding="utf-8"))
+    from detection import PanelBox
+
+    boxes = [
+        PanelBox(*d["box"], d.get("confidence", 0.9))
+        for d in geometry["detections"]
+    ]
+    return Path(geometry["page_path"]), boxes
+
+
 def _annotated_page(page: Path, panels_dir: Path) -> Path:
     """A copy of the page with panel numbers overlaid in reading order (the
     same numbers the extraction uses). Written next to the page in a temp
@@ -638,18 +786,54 @@ def _annotated_page(page: Path, panels_dir: Path) -> Path:
     from extraction import draw_overlay
     from PIL import Image
 
-    geometry_path = panels_dir / "panels.json"
-    if not geometry_path.is_file():
-        raise ValueError(f"missing {geometry_path}; cannot annotate page for detection")
-    geometry = json.loads(geometry_path.read_text(encoding="utf-8"))
-    from detection import PanelBox
-
-    boxes = [PanelBox(*d["box"], d.get("confidence", 0.9))
-             for d in geometry["detections"]]
+    _page, boxes = _page_geometry(panels_dir)
     annotated = panels_dir / "detection_annotated.png"
     with Image.open(page) as image:
         draw_overlay(image.convert("RGB"), boxes, annotated)
     return annotated
+
+
+def _panel_index(panel_key: str) -> int:
+    """Zero-based index for a `panel_0001`-style key."""
+    return int(panel_key.rsplit("_", 1)[1]) - 1
+
+
+def _find_panel_file(panels_dir: Path, panel_key: str) -> Path | None:
+    """The crop file for `panel_key` (any supported extension), or None."""
+    panel = panels_dir / f"{panel_key}.png"
+    if panel.is_file():
+        return panel
+    for suffix in SUPPORTED_IMAGE_SUFFIXES:
+        candidate = panels_dir / f"{panel_key}{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _b64(data: bytes) -> str:
+    return base64.b64encode(data).decode()
+
+
+def _highlighted_page(annotated: Path, boxes: list, panel_key: str) -> bytes:
+    """PNG bytes of the annotated page with the target panel box outlined in
+    blue, so the model knows which crop the second image is."""
+    import io
+
+    from PIL import Image, ImageDraw
+
+    index = _panel_index(panel_key)
+    if not (0 <= index < len(boxes)):
+        raise ValueError(
+            f"panel key {panel_key!r} out of range (have {len(boxes)} panels)"
+        )
+    with Image.open(annotated) as image:
+        overlay = image.convert("RGB").copy()
+    draw = ImageDraw.Draw(overlay)
+    x1, y1, x2, y2 = boxes[index].as_int_tuple()
+    draw.rectangle((x1, y1, x2, y2), outline=(40, 120, 255), width=10)
+    buffer = io.BytesIO()
+    overlay.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def forced_record(

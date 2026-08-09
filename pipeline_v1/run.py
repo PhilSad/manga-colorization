@@ -34,14 +34,19 @@ def build_backends(config):
         from mock_backends import (
             MockCharacterDetector,
             MockColorizer,
+            MockPageCharacterDetector,
             MockPanelDetector,
         )
         from orchestrator import Backends
 
         print("[mock] mock backends enabled (no external calls)", file=sys.stderr)
+        if config.detection_mode in ("page", "panel-page"):
+            character_detector = MockPageCharacterDetector()
+        else:
+            character_detector = MockCharacterDetector()
         return Backends(
             detector=MockPanelDetector(),
-            character_detector=MockCharacterDetector(),
+            character_detector=character_detector,
             colorizer=MockColorizer(),
         )
 
@@ -72,10 +77,15 @@ def build_backends(config):
     )
     if not config.vlm_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")
+    if config.detection_mode == "panel-page" and not config.vlm_panel_page_prompt_file.is_file():
+        raise SystemExit(
+            f"panel-page prompt file not found: {config.vlm_panel_page_prompt_file}"
+        )
     character_detector.prepare(
         config.refs_dir,
         config.vlm_prompt_file,
         config.vlm_panel_prompt_file,
+        config.vlm_panel_page_prompt_file,
     )
 
     if not config.colorizer_prompt_file.is_file():

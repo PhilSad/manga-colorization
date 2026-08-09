@@ -21,6 +21,7 @@ from config import PIPELINE_DIR
 
 PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
+PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 PROFILES_FILE = PIPELINE_DIR / "character_profiles.json"
 
 
@@ -646,6 +647,247 @@ def test_cast_shortlist_deterministic_and_offline(tmp_path):
     assert cast_shortlist_for(casts_file, "c001") == cast_shortlist_for(casts_file, "c001")
     with pytest.raises(ValueError, match="not found"):
         cast_shortlist_for(casts_file, "nope")
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ('{"characters": ["Frieren"], "uncertain": false}',
+         {"characters": ["Frieren"], "uncertain": False}),
+        ('{"characters": [], "uncertain": true}',
+         {"characters": [], "uncertain": True}),
+        ("```json\n{\"characters\": [\"Fern\"]}\n```",
+         {"characters": ["Fern"], "uncertain": False}),  # uncertain optional
+        ('trailing prose {"characters": ["Stark"]} trailing',
+         {"characters": ["Stark"], "uncertain": False}),
+        ("", None),
+        ("not json", None),
+        ('["Frieren"]', None),                             # wrong shape
+        ("{\"panels\": {}}", None),                       # page-mode answer
+        ("{\"characters\": \"Frieren\"}", None),          # malformed
+    ],
+)
+def test_parse_panel_with_page(text, expected):
+    from characters import parse_panel_with_page
+
+    assert parse_panel_with_page(text) == expected
+
+
+# ---------------------------------------------------------------------------
+# V1.2: panel+page detection
+
+def _make_panel_page_detector(tmp_path, script):
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it",
+        api_key="dummy",
+        client=FakeClient(script),
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+    )
+    return detector
+
+
+def test_detect_panels_with_page_all_ok(tmp_path):
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def p1():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    def p2():
+        return FakeResponse(
+            '{"characters": ["Fern"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00018),
+        )
+
+    detector = _make_panel_page_detector(tmp_path, [p1, p2])
+    record = detector.detect_panels_with_page(
+        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    )
+    assert record.status == "ok"
+    assert record.page_calls == 2       # one panel+page call per panel
+    assert record.fallback_calls == 0
+    assert record.cost_usd == pytest.approx(0.00033, abs=1e-9)
+    assert record.panels["panel_0001"].characters == ["Frieren"]
+    assert record.panels["panel_0001"].source == "panel-page"
+    assert record.panels["panel_0002"].characters == ["Fern"]
+    assert len(detector.client.chat.completions.calls) == 2
+    # Each call carries text + full page + panel crop images.
+    first_content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert len(first_content) == 3
+    assert first_content[0]["type"] == "text"
+    assert first_content[1]["type"] == "image_url"
+    assert first_content[2]["type"] == "image_url"
+    assert first_content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+def test_detect_panels_with_page_uncertain_falls_back(tmp_path):
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def uncertain():
+        return FakeResponse(
+            '{"characters": [], "uncertain": true}', usage=FakeUsage(cost=0.00015)
+        )
+
+    def fallback():
+        return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage(cost=0.0001))
+
+    detector = _make_panel_page_detector(tmp_path, [uncertain, fallback])
+    record = detector.detect_panels_with_page(
+        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    )
+    assert record.status == "partial"
+    assert record.page_calls == 1
+    assert record.fallback_calls == 1
+    assert record.cost_usd == pytest.approx(0.00025, abs=1e-9)
+    assert record.panels["panel_0001"].source == "fallback"
+    assert record.panels["panel_0001"].characters == ["Frieren"]
+
+
+def test_detect_panels_with_page_unknown_falls_back(tmp_path):
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def unknown():
+        return FakeResponse(
+            '{"characters": ["Gandalf"], "uncertain": false}',
+            usage=FakeUsage(),
+        )
+
+    def fallback():
+        return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage())
+
+    detector = _make_panel_page_detector(tmp_path, [unknown, fallback])
+    record = detector.detect_panels_with_page(
+        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    )
+    assert record.status == "partial"
+    assert record.fallback_calls == 1
+    assert record.panels["panel_0001"].source == "fallback"
+
+
+def test_detect_panels_with_page_unparseable_falls_back(tmp_path):
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def garbage():
+        return FakeResponse("the heroes are here", usage=FakeUsage(cost=0.00015))
+
+    def fallback():
+        return FakeResponse('{"characters": ["Fern"]}', usage=FakeUsage(cost=0.0001))
+
+    detector = _make_panel_page_detector(tmp_path, [garbage, fallback])
+    record = detector.detect_panels_with_page(
+        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    )
+    assert record.status == "partial"
+    assert record.page_calls == 1
+    assert record.fallback_calls == 1
+    assert record.panels["panel_0001"].source == "fallback"
+    assert record.panels["panel_0001"].characters == ["Fern"]
+
+
+def test_detect_panels_with_page_error_falls_back(tmp_path):
+    from openai import RateLimitError
+
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def fallback():
+        return FakeResponse('{"characters": ["Stark"]}', usage=FakeUsage())
+
+    characters.BASE_BACKOFF_S = 0.0
+    characters.MAX_ATTEMPTS = 2
+    try:
+        rate_limited = make_openai_error(
+            RateLimitError, "nope", status=429
+        )
+        detector = _make_panel_page_detector(
+            tmp_path, [rate_limited, rate_limited, fallback]
+        )
+        record = detector.detect_panels_with_page(
+            page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+        )
+    finally:
+        characters.BASE_BACKOFF_S = 5.0
+        characters.MAX_ATTEMPTS = 8
+    assert record.status == "partial"
+    assert record.page_calls == 1
+    assert record.fallback_calls == 1
+    assert record.panels["panel_0001"].source == "fallback"
+    assert record.panels["panel_0001"].characters == ["Stark"]
+
+
+def test_detect_panels_with_page_requires_prompt(tmp_path):
+    """panel-page detection without a panel-page prompt fails loudly."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([]),
+    )
+    detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
+                     panel_prompt_file=PANEL_PROMPT_FILE)  # no panel-page file
+    with pytest.raises(ValueError, match="panel-page prompt"):
+        detector.detect_panels_with_page(
+            page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+        )
+
+
+def test_characters_step_panel_page_mode(tmp_path):
+    """panel-page step: one panel+page call per panel plus per-panel fallbacks."""
+    from mock_backends import MockPageCharacterDetector
+    from run_context import RunContext
+    from steps.characters import run_characters_step
+
+    config = make_step_fixture(tmp_path)
+    config.detection_mode = "panel-page"
+    ctx = RunContext.create(tmp_path / "output", {"status": "running"})
+    panels_root = ctx.step_dir("panels") / "0134-004"
+    panels_root.mkdir(parents=True)
+    for path in (tmp_path / "1_panels" / "0134-004").glob("*.png"):
+        (panels_root / path.name).write_bytes(path.read_bytes())
+    (panels_root / "panels.json").write_text(json.dumps({
+        "page_path": str(tmp_path / "0134-004.png"), "detections": [],
+    }), encoding="utf-8")
+
+    detector = MockPageCharacterDetector({
+        "0134-004": {"panel_0001": (["Frieren"], False)},
+    })
+    result = run_characters_step(ctx, config, detector)
+
+    totals = result["totals"]
+    assert totals["api_calls"] == 3      # 2 panel+page calls + 1 fallback
+    assert totals["page_calls"] == 2
+    assert totals["fallback_calls"] == 1  # panel_0002 uncovered -> fallback
+    assert totals["successful_calls"] == 2
+    assert totals["cost_usd"] == pytest.approx(0.0005, abs=1e-9)
+    assert len(detector.calls) == 1        # one per-page batch of panel+page calls
+    # Provenance file for the panel+page calls.
+    from run_context import read_json
+
+    provenance = read_json(ctx.step_dir("characters") / "0134-004" / "panel_page_calls.json")
+    assert provenance["page_calls"] == 2
+    assert provenance["fallback_calls"] == 1
+    # Panel records written with sources.
+    p1 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0001.json")
+    p2 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0002.json")
+    assert p1["source"] == "panel-page" and p1["characters"] == ["Frieren"]
+    assert p2["source"] == "fallback"
 
 
 def test_characters_step_page_mode(tmp_path):

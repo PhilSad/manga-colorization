@@ -117,7 +117,9 @@ class MockColorizer:
 class MockPageCharacterDetector:
     """Canned page-level detections keyed by page stem: `{page_stem: {panel_stem:
     (characters, uncertain)}}`. Panels not covered are reported as a fallback
-    with no characters (deterministic, offline)."""
+    with no characters (deterministic, offline). Implements both the
+    page-level (`detect_page`) and the panel+page (`detect_panels_with_page`)
+    protocols."""
 
     def __init__(self, by_page: dict[str, dict[str, tuple[list[str], bool]]] | None = None):
         self.by_page = by_page or {}
@@ -169,5 +171,43 @@ class MockPageCharacterDetector:
                 cost_usd=None, cost_source="page-level", latency_s=0.0,
                 model_returned="mock", attempts=1, finished_at="mock",
                 source="page", uncertain=uncertain,
+            )
+        return record
+
+    def detect_panels_with_page(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+    ) -> "PageCharacterRecord":
+        from characters import CharacterRecord, PageCharacterRecord
+
+        self.calls.append((page, list(expected_panels)))
+        page_map = self.by_page.get(page.stem, {})
+        record = PageCharacterRecord(status="ok", page=page.stem)
+        record.page_calls = len(expected_panels)  # one panel+page call per panel
+        record.cost_usd = 0.0002 * len(expected_panels)
+        for panel_key in expected_panels:
+            entry = page_map.get(panel_key)
+            characters, uncertain = entry if entry is not None else ([], True)
+            if entry is None or uncertain:
+                record.status = "partial"
+                record.fallback_calls += 1
+                record.cost_usd += 0.0001
+                record.panels[panel_key] = CharacterRecord(
+                    status="ok", characters=list(characters), unknown_entries=[],
+                    response_text="{}", usage={"total_tokens": 10},
+                    cost_usd=0.0001, cost_source="mock", latency_s=0.01,
+                    model_returned="mock", attempts=1, finished_at="mock",
+                    source="fallback", uncertain=False,
+                )
+                continue
+            record.panels[panel_key] = CharacterRecord(
+                status="ok", characters=list(characters), unknown_entries=[],
+                response_text="{}", usage={"total_tokens": 10},
+                cost_usd=0.0002, cost_source="mock", latency_s=0.01,
+                model_returned="mock", attempts=1, finished_at="mock",
+                source="panel-page", uncertain=False,
             )
         return record

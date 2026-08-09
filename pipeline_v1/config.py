@@ -101,6 +101,11 @@ class PipelineConfig:
     resume: Path | None = None   # previous run dir to reuse its step outputs
     from_step: str | None = None # start at this step (skip earlier ones)
 
+    # Stitch robustness: a panel whose colorized output is missing (e.g. a
+    # failed FLUX call) is stitched from the original black & white crop
+    # instead of failing the whole step; each fallback is logged and recorded.
+    stitch_bw_fallback: bool = False
+
     # V1.1 (task 0001): targeted reruns.
     only_panels: tuple[str, ...] = ()  # "PAGE:PANEL" selectors (repeatable)
     forced_characters: dict[str, list[str]] = field(default_factory=dict)
@@ -146,6 +151,7 @@ class PipelineConfig:
             "mock": self.mock,
             "resume": str(self.resume) if self.resume else None,
             "from_step": self.from_step,
+            "stitch_bw_fallback": self.stitch_bw_fallback,
             "only_panels": list(self.only_panels),
             "forced_characters": self.forced_characters,
         }
@@ -288,6 +294,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         help="Start at this step (skip earlier ones).")
     parser.add_argument("--resume", type=Path,
                         help="Reuse step outputs from a previous run directory.")
+    parser.add_argument("--stitch-bw-fallback", action="store_true",
+                        help="Stitch missing colorized panels from the original "
+                             "black & white crop (logged and recorded) instead of "
+                             "failing the stitch step.")
     parser.add_argument("--only-panel", action="append", default=[], metavar="PAGE:PANEL",
                         help="Process only the selected panel(s) (repeatable; e.g. "
                              "P003:panel_0006). Pages are matched by exact stem, "
@@ -342,6 +352,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             mock=args.mock,
             resume=args.resume,
             from_step=args.from_step,
+            stitch_bw_fallback=args.stitch_bw_fallback,
             only_panels=tuple(args.only_panel),
             forced_characters=forced_characters,
         )

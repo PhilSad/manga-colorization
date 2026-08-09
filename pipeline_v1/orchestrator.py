@@ -111,6 +111,7 @@ class PipelineRunner:
                 "flux_calls": 0,
                 "successful_flux_calls": 0,
                 "panels_colorized": 0,
+                "panels_bw_fallback": 0,
                 "pages_stitched": 0,
                 "wall_time_s": 0.0,
             },
@@ -245,6 +246,7 @@ class PipelineRunner:
             record = run_stitch_step(ctx, self.config)
             self.manifest_totals_update(ctx, {
                 "pages_stitched": len(record["outputs"]),
+                "panels_bw_fallback": record.get("panels_bw_fallback", 0),
             })
         else:
             raise ValueError(f"unknown step {step!r}")

@@ -2,22 +2,32 @@
 
 Reads the geometry from `1_panels/<page>/panels.json`, the colorized panels
 from `3_colorized/<page>/`, and writes the final pages to `4_stitched/`.
+
+With `--stitch-bw-fallback`, a panel whose colorized output is missing (e.g. a
+FLUX call that errored) is stitched from its original black & white crop
+instead of failing the whole step; every such fallback is logged (stderr) and
+recorded per page (`panels_bw_fallback`) and in the step totals.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from PIL import Image
 
 from config import PipelineConfig
 from detection import PanelBox
-from run_context import RunContext, write_json
+from run_context import RunContext
 from selection import page_selected, panel_selected
 from stitching import stitch_page
 from tqdm import tqdm
 from util import SUPPORTED_IMAGE_SUFFIXES, file_record
+
+
+def _warn(message: str) -> None:
+    print(f"WARNING: {message}", file=sys.stderr, flush=True)
 
 
 def run_stitch_step(
@@ -26,7 +36,13 @@ def run_stitch_step(
     colorized_ext: str | None = None,
 ) -> dict:
     """Run stage 5. `colorized_ext` overrides the panel file extension lookup
-    (defaults to the config's output format)."""
+    (defaults to the config's output format).
+
+    Missing colorized panels: with `config.stitch_bw_fallback` the original
+    crop is pasted instead (B&W, logged + recorded); without it a ValueError is
+    raised, except for un-selected panels of a targeted rerun (`--only-panel`),
+    which always stay B&W silently.
+    """
     panels_root = ctx.step_dir("panels")
     colorized_root = ctx.step_dir("colorize")
     stitched_dir = ctx.step_dir("stitch")
@@ -37,6 +53,7 @@ def run_stitch_step(
         raise ValueError("no panels to stitch; run the 'panels' step first")
 
     outputs: list[dict] = []
+    totals_bw_fallback = 0
     for page_dir in tqdm(
         page_dirs, desc="stitch: pages", unit="page", leave=False
     ):
@@ -50,8 +67,13 @@ def run_stitch_step(
 
         colorized_page_dir = colorized_root / page
         if not colorized_page_dir.is_dir():
-            raise ValueError(
-                f"no colorized panels for {page}; run the 'colorize' step first"
+            if not config.stitch_bw_fallback:
+                raise ValueError(
+                    f"no colorized panels for {page}; run the 'colorize' step first"
+                )
+            _warn(
+                f"no colorized panels for {page}; stitching all panels from "
+                "their original black & white crops (--stitch-bw-fallback)"
             )
 
         source_page = Path(geometry["page_path"])
@@ -59,43 +81,69 @@ def run_stitch_step(
             page_image = page_image.convert("RGB")
             pairs: list[tuple[PanelBox, Image.Image]] = []
             skipped: list[str] = []
+            bw_fallback: list[str] = []
             for detection in geometry["detections"]:
                 crop_name = detection["crop"]
                 colorized_path = _find_colorized(colorized_page_dir, crop_name, extension)
-                if colorized_path is None:
-                    # Targeted rerun: un-selected panels of the page stay B&W
-                    # (only when --only-panel was used); otherwise this is an
-                    # error (missing colorize output).
-                    if config.only_panels and not panel_selected(
-                        page, Path(crop_name).stem, config.only_panels
-                    ):
-                        skipped.append(crop_name)
-                        continue
+                if colorized_path is not None:
+                    with Image.open(colorized_path) as colorized_image:
+                        pairs.append(
+                            (
+                                PanelBox(*detection["box"], detection["confidence"]),
+                                colorized_image.convert("RGB"),
+                            )
+                        )
+                    continue
+                # Targeted rerun: un-selected panels of the page stay B&W
+                # (only when --only-panel was used); otherwise this is a
+                # missing colorize output.
+                if config.only_panels and not panel_selected(
+                    page, Path(crop_name).stem, config.only_panels
+                ):
+                    skipped.append(crop_name)
+                    continue
+                if not config.stitch_bw_fallback:
                     raise ValueError(f"missing colorized panel for {crop_name}")
-                with Image.open(colorized_path) as colorized_image:
+                original_path = page_dir / crop_name
+                if not original_path.is_file():
+                    raise ValueError(
+                        f"missing colorized panel for {crop_name} "
+                        f"(and no original crop at {original_path} to fall back to)"
+                    )
+                _warn(
+                    f"missing colorized panel for {page}/{crop_name}; "
+                    f"stitching the original black & white crop "
+                    f"(--stitch-bw-fallback)"
+                )
+                with Image.open(original_path) as original_image:
                     pairs.append(
                         (
                             PanelBox(*detection["box"], detection["confidence"]),
-                            colorized_image.convert("RGB"),
+                            original_image.convert("RGB"),
                         )
                     )
+                bw_fallback.append(crop_name)
             stitched = stitch_page(page_image, pairs, inset=config.panel_inset)
             output_path = stitched_dir / f"{page}{extension}"
             stitched.save(output_path)
 
+        totals_bw_fallback += len(bw_fallback)
         outputs.append({
             "page": page,
             "input": geometry["page"],
             "output": file_record(output_path),
             "panels_stitched": len(pairs),
             "panels_skipped_black_white": skipped,
+            "panels_bw_fallback": bw_fallback,
         })
-    return {"outputs": outputs}
+    return {"outputs": outputs, "panels_bw_fallback": totals_bw_fallback}
 
 
 def _find_colorized(page_dir: Path, crop_name: str, extension: str) -> Path | None:
     """Colorized file for a crop: same stem, any supported extension, then the
-    exact extension."""
+    exact extension. Returns None when the page has no colorized dir at all."""
+    if not page_dir.is_dir():
+        return None
     stem = Path(crop_name).stem
     candidates = [
         page_dir / f"{stem}{extension}",

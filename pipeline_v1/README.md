@@ -95,7 +95,12 @@ step-distilled model; 20–50 if the server runs the undistilled base),
 paid detection call; repeatable),
 `--workers N` (parallel character-detection worker threads: pages are
 processed concurrently, one page per thread; the per-panel progress bars and
-the `--sleep` throttle are disabled when N > 1).
+the `--sleep` throttle are disabled when N > 1),
+`--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
+FLUX call that errored — is stitched from its original black & white crop
+instead of failing the stitch step; each fallback is logged to stderr and
+recorded in the step record as `panels_bw_fallback` and in the manifest
+`totals.panels_bw_fallback`).
 
 ## Output layout
 

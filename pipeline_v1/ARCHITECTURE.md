@@ -32,9 +32,10 @@ pipeline_v1/
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
-├── evaluate.py           # V1.1 evaluation: auto-scored detection + human color review (task 0001)
-├── evaluation/v1_1_cases.json  # fixed failure set (task 0001)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
+├── evaluation/v1_1_cases.json  # fixed failure set (task 0001), run by the integration suite
+├── verify_color.py       # real gpt-5.6-luna validators (L2R + palette adherence) used by the integration suite
+├── tests/                # offline unit tests + real-network integration suite (-m integration)
 ├── output/<ts>/          # per-run artifacts (gitignored)
 │   ├── 1_panels/         # crops + panels.json (boxes + reading order + provenance) + overlay
 │   ├── 2_characters/     # per-panel detection JSONs (source: page|fallback|forced) + summary

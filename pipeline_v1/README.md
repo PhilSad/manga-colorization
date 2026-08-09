@@ -129,29 +129,13 @@ recorded per call.
   Eisen) must come out with distinct canonical palettes left to right
   (green/blue/white-pink/yellow) instead of the uniform blue wash seen in
   `output/20260809-091129/`.
-- `evaluate.py --run <run_dir>` — auto-scores detection cases (set
-  comparison, exact TP/FP/FN) and writes `<run>/evaluation/color_review.md`
-  with each generated COL-* image, the fixture's expected output, and
-  `Pending user review` checkboxes. With `--verify`, COL-004 (palette
-  geography) is instead **resolved automatically**: the evaluator asks an
-  OpenRouter VLM — `openai/gpt-5.6-luna` — whether the left-to-right
-  hair-color assignment of the generated panel is true (green Heiter / blue
-  Himmel / white-pink Frieren / yellow Eisen), sending the colorized panel
-  plus the monochrome crop. The verdict, per-position observations, prompt
-  and `usage.cost` are recorded in `report.json` and rendered in
-  `color_review.md`; COL-001..003 (no `left_to_right` expectation) always
-  stay human-review.
-
-  ```bash
-  .venv/bin/python pipeline_v1/evaluate.py --run <run_dir> --verify
-  ```
-
 - **Integration suite** (`pytest -m integration`, excluded from plain
-  pytest): stage-isolated, **no mocks, real API calls**, one timestamped
-  output dir per session under `tests/output/YYYYMMDD-HHMMSS/` with a
-  manifest of per-case records and measured `usage.cost`. Inputs are
-  committed under `tests/data/` (pre-cropped panels + the one layout page;
-  regenerate with `tests/prepare_integration_data.py`):
+  pytest) — the evaluation of `v1_1_cases.json`: stage-isolated, **no mocks,
+  real API calls**, one timestamped output dir per session under
+  `tests/output/YYYYMMDD-HHMMSS/` with a manifest of per-case records and
+  measured `usage.cost`. Inputs are committed under `tests/data/`
+  (pre-cropped panels + the one layout page; regenerate with
+  `tests/prepare_integration_data.py`):
 
   - `test_integration_detection.py` (DET-001..004, OOV-001): the committed
     crop -> real OpenRouter `google/gemma-4-31b-it` panel detection ->
@@ -236,8 +220,10 @@ with annotated debug views):
 ### V1.1 (epic 002, tasks 0001–0004; runs 2026-08-09, seed 1337)
 
 - **Fixed failure set:** [`evaluation/v1_1_cases.json`](evaluation/v1_1_cases.json)
-  + `evaluate.py` — auto-scored detection (exact TP/FP/FN, set comparison) and
-  human-review `evaluation/color_review.md` (no automated color verdict).
+  + the real-network integration suite (`pytest -m integration`) — no mocks,
+  one timestamped run per session in `tests/output/`; the retired
+  `evaluate.py` CLI (auto-scored detection + human `color_review.md`) was
+  replaced by it.
 - **Detection (page-level):** precision 1.0 / recall 0.78 on the fixed set
   (V1: 0.17 / 0.11); Heiter/Sein confusion fixed; one hero-party member still
   missed in the flashback panels; OOV-001 (Clematis) still fails.

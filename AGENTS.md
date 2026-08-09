@@ -204,10 +204,15 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   OpenRouter tier; recorded in `2_characters/` and the manifest
   `totals.openrouter_cost_usd`); colorization $0 per call (self-hosted FLUX on
   Spark, electricity only).
-- Evaluation: `pipeline_v1/evaluate.py --run <run_dir>` auto-scores the fixed
-  detection cases (`evaluation/v1_1_cases.json`, exact TP/FP/FN) and writes a
-  human-review color report (`evaluation/color_review.md`, no automated color
-  verdict). Quality write-ups, run tables, and remaining known failures live in
+- Evaluation: the fixed failure set (`evaluation/v1_1_cases.json`) is run by
+  the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration` —
+  no mocks: real OpenRouter gemma panel detection (DET/OOV), real FLUX on
+  Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY). Inputs
+  are committed under `tests/data/` (regenerate with
+  `tests/prepare_integration_data.py`); each session writes a timestamped
+  `tests/output/YYYYMMDD-HHMMSS/` dir with per-case records and measured
+  `usage.cost`. Known-failing cases fail loudly (tracked, not xfailed).
+  Quality write-ups, run tables, and remaining known failures live in
   `pipelines.md`; debug views are in `docs/pipeline_v1/`.
 
 # Contribution guide

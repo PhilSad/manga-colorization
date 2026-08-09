@@ -129,9 +129,11 @@ V1.1 (epic 002, tasks 0001–0004) targets the V1 failures: character confusion
 adherence (Frieren's magenta hair), the p006 zero-panel page, and the oversized
 spread. It adds a fixed evaluation contract
 ([`pipeline_v1/evaluation/v1_1_cases.json`](pipeline_v1/evaluation/v1_1_cases.json))
-and [`pipeline_v1/evaluate.py`](pipeline_v1/evaluate.py) that auto-scores
-detection and produces a human-review color report. All V1.1 runs used a fixed
-seed (`1337`); V1 used the default (random) seed.
+and the real-network **integration suite** (`pytest pipeline_v1/tests -m integration`,
+no mocks) that runs the fixed set live against the real backends; the earlier
+`evaluate.py` CLI (auto-scored detection + human `color_review.md`) has been
+retired in its favour. All V1.1 runs used a fixed seed
+(`1337`); V1 used the default (random) seed.
 
 Changed settings vs V1: **per-page character detection** (one paid call per
 page + cropped fallbacks) instead of one call per panel; **explicit canonical
@@ -229,17 +231,48 @@ regression is a user judgement pending on these two images.
 - FLUX stays $0/call (self-hosted); wall time for the 5-page run dropped from
   358 s to 276.6 s **while colorizing one more panel** (p006 fallback).
 
+### Integration-suite evaluation (2026-08-09, live backends, seed 1337)
+
+The evaluation of `evaluation/v1_1_cases.json` now runs as stage-isolated
+real-network pytest (`-m integration`): committed pre-cropped panels in
+`pipeline_v1/tests/data/`, real gemma-4-31b-it detection, real FLUX on Spark +
+real gpt-5.6-luna validation, real YOLO; one timestamped run per session in
+`pipeline_v1/tests/output/`. Findings (measured `usage.cost` ≈ $0.0022/session):
+
+- **Detection (panel-only mode): 1/5 pass.** DET-003 (Heiter close-up) passes;
+  DET-001 reproduces the exact V1 baseline `{Fern, Stark}` (flashback cast),
+  DET-002 collapses to `{Fern, Heiter, Eisen}` (missing Himmel), DET-004
+  misses Heiter, and OOV-001 forces Clematis to **Denken** (not reported
+  unknown). Panel-only mode cannot meet the fixture's expectations for the
+  flashback-era cases — the V1.1 page-level mode is why those were fixed
+  before; the integration suite keeps the crop-only contract and tracks the
+  failures.
+- **Color: 3/5 pass, with a confirmed real defect.** COL-003 (Heiter) passes.
+  **COL-004 passes** — the live left-to-right palette is true at seed 1337
+  (green / blue / pale white-lavender / golden yellow-brown), i.e. the V1.2
+  palette-geography failure from run 20260809-091129 is gone with the current
+  atlas + palette conditioning. COL-001 and COL-002 (Frieren, two crops) fail
+  consistently: the hair renders **lavender-purple (forbidden)** instead of
+  silver-white, eyes and white/gold outfit correct — confirmed by the real
+  VLM, no longer "pending user review".
+- **Layout 2/2, size 1/1:** LAY-001 full-page fallback (box 0,0,1500,2250),
+  LAY-002 blank-page skip, SIZE-001 request capped 2895×2250 → 1600×1248.
+
 ### Remaining known failures (honest)
 
-1. OOV-001: Clematis forced to a known character (Wirbel) — unknown-identity
-   handling needs a stronger prompt or a "refuse to guess" constraint.
-2. DET-001/002: one hero-party member still missed per panel (era
-   under-detection in flashback crops).
-3. Color pass/fail for COL-001..003 is **unreviewed** — the reports are
-   written, the user must look at the images.
+1. OOV-001: Clematis forced to a known character (Denken in panel mode, Wirbel
+   in page mode) — unknown-identity handling needs a "refuse to guess"
+   constraint; the test asserts it and fails on purpose.
+2. DET-001/002/004: crop-only panel detection cannot resolve the flashback-era
+   confusion (present-day cast, multi-character collapse, missed Heiter); the
+   page-level mode that fixed DET-002 in V1.1 is outside the crop-only
+   integration contract.
+3. COL-001/002: Frieren's hair renders lavender-purple instead of the required
+   silver-white — a consistent palette-adherence defect confirmed by the real
+   VLM; candidate for the next colorization fix (V1.2).
 4. Task 0005 (page-batched verification + bounded retries) is **gated**: it is
    implemented only if explicit palette conditioning still leaves material
-   color-adherence failures after human review of the COL cases.
+   color-adherence failures after the integration-suite verdicts above.
 
 Debug views (bbox + reading order + detected characters on the colorized
 stitched page):

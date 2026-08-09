@@ -60,6 +60,7 @@ class PipelineConfig:
     max_tokens: int = 1024
     temperature: float = 0.2
     sleep_s: float = 1.0
+    workers: int = 1               # parallel character-detection threads (1 = sequential)
     api_key_env: str = "OPENROUTER_API_KEY"
     # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
     # V1 per-panel behaviour; or per-panel calls that send the full page as
@@ -120,6 +121,7 @@ class PipelineConfig:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "sleep_s": self.sleep_s,
+            "workers": self.workers,
             "api_key_env": self.api_key_env,
             "detection_mode": self.detection_mode,
             "vlm_panel_page_prompt_file": str(self.vlm_panel_page_prompt_file),
@@ -169,6 +171,8 @@ def parse_steps(value: str | None) -> tuple[str, ...]:
 def _validate(config: PipelineConfig) -> None:
     if config.skip_first < 0:
         raise ValueError("--skip-first must be non-negative")
+    if config.workers < 1:
+        raise ValueError("--workers must be at least 1")
     if config.limit is not None and config.limit < 1:
         raise ValueError("--limit must be at least 1")
     if config.flux_steps < 1:
@@ -249,7 +253,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--sleep", type=float, default=1.0,
                         help="Seconds between OpenRouter calls (rate-limit backoff "
-                             "is handled by the client).")
+                             "is handled by the client; ignored when --workers > 1).")
+    parser.add_argument("--workers", type=int, default=1,
+                        help="Parallel character-detection worker threads "
+                             "(1 = sequential; pages are processed concurrently).")
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--atlas-columns", type=int,
                         help="Atlas grid columns (default: ceil(sqrt(n))).")
@@ -312,6 +319,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             sleep_s=args.sleep,
+            workers=args.workers,
             api_key_env=args.api_key_env,
             detection_mode=args.detection_mode,
             cast_key=args.cast_key,

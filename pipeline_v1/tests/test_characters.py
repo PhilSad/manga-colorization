@@ -890,6 +890,45 @@ def test_characters_step_panel_page_mode(tmp_path):
     assert p2["source"] == "fallback"
 
 
+def test_characters_step_threaded_matches_sequential(tmp_path):
+    """`--workers N` parallelizes pages but produces identical totals and
+    per-panel records (page-scoped writes never race)."""
+    from mock_backends import MockPageCharacterDetector
+    from run_context import RunContext
+    from steps.characters import run_characters_step
+
+    panel_map_by_page = {
+        "0134-004": {"panel_0001": (["Frieren"], False)},
+        "0134-005": {"panel_0001": ([], True)},
+    }
+
+    def run(workers: int) -> dict:
+        config = make_step_fixture(tmp_path / f"w{workers}")
+        config.detection_mode = "panel-page"
+        config.workers = workers
+        ctx = RunContext.create(tmp_path / f"output{workers}", {"status": "running"})
+        for page_stem, panel_map in panel_map_by_page.items():
+            panels_root = ctx.step_dir("panels") / page_stem
+            panels_root.mkdir(parents=True)
+            for name in ("panel_0001.png", "panel_0002.png"):
+                Image.new("RGB", (16, 16), "white").save(panels_root / name)
+            (panels_root / "panels.json").write_text(json.dumps({
+                "page_path": str(tmp_path / f"{page_stem}.png"), "detections": [],
+            }), encoding="utf-8")
+        detector = MockPageCharacterDetector(panel_map_by_page)
+        return run_characters_step(ctx, config, detector)
+
+    seq = run(1)
+    thr = run(4)
+    assert seq["totals"] == thr["totals"]
+    seq_panels = {(r["page"], r["panel"], r["source"]): r["characters"]
+                  for r in seq["records"]}
+    thr_panels = {(r["page"], r["panel"], r["source"]): r["characters"]
+                  for r in thr["records"]}
+    assert seq_panels == thr_panels
+    assert len(thr_panels) == 4
+
+
 def test_characters_step_page_mode(tmp_path):
     """Page-level step: one paid call per page covering its panels."""
     from mock_backends import MockPageCharacterDetector

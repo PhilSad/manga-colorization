@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from config import PipelineConfig
@@ -55,8 +56,17 @@ def run_characters_step(
     config: PipelineConfig,
     detector,  # CharacterDetector | PageCharacterDetector
 ) -> dict:
-    """Run stage 3 for all panels extracted by stage 1+2."""
-    from characters import forced_record
+    """Run stage 3 for all panels extracted by stage 1+2.
+
+    Pages are independent units of work: with `--workers N`
+    (config.workers) they are processed concurrently by a
+    ThreadPoolExecutor. Every per-page write goes to its own
+    `2_characters/<page>/` directory, so worker threads never race on the
+    same files; per-page results/totals are merged back in the main thread
+    as futures complete. workers=1 keeps the original sequential
+    behaviour, including per-panel progress bars and the `--sleep` page
+    throttle (ignored when workers > 1).
+    """
     from profiles import load_profiles
 
     panels_root = ctx.step_dir("panels")
@@ -72,88 +82,141 @@ def run_characters_step(
     except (OSError, ValueError):
         profiles = {}
 
-    characters_dir = ctx.step_dir("characters")
     records: list[dict] = []
     totals = _new_totals()
-    for page_dir in tqdm(
-        page_dirs, desc="characters: pages", unit="page", leave=False
-    ):
-        page = page_dir.name
-        if config.only_panels and not page_selected(page, config.only_panels):
-            continue
-        all_panels = _panel_images(page_dir)
-        if config.only_panels:
-            panels = [
-                p for p in all_panels
-                if panel_selected(page, p.stem, config.only_panels)
-            ]
+
+    pages_bar = tqdm(
+        total=len(page_dirs), desc="characters: pages", unit="page",
+        leave=False,
+    )
+    try:
+        if config.workers <= 1:
+            for page_dir in page_dirs:
+                page_records, page_totals, worked = _process_page(
+                    ctx, config, detector, page_dir, profiles
+                )
+                records.extend(page_records)
+                _merge_totals(totals, page_totals)
+                if config.sleep_s and worked:
+                    time.sleep(config.sleep_s)
+                pages_bar.update(1)
         else:
-            panels = all_panels
-        if not panels:
-            continue
+            with ThreadPoolExecutor(
+                max_workers=config.workers, thread_name_prefix="characters"
+            ) as pool:
+                futures = {
+                    pool.submit(
+                        _process_page, ctx, config, detector, page_dir, profiles
+                    ): page_dir
+                    for page_dir in page_dirs
+                }
+                for future in as_completed(futures):
+                    page_records, page_totals, _ = future.result()
+                    records.extend(page_records)
+                    _merge_totals(totals, page_totals)
+                    pages_bar.update(1)
+    finally:
+        pages_bar.close()
 
-        out_page_dir = characters_dir / page
-        out_page_dir.mkdir(parents=True, exist_ok=True)
-
-        forced: dict[str, list[str]] = {}
-        needed: list[Path] = []
-        for panel_path in panels:
-            names = forced_names_for(
-                config.forced_characters, page, panel_path.stem
-            )
-            if names is not None:
-                forced[panel_path.stem] = names
-            else:
-                needed.append(panel_path)
-
-        page_capable = config.detection_mode == "page" and hasattr(
-            detector, "detect_page"
-        )
-        panel_page_capable = config.detection_mode == "panel-page" and hasattr(
-            detector, "detect_panels_with_page"
-        )
-        if page_capable and needed:
-            docs, page_totals = _detect_page(
-                ctx, config, detector, page, page_dir, needed, out_page_dir
-            )
-            _merge_totals(totals, page_totals)
-            records.extend(docs)
-        elif panel_page_capable and needed:
-            docs, page_totals = _detect_page(
-                ctx, config, detector, page, page_dir, needed, out_page_dir,
-                method="detect_panels_with_page",
-                provenance="panel_page_calls.json",
-                label="panel+page",
-            )
-            _merge_totals(totals, page_totals)
-            records.extend(docs)
-        elif needed:
-            for panel_path in tqdm(
-                needed,
-                desc=f"characters: {page} (panel mode)",
-                unit="panel", leave=False,
-            ):
-                record = detector.detect(panel_path, config.refs_dir)
-                doc = record.to_dict(panel_path, page=page)
-                write_json(out_page_dir / f"{panel_path.stem}.json", doc)
-                records.append(doc)
-                _count_record(totals, record)
-
-        for stem, names in forced.items():
-            panel_path = _find_panel(page_dir, stem)
-            if panel_path is None:
-                continue
-            record = forced_record(panel_path, names, profiles=profiles)
-            doc = record.to_dict(panel_path, page=page)
-            write_json(out_page_dir / f"{stem}.json", doc)
-            records.append(doc)
-            totals["forced_panels"] += 1
-
-        if config.sleep_s and (needed or forced):
-            time.sleep(config.sleep_s)
-
-    write_json(characters_dir / "summary.json", {"records": records, "totals": totals})
+    write_json(
+        ctx.step_dir("characters") / "summary.json",
+        {"records": records, "totals": totals},
+    )
     return {"records": records, "totals": totals}
+
+
+def _process_page(
+    ctx: RunContext,
+    config: PipelineConfig,
+    detector,  # CharacterDetector | PageCharacterDetector
+    page_dir: Path,
+    profiles: dict,
+) -> tuple[list[dict], dict, bool]:
+    """Full per-page detection work: API calls, forced panels, JSON writes.
+
+    Safe to run from worker threads — every write goes to the page-specific
+    `2_characters/<page>/` directory. Returns (page records, page totals
+    delta, worked); `worked` is True when the page had panels to process
+    (used by the sequential-mode `--sleep` throttle).
+    """
+    from characters import forced_record
+
+    page = page_dir.name
+    page_totals = _new_totals()
+    docs: list[dict] = []
+    if config.only_panels and not page_selected(page, config.only_panels):
+        return docs, page_totals, False
+    all_panels = _panel_images(page_dir)
+    if config.only_panels:
+        panels = [
+            p for p in all_panels
+            if panel_selected(page, p.stem, config.only_panels)
+        ]
+    else:
+        panels = all_panels
+    if not panels:
+        return docs, page_totals, False
+
+    out_page_dir = ctx.step_dir("characters") / page
+    out_page_dir.mkdir(parents=True, exist_ok=True)
+
+    forced: dict[str, list[str]] = {}
+    needed: list[Path] = []
+    for panel_path in panels:
+        names = forced_names_for(
+            config.forced_characters, page, panel_path.stem
+        )
+        if names is not None:
+            forced[panel_path.stem] = names
+        else:
+            needed.append(panel_path)
+    worked = bool(needed or forced)
+
+    threaded = config.workers > 1
+    page_capable = config.detection_mode == "page" and hasattr(
+        detector, "detect_page"
+    )
+    panel_page_capable = config.detection_mode == "panel-page" and hasattr(
+        detector, "detect_panels_with_page"
+    )
+    if page_capable and needed:
+        page_docs, page_det_totals = _detect_page(
+            ctx, config, detector, page, page_dir, needed, out_page_dir
+        )
+        _merge_totals(page_totals, page_det_totals)
+        docs.extend(page_docs)
+    elif panel_page_capable and needed:
+        page_docs, page_det_totals = _detect_page(
+            ctx, config, detector, page, page_dir, needed, out_page_dir,
+            method="detect_panels_with_page",
+            provenance="panel_page_calls.json",
+            label="panel+page",
+        )
+        _merge_totals(page_totals, page_det_totals)
+        docs.extend(page_docs)
+    elif needed:
+        for panel_path in tqdm(
+            needed,
+            desc=f"characters: {page} (panel mode)",
+            unit="panel", leave=False, disable=threaded,
+        ):
+            record = detector.detect(panel_path, config.refs_dir)
+            doc = record.to_dict(panel_path, page=page)
+            write_json(out_page_dir / f"{panel_path.stem}.json", doc)
+            docs.append(doc)
+            _count_record(page_totals, record)
+
+    for stem, names in forced.items():
+        panel_path = _find_panel(page_dir, stem)
+        if panel_path is None:
+            continue
+        record = forced_record(panel_path, names, profiles=profiles)
+        doc = record.to_dict(panel_path, page=page)
+        write_json(out_page_dir / f"{stem}.json", doc)
+        docs.append(doc)
+        page_totals["forced_panels"] += 1
+
+    return docs, page_totals, worked
 
 
 def _detect_page(

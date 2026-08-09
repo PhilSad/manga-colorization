@@ -74,6 +74,7 @@ def build_backends(config):
         profiles_file=config.profiles_file,
         chapter_casts_file=config.chapter_casts_file,
         cast_key=config.cast_key,
+        workers=config.workers,
     )
     if not config.vlm_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")

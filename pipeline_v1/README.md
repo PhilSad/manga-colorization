@@ -92,7 +92,10 @@ step-distilled model; 20–50 if the server runs the undistilled base),
 `--max-megapixels 2.0` (FLUX request cap),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),
 `--force-characters P003:panel_0006=Frieren` (ground-truth identities, no
-paid detection call; repeatable).
+paid detection call; repeatable),
+`--workers N` (parallel character-detection worker threads: pages are
+processed concurrently, one page per thread; the per-panel progress bars and
+the `--sleep` throttle are disabled when N > 1).
 
 ## Output layout
 

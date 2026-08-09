@@ -300,6 +300,7 @@ class OpenRouterCharacterDetector:
         profiles_file: Path | None = None,
         chapter_casts_file: Path | None = None,
         cast_key: str | None = None,
+        workers: int = 1,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -318,6 +319,7 @@ class OpenRouterCharacterDetector:
         self.profiles_file = Path(profiles_file) if profiles_file else None
         self.chapter_casts_file = Path(chapter_casts_file) if chapter_casts_file else None
         self.cast_key = cast_key
+        self.workers = workers
         self.canonical: list[str] = []
         self.profiles: dict = {}
         self.prompt: str = ""
@@ -567,7 +569,7 @@ class OpenRouterCharacterDetector:
         for panel_key in tqdm(
             expected_panels,
             desc=f"characters: {page.stem} (panel-page)",
-            unit="panel", leave=False,
+            unit="panel", leave=False, disable=self.workers > 1,
         ):
             panel = _find_panel_file(panels_dir, panel_key)
             if panel is None:

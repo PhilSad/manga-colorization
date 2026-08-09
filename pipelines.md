@@ -341,6 +341,33 @@ Findings:
   guessed on p130). luna remains the fallback candidate (34/44) if gemma
   regresses.
 
+**panel-page-cast follow-up** (2026-08-09, gemma only, 4 reps, records in
+`pipeline_v1/tests/output/20260809-222825/`): the new auto-cast mode scores
+**39/44 (89%)** — one point above plain panel-page, and it directly kills the
+Flamme failure from run 20260809-091129: DET-008 and DET-010 (p130 panels 4
+and 6, where that run answered `Flamme`) go from 3/4 to **4/4** because
+ch. 5's shortlist (Frieren, Fern, Himmel, Eisen, Heiter) excludes Flamme.
+No Flamme/Serie/Aura/Denken appears in any rep; the only remaining miss on
+p130 is one DET-007 rep read as Fern. OOV-001 stays unsolved — with the
+c134 shortlist (Stark, Frieren, Fern) the model now forces **Stark** instead
+of Denken/Wirbel, i.e. casting channels the guess into the shortlist's
+closest member; the unknown-identity contract is untouched by casting.
+
+| Case | expected | panel-page·gemma | panel-page-cast·gemma |
+|---|---|---|---|
+| DET-001 | Frieren, Himmel | 4/4 | 4/4 |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | 4/4 | 4/4 |
+| DET-003 | Heiter | 4/4 | 4/4 |
+| DET-004 | Frieren, Heiter | 4/4 | 4/4 |
+| OOV-001 | — | 0/4 | 0/4 |
+| DET-005 | — | 4/4 | 4/4 |
+| DET-006 | Frieren | 4/4 | 4/4 |
+| DET-007 | Frieren | 4/4 | 3/4 |
+| DET-008 | Frieren, Fern | 3/4 | 4/4 |
+| DET-009 | Frieren, Fern | 4/4 | 4/4 |
+| DET-010 | Frieren | 3/4 | 4/4 |
+| **Total** | | **38/44** | **39/44** |
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run

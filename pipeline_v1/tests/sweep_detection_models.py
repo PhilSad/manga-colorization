@@ -9,11 +9,15 @@ stability. Reports per-case pass counts, modal (most frequent) detections,
 aggregate precision/recall, fallback rates, cost, and latency.
 
 Modes (mirror pipeline_v1 `--detection-mode`):
-  - panel:       V1, one call per panel, the committed crop alone
-  - page:        V1.1, one call per page (numbered panels), per-panel
-                 cropped fallbacks for missing/uncertain/unknown entries
-  - panel-page:  V1.2, one call per panel: full page (target highlighted)
-                 as context + the crop, same cropped fallbacks
+  - panel:            V1, one call per panel, the committed crop alone
+  - page:             V1.1, one call per page (numbered panels), per-panel
+                      cropped fallbacks for missing/uncertain/unknown entries
+  - panel-page:       V1.2, one call per panel: full page (target highlighted)
+                      as context + the crop, same cropped fallbacks
+  - panel-page-cast:  V1.2 with an automatically derived per-chapter cast
+                      shortlist (cast_key_for_page: chapter_page_map.json ->
+                      filename tag -> NNN- prefix), mirroring the pipeline's
+                      `--detection-mode panel-page-cast`
 
 Output goes to `tests/output/YYYYMMDD-HHMMSS/` (gitignored, same convention
 as integration sessions):
@@ -72,10 +76,12 @@ from test_integration_detection import DETECTION_CASES  # noqa: E402
 from util import sha256  # noqa: E402
 
 DEFAULT_MODELS = ["google/gemma-4-31b-it", "openai/gpt-5.6-luna"]
-DEFAULT_MODES = ["panel", "page", "panel-page"]
+DEFAULT_MODES = ["panel", "page", "panel-page", "panel-page-cast"]
 DEFAULT_REPS = 4
 OUTPUT_ROOT = TESTS_DIR / "output"
 PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
+CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
+CHAPTER_PAGE_MAP_FILE = PIPELINE_DIR.parent / "frieren_wiki_dataset" / "chapter_page_map.json"
 
 
 def eval_case(case: dict, record) -> dict:
@@ -161,7 +167,8 @@ def main() -> int:
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS),
                         help="comma-separated OpenRouter model ids")
     parser.add_argument("--modes", default=",".join(DEFAULT_MODES),
-                        help="comma-separated modes: panel,page,panel-page")
+                        help="comma-separated modes: panel,page,panel-page,"
+                             "panel-page-cast")
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
     parser.add_argument("--output-dir", default=None,
                         help="explicit output dir (default: timestamped)")
@@ -223,7 +230,10 @@ def main() -> int:
         for model in models:
             print(f"\n== mode={mode} model={model} "
                   f"({args.reps} reps x {len(cases)} cases)", flush=True)
-            detector = OpenRouterCharacterDetector(model=model, api_key=api_key)
+            detector = OpenRouterCharacterDetector(
+                model=model, api_key=api_key,
+                chapter_casts_file=CHAPTER_CASTS_FILE,
+            )
             detector.prepare(
                 REFS_DIR,
                 prompt_file=PAGE_PROMPT_FILE,
@@ -231,7 +241,8 @@ def main() -> int:
                 panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
             )
             method = ("detect_page" if mode == "page"
-                      else "detect_panels_with_page" if mode == "panel-page"
+                      else "detect_panels_with_page"
+                      if mode in ("panel-page", "panel-page-cast")
                       else "detect")
             rows: list[dict] = []
             page_totals: dict[str, dict] = {}
@@ -276,9 +287,24 @@ def main() -> int:
                             (page_dir / "panels.json").read_text(encoding="utf-8")
                         )
                         expected = panel_keys_for(len(geometry["detections"]))
-                        page_record = getattr(detector, method)(
-                            page_path, page_dir, expected, REFS_DIR
-                        )
+                        cast_key = None
+                        if mode == "panel-page-cast":
+                            from characters import cast_key_for_page
+
+                            cast_key = cast_key_for_page(
+                                page_path, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
+                            )
+                            if hasattr(detector, "set_cast"):
+                                detector.set_cast(cast_key)
+                        if cast_key is not None:
+                            page_record = getattr(detector, method)(
+                                page_path, page_dir, expected, REFS_DIR,
+                                cast_key=cast_key,
+                            )
+                        else:
+                            page_record = getattr(detector, method)(
+                                page_path, page_dir, expected, REFS_DIR
+                            )
                         pt = page_totals.setdefault(alias, {
                             "page_calls": 0, "fallback_calls": 0,
                             "cost_usd": 0.0, "latency_s": 0.0,
@@ -314,6 +340,7 @@ def main() -> int:
                                 "status": record.status, "source": record.source,
                                 "page_parse_ok": page_record.page_parse_ok,
                                 "fallback": record.source == "fallback",
+                                "cast_key": cast_key,
                                 **verdict,
                                 "cost_usd": round(cost, 8) if cost is not None else None,
                                 "cost_source": (record.cost_source if mode == "panel-page"

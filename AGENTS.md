@@ -227,6 +227,46 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   `usage.cost`. Known-failing cases fail loudly (tracked, not xfailed).
   Quality write-ups, run tables, and remaining known failures live in
   `pipelines.md`; debug views are in `docs/pipeline_v1/`.
+- Adding an evaluation case (the DET-005..010 procedure):
+  1. **Confirm the page layout first.** Panel IDs (`panel_0001`, …) refer to
+     the crops produced by the real reading-order extraction (YOLO26n +
+     `panel_ordering.reading_order`), not to positions on the page. Run the
+     detector once (`.venv/bin/python -c …` with `YoloPanelDetector` +
+     `reading_order`) to confirm the panel count/order before writing the
+     fixture entry. A multi-panel page becomes one case per panel (e.g. six
+     cases DET-005..010 for p130), each with its own expected set and crop.
+  2. **Add the case to `pipeline_v1/evaluation/v1_1_cases.json`:** a durable
+     source-page alias (`"P130": "data/page_per_volume/…"`) if the page is
+     not aliased yet; then the case with `id` (sequential per stage, e.g.
+     DET-005), `stage` (`characters` | `color` | `layout` | `size`), `failure`
+     (reuse the taxonomy: `known-character-confusion`, `no-character-panel`,
+     `out-of-vocabulary`, `palette-adherence`, `palette-geography`,
+     `zero-panel-fallback`, `blank-page-skip`, `oversized-input-capping`, …),
+     `input` (`source_page` + `panel`), `expected` (character set,
+     `unknown_present`, and `expected_unknown_characters` for OOV), `baseline`
+     (the **observed** prior-run detection, e.g. from
+     `output/<run>/2_characters/<page>/<panel>.json` — never fabricate
+     results), and a `note` citing the observed failure and run id. Update the
+     fixture `description` when a new case class is added.
+  3. **Regenerate the committed crops:**
+     `.venv/bin/python pipeline_v1/tests/prepare_integration_data.py` creates
+     `tests/data/panels/<case_id>.png` from the durable page and rewrites the
+     `tests/data/README.md` provenance. Then check `git status` that all
+     pre-existing crops stayed byte-identical — if any changed, detection is
+     no longer deterministic on those pages and the fixture's panel IDs may
+     no longer match the committed crops.
+  4. **Wire the case into the integration suite:** add its id to the stage's
+     case list in `pipeline_v1/tests/test_integration_<stage>.py` (e.g.
+     `DETECTION_CASES` in `test_integration_detection.py`) and update the
+     module docstring.
+  5. **Document and sanity-check:** note the case and its observed failure in
+     `pipelines.md` — a newly added case gets a "pending next live run" note,
+     never fabricated numbers; keep the fixture valid JSON with all crops
+     present; `.venv/bin/pytest pipeline_v1/tests -q` (offline) must stay
+     green. Run the live stage test (`-m integration`) only when backends are
+     available and the paid OpenRouter cost is acceptable.
+  6. **Commit** with a meaningful title/description (see the contribution
+     guide below).
 
 # Contribution guide
 

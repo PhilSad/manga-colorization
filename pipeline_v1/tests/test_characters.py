@@ -964,3 +964,157 @@ def test_characters_step_page_mode(tmp_path):
     p2 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0002.json")
     assert p1["source"] == "page" and p1["characters"] == ["Frieren"]
     assert p2["source"] == "fallback"
+
+
+# ---------------------------------------------------------------------------
+# panel-page-cast: automatic per-chapter cast shortlist
+
+CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
+CHAPTER_PAGE_MAP_FILE = PIPELINE_DIR.parent / "frieren_wiki_dataset" / "chapter_page_map.json"
+
+
+def test_cast_key_for_page_filename_tag(tmp_path):
+    """Correctly-tagged volume page: map + tag agree on c005 (ch. 5, p130)."""
+    from characters import cast_key_for_page
+
+    page = tmp_path / ("Frieren - Beyond Journey's End v01 (2021) (Digital) "
+                       "(1r0n) (f2)") / ("Frieren - Beyond Journey's End - c005 "
+                       "(v01) - p130 [VIZ Media] [Digital] [1r0n].png")
+    key = cast_key_for_page(page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE)
+    assert key == "c005"
+
+
+def test_cast_key_for_page_v09_mislabeled_uses_map(tmp_path):
+    """v09 filenames say c078 everywhere but p130 belongs to ch. 85; the
+    chapter_page_map must win over the misleading tag."""
+    from characters import cast_key_for_page
+
+    page = tmp_path / ("Frieren - Beyond Journey's End v09 (2023) (Digital) "
+                       "(1r0n)") / ("Frieren - Beyond Journey's End - c078 "
+                       "(v09) - p130 [VIZ Media] [Digital] [1r0n].png")
+    key = cast_key_for_page(page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE)
+    assert key == "c085"
+
+
+def test_cast_key_for_page_chapter_134_prefix(tmp_path):
+    """data/chapter_134/0134-004.png has no volume dir or c-tag: the leading
+    `NNN-` prefix must yield c134."""
+    from characters import cast_key_for_page
+
+    page = tmp_path / "0134-004.png"
+    key = cast_key_for_page(page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE)
+    assert key == "c134"
+
+
+def test_cast_key_for_page_none(tmp_path):
+    """Pages outside any chapter (padding/preview) get no cast -> full roster."""
+    from characters import cast_key_for_page
+
+    assert cast_key_for_page(tmp_path / "cover.jpg",
+                             CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE) is None
+    assert cast_key_for_page(tmp_path / "unrelated.png",
+                             CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE) is None
+
+
+def test_cast_key_for_page_missing_cast_falls_back_to_roster(tmp_path):
+    """A derived chapter whose shortlist is absent from the casts file must
+    return None (full roster), not an invalid key."""
+    from characters import cast_key_for_page
+
+    casts = tmp_path / "casts.json"
+    casts.write_text(json.dumps({"casts": {"c001": {"characters": ["Frieren"]}}}),
+                     encoding="utf-8")
+    page = tmp_path / ("Frieren - Beyond Journey's End - c005 (v01) - "
+                       "p130 [VIZ Media] [Digital] [1r0n].png")
+    assert cast_key_for_page(page, casts, CHAPTER_PAGE_MAP_FILE) is None
+
+
+def test_set_cast_rebuilds_prompts(tmp_path):
+    """set_cast switches the cast shortlist in all prompts without re-reading
+    templates; the roster section stays, the cast section changes."""
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([]),
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+    )
+    assert "limited to: Frieren, Fern" not in detector.panel_page_prompt
+    detector.set_cast("c005")
+    assert "limited to: Frieren, Fern" in detector.panel_page_prompt
+    assert "Flamme" not in detector.panel_page_prompt  # not in ch. 5's cast
+    assert "Flamme" not in detector.panel_prompt
+    detector.set_cast(None)  # back to the full roster
+    assert "limited to:" not in detector.panel_page_prompt
+
+
+def test_detect_panels_with_page_cast_key_renders_prompt(tmp_path):
+    """detect_panels_with_page(cast_key=...) renders the panel-page prompt for
+    that cast per call (thread-safe) — the shortlist sentence appears in the
+    text content."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+
+    def answer():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([answer]),
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+    )
+    detector.detect_panels_with_page(
+        page_path, page_dir, ["panel_0001"], make_refs(tmp_path),
+        cast_key="c005",
+    )
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    text = content[0]["text"]
+    assert "limited to: Frieren, Fern" in text
+    assert "Flamme" not in text.split("{characters}")[0]
+
+
+def test_characters_step_panel_page_cast_mode(tmp_path):
+    """panel-page-cast step: per-page auto cast derived from the page (the
+    0134-004 fixture -> c134) is recorded in set_cast + forwarded to the
+    panel+page call + written into the provenance."""
+    from mock_backends import MockPageCharacterDetector
+    from run_context import RunContext, read_json
+    from steps.characters import run_characters_step
+
+    config = make_step_fixture(tmp_path)
+    config.detection_mode = "panel-page-cast"
+    ctx = RunContext.create(tmp_path / "output", {"status": "running"})
+    panels_root = ctx.step_dir("panels") / "0134-004"
+    panels_root.mkdir(parents=True)
+    for path in (tmp_path / "1_panels" / "0134-004").glob("*.png"):
+        (panels_root / path.name).write_bytes(path.read_bytes())
+    (panels_root / "panels.json").write_text(json.dumps({
+        "page_path": str(tmp_path / "0134-004.png"), "detections": [],
+    }), encoding="utf-8")
+
+    detector = MockPageCharacterDetector({
+        "0134-004": {"panel_0001": (["Frieren"], False)},
+    })
+    result = run_characters_step(ctx, config, detector)
+
+    assert result["totals"]["page_calls"] == 2
+    assert detector.current_cast == "c134"            # set_cast per page
+    assert detector.cast_keys[-1] == "c134"           # forwarded to the call
+    provenance = read_json(
+        ctx.step_dir("characters") / "0134-004" / "panel_page_calls.json"
+    )
+    assert provenance["cast_key"] == "c134"

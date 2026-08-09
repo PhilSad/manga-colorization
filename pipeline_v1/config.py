@@ -40,6 +40,9 @@ DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 DEFAULT_COLORIZER_PROMPT_FILE = PIPELINE_DIR / "colorizer_prompt.txt"
 DEFAULT_PROFILES_FILE = PIPELINE_DIR / "character_profiles.json"
 DEFAULT_CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
+DEFAULT_CHAPTER_PAGE_MAP_FILE = (
+    REPO_ROOT / "frieren_wiki_dataset" / "chapter_page_map.json"
+)
 
 # FLUX VAE constraint: every requested dimension must be a multiple of 16.
 FLUX_MULTIPLE = 16
@@ -63,12 +66,15 @@ class PipelineConfig:
     workers: int = 1               # parallel character-detection threads (1 = sequential)
     api_key_env: str = "OPENROUTER_API_KEY"
     # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
-    # V1 per-panel behaviour; or per-panel calls that send the full page as
-    # context plus the target panel (panel-page).
-    detection_mode: str = "page"  # "page" | "panel" | "panel-page"
+    # V1 per-panel behaviour; per-panel calls that send the full page as
+    # context plus the target panel (panel-page); or panel-page with an
+    # automatically derived per-chapter cast shortlist (panel-page-cast).
+    detection_mode: str = "page"  # page | panel | panel-page | panel-page-cast
     vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
     chapter_casts_file: Path = DEFAULT_CHAPTER_CASTS_FILE
+    # page -> chapter map for panel-page-cast (auto shortlist derivation)
+    chapter_page_map_file: Path = DEFAULT_CHAPTER_PAGE_MAP_FILE
 
     # Stage 4 — colorization (self-hosted FLUX.2 Klein 9B + LoRA)
     endpoint: str | None = DEFAULT_ENDPOINT
@@ -132,6 +138,7 @@ class PipelineConfig:
             "vlm_panel_page_prompt_file": str(self.vlm_panel_page_prompt_file),
             "cast_key": self.cast_key,
             "chapter_casts_file": str(self.chapter_casts_file),
+            "chapter_page_map_file": str(self.chapter_page_map_file),
             "endpoint": self.endpoint,
             "colorizer_prompt_file": str(self.colorizer_prompt_file),
             "profiles_file": str(self.profiles_file),
@@ -197,8 +204,11 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError(
             f"--from-step must be one of {STEP_ORDER}, got {config.from_step!r}"
         )
-    if config.detection_mode not in ("page", "panel", "panel-page"):
-        raise ValueError("--detection-mode must be 'page', 'panel' or 'panel-page'")
+    if config.detection_mode not in ("page", "panel", "panel-page", "panel-page-cast"):
+        raise ValueError(
+            "--detection-mode must be 'page', 'panel', 'panel-page' "
+            "or 'panel-page-cast'"
+        )
     if config.blank_ink_threshold < 0 or config.blank_ink_threshold >= 1:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
     if config.max_megapixels <= 0:
@@ -243,14 +253,24 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--vlm-panel-page-prompt-file", type=Path,
                         default=DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE,
                         help="Panel+page prompt (detection_mode='panel-page' calls).")
-    parser.add_argument("--detection-mode", choices=("page", "panel", "panel-page"),
+    parser.add_argument("--detection-mode",
+                        choices=("page", "panel", "panel-page", "panel-page-cast"),
                         default="page",
-                        help="page: one paid call per page with per-panel fallbacks (V1.1); "
-                             "panel: V1 behaviour, one call per panel; "
+                        help="page: one paid call per page with per-panel fallbacks "
+                             "(V1.1); panel: V1 behaviour, one call per panel; "
                              "panel-page: one call per panel sending the full page as "
-                             "context plus the target panel (per-panel fallback).")
+                             "context plus the target panel (per-panel fallback); "
+                             "panel-page-cast: panel-page with an automatically "
+                             "derived per-chapter cast shortlist (from the page's "
+                             "chapter via chapter_page_map.json, --cast-key wins).")
     parser.add_argument("--cast-key", default=None,
-                        help="chapter_casts.json shortlist key (e.g. c001, ch134).")
+                        help="chapter_casts.json shortlist key (e.g. c001); with "
+                             "panel-page-cast it overrides the automatic per-page "
+                             "derivation.")
+    parser.add_argument("--chapter-page-map", type=Path,
+                        default=DEFAULT_CHAPTER_PAGE_MAP_FILE,
+                        help="page->chapter map for panel-page-cast auto cast "
+                             "(default: frieren_wiki_dataset/chapter_page_map.json).")
     parser.add_argument("--colorizer-prompt-file", type=Path,
                         default=DEFAULT_COLORIZER_PROMPT_FILE)
     parser.add_argument("--profiles-file", type=Path, default=DEFAULT_PROFILES_FILE,
@@ -333,6 +353,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             api_key_env=args.api_key_env,
             detection_mode=args.detection_mode,
             cast_key=args.cast_key,
+            chapter_page_map_file=args.chapter_page_map,
             endpoint=args.endpoint,
             colorizer_prompt_file=args.colorizer_prompt_file,
             profiles_file=args.profiles_file,

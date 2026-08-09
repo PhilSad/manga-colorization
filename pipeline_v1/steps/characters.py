@@ -5,7 +5,12 @@ numbered panels to canonical characters, with cropped-panel fallbacks for
 missing/invalid/uncertain results. `detection_mode="panel"` keeps the V1
 one-call-per-panel behaviour. `detection_mode="panel-page"` (V1.2) keeps the
 one-call-per-panel granularity but sends the full page as context plus the
-target panel, with the same cropped-panel fallback as page mode. Panels with
+target panel, with the same cropped-panel fallback as page mode.
+`detection_mode="panel-page-cast"` is panel-page with an automatically derived
+per-chapter cast shortlist (the page's chapter via `chapter_page_map.json`;
+`--cast-key` overrides the derivation): the panel-page prompt is rendered for
+that cast per page, thread-safely, so look-alike characters outside the
+chapter cast cannot be guessed (e.g. Flamme on p130 of ch. 5). Panels with
 forced ground-truth identities (`--force-characters`, task 0001) never make a
 paid call. `--only-panel` restricts which panels are processed.
 
@@ -176,9 +181,8 @@ def _process_page(
     page_capable = config.detection_mode == "page" and hasattr(
         detector, "detect_page"
     )
-    panel_page_capable = config.detection_mode == "panel-page" and hasattr(
-        detector, "detect_panels_with_page"
-    )
+    panel_page_capable = config.detection_mode in ("panel-page", "panel-page-cast") \
+        and hasattr(detector, "detect_panels_with_page")
     if page_capable and needed:
         page_docs, page_det_totals = _detect_page(
             ctx, config, detector, page, page_dir, needed, out_page_dir
@@ -186,11 +190,15 @@ def _process_page(
         _merge_totals(page_totals, page_det_totals)
         docs.extend(page_docs)
     elif panel_page_capable and needed:
+        cast_key = None
+        if config.detection_mode == "panel-page-cast":
+            cast_key = _apply_page_cast(config, detector, page_dir)
         page_docs, page_det_totals = _detect_page(
             ctx, config, detector, page, page_dir, needed, out_page_dir,
             method="detect_panels_with_page",
             provenance="panel_page_calls.json",
             label="panel+page",
+            cast_key=cast_key,
         )
         _merge_totals(page_totals, page_det_totals)
         docs.extend(page_docs)
@@ -219,6 +227,27 @@ def _process_page(
     return docs, page_totals, worked
 
 
+def _apply_page_cast(config, detector, page_dir: Path) -> str | None:
+    """Derive the chapter-cast key for a page in `panel-page-cast` mode:
+    `--cast-key` wins, otherwise the page's chapter via
+    `characters.cast_key_for_page` (chapter_page_map.json -> filename tag ->
+    `NNN-` prefix). The detector's shared prompts are switched to that cast so
+    cropped-panel fallbacks reuse it; pages without a cast fall back to the
+    full roster. Returns the key (None = full roster) for the provenance."""
+    from run_context import read_json
+
+    geometry = read_json(page_dir / "panels.json")
+    page_path = Path(geometry["page_path"])
+    from characters import cast_key_for_page
+
+    key = config.cast_key or cast_key_for_page(
+        page_path, config.chapter_casts_file, config.chapter_page_map_file
+    )
+    if hasattr(detector, "set_cast"):
+        detector.set_cast(key)
+    return key
+
+
 def _detect_page(
     ctx: RunContext,
     config: PipelineConfig,
@@ -231,12 +260,15 @@ def _detect_page(
     method: str = "detect_page",
     provenance: str = "page_call.json",
     label: str = "page-level",
+    cast_key: str | None = None,
 ) -> tuple[list[dict], dict]:
     """Page-scoped detection calls for `needed` panels + fallbacks.
 
     `method` selects the detector entry point (`detect_page` for one call per
     page, `detect_panels_with_page` for one panel+page call per panel);
-    `provenance`/`label` tune the recorded call file and progress output.
+    `provenance`/`label` tune the recorded call file and progress output;
+    `cast_key` (panel-page-cast mode) is forwarded to the detector call and
+    recorded in the provenance.
     """
     from run_context import read_json
 
@@ -249,9 +281,14 @@ def _detect_page(
         f"(panels {expected}) ...",
         flush=True,
     )
-    page_record = getattr(detector, method)(
-        page_image, page_dir, expected, config.refs_dir
-    )
+    if cast_key is not None:
+        page_record = getattr(detector, method)(
+            page_image, page_dir, expected, config.refs_dir, cast_key=cast_key
+        )
+    else:
+        page_record = getattr(detector, method)(
+            page_image, page_dir, expected, config.refs_dir
+        )
     totals["page_calls"] += page_record.page_calls
     totals["fallback_calls"] += page_record.fallback_calls
     totals["cost_usd"] = round(
@@ -269,6 +306,7 @@ def _detect_page(
     write_json(out_page_dir / provenance, {
         "page": page,
         "expected_panels": expected,
+        "cast_key": cast_key,
         "status": page_record.status,
         "page_calls": page_record.page_calls,
         "fallback_calls": page_record.fallback_calls,

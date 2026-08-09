@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from config import (
@@ -86,6 +88,15 @@ def test_v1_1_flags_parse():
         "P003:panel_0006": ["Frieren"],
         "p007:panel_0003": ["Heiter", "Fern"],
     }
+
+
+def test_panel_page_cast_flags_parse():
+    config = parse_args([
+        "--detection-mode", "panel-page-cast",
+        "--chapter-page-map", "custom/map.json",
+    ])
+    assert config.detection_mode == "panel-page-cast"
+    assert config.chapter_page_map_file == Path("custom/map.json")
 
 
 def test_invalid_v1_1_values_rejected():

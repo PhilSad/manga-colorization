@@ -86,8 +86,10 @@ Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 outputs; with `--from-step` only the earlier step outputs are copied, task
 0001), `--atlas-columns N`, `--num-inference-steps` (4 for the
 step-distilled model; 20–50 if the server runs the undistilled base),
-`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page`
-(panel-page = one call per panel with the full page as context, `prompt_panel_page.txt`),
+`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast`
+(panel-page = one call per panel with the full page as context,
+`prompt_panel_page.txt`; panel-page-cast = same with an automatically derived
+per-chapter cast shortlist from `chapter_page_map.json`, `--cast-key` wins),
 `--cast-key c001` (chapter cast shortlist), `--no-full-page-fallback`,
 `--max-megapixels 2.0` (FLUX request cap),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),

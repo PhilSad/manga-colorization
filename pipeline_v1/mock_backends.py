@@ -124,6 +124,13 @@ class MockPageCharacterDetector:
     def __init__(self, by_page: dict[str, dict[str, tuple[list[str], bool]]] | None = None):
         self.by_page = by_page or {}
         self.calls: list[tuple[Path, list[str]]] = []
+        self.cast_keys: list[str | None] = []
+        self.current_cast: str | None = None
+
+    def set_cast(self, cast_key: str | None) -> None:
+        """Mirror of OpenRouterCharacterDetector.set_cast (panel-page-cast)."""
+        self.current_cast = cast_key
+        self.cast_keys.append(cast_key)
 
     def detect_page(
         self,
@@ -180,10 +187,13 @@ class MockPageCharacterDetector:
         panels_dir: Path,
         expected_panels: list[str],
         refs_dir: Path,
+        *,
+        cast_key: str | None = None,
     ) -> "PageCharacterRecord":
         from characters import CharacterRecord, PageCharacterRecord
 
         self.calls.append((page, list(expected_panels)))
+        self.cast_keys.append(cast_key)
         page_map = self.by_page.get(page.stem, {})
         record = PageCharacterRecord(status="ok", page=page.stem)
         record.page_calls = len(expected_panels)  # one panel+page call per panel

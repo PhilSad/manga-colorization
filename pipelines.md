@@ -333,9 +333,13 @@ Findings:
 - **OOV-001 stays unsolved in every mode/model**: Clematis is forced to
   Denken/Wirbel/Heiter and never reported unknown.
 - **Recommendation**: switch the pipeline default from `page` to
-  `panel-page` with `google/gemma-4-31b-it` — at ~$0.0001/case-rep and ~5 s
-  per panel it costs about 5× a page call but is worth it; luna is the
-  fallback candidate (34/44) if gemma regresses.
+  `panel-page-cast` with `google/gemma-4-31b-it` — panel-page at ~$0.0001/
+  case-rep and ~5 s per panel is worth ~5× a page call, and the new
+  `panel-page-cast` mode additionally auto-restricts each page's prompt to
+  its chapter cast (via `chapter_page_map.json`), which excludes look-alikes
+  outside the chapter (e.g. Flamme is not in ch. 5's cast and could not be
+  guessed on p130). luna remains the fallback candidate (34/44) if gemma
+  regresses.
 
 ### Color — explicit palettes (human review pending)
 

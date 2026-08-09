@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -78,6 +79,82 @@ def cast_shortlist_for(chapter_casts_file: Path, cast_key: str | None) -> list[s
             f"(available: {sorted(casts)})"
         )
     return [str(name) for name in casts[cast_key]["characters"]]
+
+
+# Chapter tag / page-number patterns for auto-cast derivation.
+#   - "... - c005 (v01) - p130 ..."   (volume pages; spreads: "p004-p005")
+#   - "0134-004.png"                  (data/chapter_134/ style)
+CAST_TAG_RE = re.compile(r"- c(\d{1,3})(?:\s|-)")
+P_NUMBER_RE = re.compile(r"- p(\d{1,4})(?:-p\d{1,4})?(?:\s|-)")
+LEADING_CHAPTER_RE = re.compile(r"^(\d{3,4})-")
+
+
+def _cast_key_for_number(number: int, casts: dict) -> str | None:
+    """`c{number:03d}` if that shortlist exists, else None (full roster)."""
+    key = f"c{number:03d}"
+    return key if key in casts else None
+
+
+def _cast_key_from_map(
+    page_path: Path, chapter_page_map_file: Path, casts: dict
+) -> str | None:
+    """Authoritative lookup via chapter_page_map.json: find the chapter whose
+    volume contains this page and whose p-number range covers the file's
+    p-number. Corrects volumes with mislabeled filename tags (v09 is tagged
+    c078 everywhere but spans chapters 78-87)."""
+    match = P_NUMBER_RE.search(page_path.name)
+    if not match:
+        return None
+    p_number = int(match.group(1))
+    data = json.loads(
+        Path(chapter_page_map_file).read_text(encoding="utf-8")
+    )
+    for chapter in data.get("chapters", []):
+        volume_dir = chapter.get("volume_dir")
+        if not volume_dir or volume_dir not in str(page_path):
+            continue
+        p_start = chapter.get("p_start")
+        p_end = chapter.get("p_end", p_start)
+        if p_start is None or not (p_start <= p_number <= p_end):
+            continue
+        return _cast_key_for_number(chapter["number"], casts)
+    return None
+
+
+def cast_key_for_page(
+    page_path: Path,
+    chapter_casts_file: Path,
+    chapter_page_map_file: Path | None = None,
+) -> str | None:
+    """Auto-derive the chapter-cast shortlist key for a page, or None when no
+    cast applies (full roster). Order:
+
+    1. `chapter_page_map.json` (authoritative when the page lives in a mapped
+       volume; fixes the mislabeled v09 where filename tags say c078);
+    2. the filename chapter tag (`- c005 -`);
+    3. a leading `NNN-` chapter prefix (`0134-004.png` -> c134).
+
+    A derived key is only returned when it exists in `chapter_casts_file`.
+    """
+    casts = json.loads(
+        Path(chapter_casts_file).read_text(encoding="utf-8")
+    ).get("casts", {})
+    if chapter_page_map_file is not None and chapter_page_map_file.is_file():
+        key = _cast_key_from_map(page_path, chapter_page_map_file, casts)
+        if key is not None:
+            return key
+    name = page_path.name
+    match = CAST_TAG_RE.search(name)
+    if match:
+        key = _cast_key_for_number(int(match.group(1)), casts)
+        if key is not None:
+            return key
+    match = LEADING_CHAPTER_RE.match(name)
+    if match:
+        key = _cast_key_for_number(int(match.group(1)), casts)
+        if key is not None:
+            return key
+    return None
 
 
 def build_prompt(
@@ -325,6 +402,12 @@ class OpenRouterCharacterDetector:
         self.prompt: str = ""
         self.panel_prompt: str = ""
         self.panel_page_prompt: str = ""
+        # Guards prompt swaps (set_cast) against readers in worker threads.
+        self._prompt_lock = threading.Lock()
+        # Raw templates (kept so prompts can be rebuilt per chapter cast).
+        self._page_template: str = ""
+        self._panel_template: str = ""
+        self._panel_page_template: str = ""
 
     def prepare(
         self,
@@ -338,42 +421,75 @@ class OpenRouterCharacterDetector:
         self.canonical = canonical_characters(refs_dir)
         if self.profiles_file is not None and self.profiles_file.is_file():
             self.profiles = load_profiles(self.profiles_file)
-        shortlist = cast_shortlist_for(self.chapter_casts_file, self.cast_key)
 
         template = self.prompt_template
         if template is None:
             if prompt_file is None:
                 raise ValueError("a page prompt template or prompt_file is required")
             template = Path(prompt_file).read_text(encoding="utf-8")
-        self.prompt = build_prompt(
-            template, self.canonical, profiles=self.profiles, cast_shortlist=shortlist
-        )
+        self._page_template = template
 
         panel_template = self.panel_prompt_template
         if panel_template is None and panel_prompt_file is not None:
             panel_template = Path(panel_prompt_file).read_text(encoding="utf-8")
-        self.panel_prompt = build_prompt(
-            panel_template or "", self.canonical,
-            profiles=self.profiles, cast_shortlist=shortlist,
-        )
+        self._panel_template = panel_template or ""
 
         panel_page_template = self.panel_page_prompt_template
         if panel_page_template is None and panel_page_prompt_file is not None:
             panel_page_template = Path(panel_page_prompt_file).read_text(encoding="utf-8")
-        self.panel_page_prompt = build_prompt(
-            panel_page_template or "", self.canonical,
+        self._panel_page_template = panel_page_template or ""
+        self._build_prompts()
+
+    def _build_prompts(self) -> None:
+        """(Re)build the three prompts from the stored templates + current
+        cast shortlist. Called by `prepare` and by `set_cast`."""
+        shortlist = cast_shortlist_for(self.chapter_casts_file, self.cast_key)
+        self.prompt = build_prompt(
+            self._page_template, self.canonical,
             profiles=self.profiles, cast_shortlist=shortlist,
         )
+        self.panel_prompt = build_prompt(
+            self._panel_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+        self.panel_page_prompt = build_prompt(
+            self._panel_page_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
+    def panel_page_prompt_for(self, cast_key: str | None) -> str:
+        """The panel-page prompt rendered for a given cast shortlist. Always
+        renders fresh from immutable inputs (template, roster, profiles), so
+        per-page casts are thread-safe: it never reads or mutates shared
+        prompt state. `None` restores the full roster."""
+        shortlist = cast_shortlist_for(self.chapter_casts_file, cast_key)
+        return build_prompt(
+            self._panel_page_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
+    def set_cast(self, cast_key: str | None) -> None:
+        """Switch the chapter-cast shortlist for all three prompts (no-op when
+        unchanged). Called per page in `panel-page-cast` mode so that
+        cropped-panel fallbacks reuse the page's cast; lock-guarded for
+        worker threads."""
+        with self._prompt_lock:
+            if cast_key == self.cast_key and self.prompt:
+                return
+            self.cast_key = cast_key
+            self._build_prompts()
 
     # -- per-panel ---------------------------------------------------------
 
     def detect(self, panel: Path, refs_dir: Path) -> CharacterRecord:
         if not self.panel_prompt or not self.canonical:
             self.prepare(refs_dir)
+        with self._prompt_lock:
+            panel_prompt = self.panel_prompt
         info = file_record(panel)
         info["data_base64"] = base64.b64encode(panel.read_bytes()).decode()
         content = [
-            {"type": "text", "text": self.panel_prompt},
+            {"type": "text", "text": panel_prompt},
             {"type": "image_url",
              "image_url": {"url": f"data:{info['mime_type']};base64,{info['data_base64']}"}},
         ]
@@ -543,6 +659,8 @@ class OpenRouterCharacterDetector:
         panels_dir: Path,
         expected_panels: list[str],
         refs_dir: Path,
+        *,
+        cast_key: str | None = None,
     ) -> PageCharacterRecord:
         """One paid call per panel: the full page (numbered, target panel
         highlighted) as global context *plus* the cropped panel.
@@ -550,15 +668,23 @@ class OpenRouterCharacterDetector:
         Per-panel fallback (same as page mode): unparseable answers, explicit
         `uncertain`, unknown-character entries, and call errors fall back to
         the V1 panel-only prompt call.
+
+        `cast_key` renders the panel-page prompt for that chapter shortlist
+        without touching shared state (thread-safe for `panel-page-cast`
+        mode); `None` uses the detector's current cast.
         """
         if not self.canonical:
             self.prepare(refs_dir)
-        if not self.panel_page_prompt:
+        if not self._panel_page_template:
             raise ValueError(
                 "panel-page detection needs a panel-page prompt "
                 "(--vlm-panel-page-prompt-file)"
             )
         record = PageCharacterRecord(status="ok", page=page.stem)
+        # cast_key=None means "the detector's current cast" (panel-page with
+        # --cast-key); an explicit key (panel-page-cast) renders that cast.
+        effective_cast = self.cast_key if cast_key is None else cast_key
+        panel_page_prompt = self.panel_page_prompt_for(effective_cast)
 
         page_image, boxes = _page_geometry(panels_dir)
         annotated = _annotated_page(page_image, panels_dir)
@@ -586,7 +712,7 @@ class OpenRouterCharacterDetector:
             highlighted = _highlighted_page(annotated, boxes, panel_key)
             info = file_record(panel)
             content = [
-                {"type": "text", "text": self.panel_page_prompt},
+                {"type": "text", "text": panel_page_prompt},
                 {"type": "image_url",
                  "image_url": {"url": f"data:{page_mime};base64,{page_b64}"}},
                 {"type": "image_url",

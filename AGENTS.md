@@ -194,7 +194,20 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   (4 for the step-distilled model), `--lora-scale`, `--seed`, `--detection-mode`,
   `--cast-key`, `--only-panel PAGE:PANEL` (targeted rerun),
   `--force-characters PAGE:PANEL=Name` (ground-truth identities, no paid
-  call), `--workers N` (parallel page-level detection).
+  call), `--workers N` (parallel page-level detection),
+  `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
+  failed FLUX call — is stitched from its original B&W crop instead of failing
+  the stitch step; each fallback is logged to stderr and recorded per page and
+  in `totals.panels_bw_fallback`).
+- Debug annotation: `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`
+  renders a debug copy of a completed run's `4_stitched/` pages with a colored
+  bounding box per panel and a label with the panel name + the characters
+  detected for it (from `2_characters/<page>/<panel>.json`). Panels stitched
+  from their original B&W crop (`--stitch-bw-fallback`) get an orange box and
+  a `[B&W fallback]` tag, read from the run's `manifest.json`. Writes
+  `<run-dir>/5_debug/` + `summary.json`; options `--output-dir`, `--page SUBSTR`
+  (repeatable filter), `--font-size`, `--bbox-width`. Offline, needs no
+  backends/network, and never modifies the run's own outputs.
 - Requirements: `OPENROUTER_API_KEY` in `.env` (paid detection) and the Spark
   FLUX server running (`curl http://spark:3000/healthz`). Offline demo without
   any of that: `pipeline_v1/run.py --mock --limit 1` (mock backends). Tests:

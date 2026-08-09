@@ -379,6 +379,21 @@ DET-007/008/010 misses at 0.2. OOV-001 remains the sole failure (Denken
 forced 4/4). Sweep runs are now threaded (`--workers`, default 8): the 4-rep
 panel-page sweep dropped from ~15 min sequential to ~4.5 min at 16 workers.
 
+**Concurrency finding** (2026-08-09): OpenRouter's gemma-4-31b-it is
+**non-deterministic under concurrent load even at temperature 0**. The same
+panel-page request on p130 panel 6 answered Frieren 14/14 sequentially but
+flipped to Frieren 9, **Flamme 3**, Fern 3, Aura 1 under 16 concurrent calls
+— which is exactly why a `--workers 16` pipeline run (20260809-232836, plain
+panel-page, full roster) produced 44 Flamme false positives across ch2–7
+while the low-concurrency sweeps saw none. `--workers 1` is stable;
+**panel-page-cast confines the damage**: a fully parallel re-run
+(`--parallel-reps --workers 16`, records in
+`pipeline_v1/tests/output/20260810-002338/`) still scores **40/44 (91%)**
+with **zero Flamme/Aura/Serie/Denken** across all 44 case-reps — the chapter
+shortlist makes out-of-cast look-alikes un-answerable regardless of the
+flip noise. The annotated-page write in `_annotated_page` is now atomic
+(temp + rename) so concurrent same-page re-renders can't expose torn PNGs.
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run

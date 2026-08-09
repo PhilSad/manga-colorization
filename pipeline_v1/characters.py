@@ -931,14 +931,28 @@ def _annotated_page(page: Path, panels_dir: Path) -> Path:
     """A copy of the page with panel numbers overlaid in reading order (the
     same numbers the extraction uses). Written next to the page in a temp
     location inside the run's panels dir so it is never confused with inputs.
+
+    The write is atomic (temp file + rename) so concurrent workers re-rendering
+    the same page dir never expose a torn PNG to readers.
     """
+    import os
+    import tempfile
+
     from extraction import draw_overlay
     from PIL import Image
 
     _page, boxes = _page_geometry(panels_dir)
     annotated = panels_dir / "detection_annotated.png"
-    with Image.open(page) as image:
-        draw_overlay(image.convert("RGB"), boxes, annotated)
+    fd, tmp_name = tempfile.mkstemp(dir=panels_dir, suffix=".png")
+    os.close(fd)
+    tmp = Path(tmp_name)
+    try:
+        with Image.open(page) as image:
+            draw_overlay(image.convert("RGB"), boxes, tmp)
+        tmp.replace(annotated)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
     return annotated
 
 

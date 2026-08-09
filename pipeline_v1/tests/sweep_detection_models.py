@@ -174,6 +174,9 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=8,
                         help="parallel detection threads (1 = sequential); items "
                              "within one rep run concurrently, reps stay ordered")
+    parser.add_argument("--parallel-reps", action="store_true",
+                        help="also run reps concurrently (reps x pages/cases in one "
+                             "pool, mirroring a multi-worker pipeline run)")
     parser.add_argument("--output-dir", default=None,
                         help="explicit output dir (default: timestamped)")
     parser.add_argument("--re-render", default=None,
@@ -259,13 +262,15 @@ def main() -> int:
                 max_workers=args.workers, thread_name_prefix="sweep"
             ) if args.workers > 1 else None)
             try:
-                for rep in range(1, args.reps + 1):
-                    # Items within one rep are independent (distinct crops, or
-                    # distinct pages with their own page dirs), so reps stay
-                    # ordered and no two threads touch the same annotated page.
-                    items: list = list(cases) if mode == "panel" else list(aliases)
+                if args.parallel_reps and mode != "panel":
+                    # All reps x pages in one pool: mirrors a workers=N pipeline
+                    # run (concurrent page calls). The annotated-page write is
+                    # atomic, so same-page items cannot expose torn files.
+                    items = [(rep, alias)
+                             for rep in range(1, args.reps + 1)
+                             for alias in aliases]
                     if pool is None:
-                        for item in items:
+                        for rep, item in items:
                             item_rows, pt = _run_item(
                                 mode, model, rep, item, detector,
                                 fixture, page_dirs, cases_by_alias,
@@ -277,12 +282,40 @@ def main() -> int:
                             pool.submit(
                                 _run_item, mode, model, rep, item, detector,
                                 fixture, page_dirs, cases_by_alias,
-                            ): item for item in items
+                            ): (rep, item) for rep, item in items
                         }
                         for future in as_completed(futures):
                             item_rows, pt = future.result()
                             rows.extend(item_rows)
                             _merge_page_totals(page_totals, pt)
+                else:
+                    for rep in range(1, args.reps + 1):
+                        # Items within one rep are independent (distinct crops,
+                        # or distinct pages with their own page dirs), so reps
+                        # stay ordered and no two threads touch the same
+                        # annotated page.
+                        items: list = (
+                            list(cases) if mode == "panel" else list(aliases)
+                        )
+                        if pool is None:
+                            for item in items:
+                                item_rows, pt = _run_item(
+                                    mode, model, rep, item, detector,
+                                    fixture, page_dirs, cases_by_alias,
+                                )
+                                rows.extend(item_rows)
+                                _merge_page_totals(page_totals, pt)
+                        else:
+                            futures = {
+                                pool.submit(
+                                    _run_item, mode, model, rep, item, detector,
+                                    fixture, page_dirs, cases_by_alias,
+                                ): item for item in items
+                            }
+                            for future in as_completed(futures):
+                                item_rows, pt = future.result()
+                                rows.extend(item_rows)
+                                _merge_page_totals(page_totals, pt)
             finally:
                 if pool is not None:
                     pool.shutdown()

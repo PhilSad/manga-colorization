@@ -1,12 +1,13 @@
 {
   "schema_version": 1,
-  "description": "V1.1 fixed evaluation set: real V1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets.",
+  "description": "V1.1/V1.2 fixed evaluation set: real V1/V1.1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, palette geography, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets; COL-004 additionally asserts the left-to-right spatial palette assignment.",
   "aliases": {
     "P003": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].png",
     "P004_005": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].png",
     "P006": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p006 [VIZ Media] [Digital] [1r0n].png",
     "P007": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n].png",
     "P008": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p008 [VIZ Media] [Digital] [1r0n].png",
+    "P013": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p013 [VIZ Media] [Digital] [1r0n].png",
     "CH134_004": "data/chapter_134/0134-004.png"
   },
   "cases": [
@@ -109,6 +110,40 @@
         "preserve": ["text", "linework", "composition", "canvas_size"]
       },
       "note": "Heiter must not receive Sein's palette."
+    },
+    {
+      "id": "COL-004",
+      "stage": "color",
+      "failure": "palette-geography",
+      "input": {
+        "source_page": "P013",
+        "panel": "panel_0002",
+        "forced_characters": ["Heiter", "Himmel", "Frieren", "Eisen"]
+      },
+      "expected": {
+        "characters": ["Heiter", "Himmel", "Frieren", "Eisen"],
+        "left_to_right": [
+          {"character": "Heiter", "hair": "green"},
+          {"character": "Himmel", "hair": "blue"},
+          {"character": "Frieren", "hair": "white-pink"},
+          {"character": "Eisen", "hair": "yellow"}
+        ],
+        "required_colors": [
+          "Heiter (leftmost): light green hair, grey-green eyes, glasses, black clerical robe with gold trim",
+          "Himmel: light blue hair, blue eyes, white and gold hero outfit",
+          "Frieren: silver-white hair (reads white-pink in anime renders), green eyes, white coat with gold trim",
+          "Eisen (rightmost): yellow-white hair and beard, grey eyes, heavy grey armour"
+        ],
+        "forbidden_colors": [
+          "uniform blue wash over the whole panel (observed failure: dominant hue ~200 deg across all four characters)",
+          "Heiter's green hair rendered blue",
+          "Frieren's silver-white hair rendered blue or magenta",
+          "Eisen's hair rendered blue",
+          "swapped or blended palettes between characters: each character must keep its own distinct palette"
+        ],
+        "preserve": ["text", "linework", "screentones", "composition", "canvas_size"]
+      },
+      "note": "Good detection (hero party, panel-page mode) but colorization confounds who is who: the reference failure run pipeline_v1/output/20260809-091129/ produced a uniform blue wash on p013 panel_0002 (4 forced ground-truth identities, no paid detection call). User-stated expectation (ideas.md, V1.2 problem 1): left to right = green (Heiter), blue (Himmel), white-pink (Frieren), yellow (Eisen); verify spatially against the panel during review. Fix under test: atlas built in left-to-right reading order + colorization prompt with geographic identity info (needs spatial output from the VLM)."
     },
     {
       "id": "LAY-001",

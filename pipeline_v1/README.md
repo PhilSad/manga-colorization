@@ -122,8 +122,13 @@ recorded per call.
 
 - `evaluation/v1_1_cases.json` — the fixed failure set: character confusion
   (DET-001..004), out-of-vocabulary identity (OOV-001), palette adherence
-  (COL-001..003), zero-panel fallback (LAY-001), blank-page skip (LAY-002),
-  oversized-input capping (SIZE-001).
+  (COL-001..003), palette geography (COL-004, V1.2), zero-panel fallback
+  (LAY-001), blank-page skip (LAY-002), oversized-input capping (SIZE-001).
+  COL-004 is the colorization-step test for V1.2 problem 1 (ideas.md): p013
+  panel_0002 with forced hero-party identities (Heiter, Himmel, Frieren,
+  Eisen) must come out with distinct canonical palettes left to right
+  (green/blue/white-pink/yellow) instead of the uniform blue wash seen in
+  `output/20260809-091129/`.
 - `evaluate.py --run <run_dir>` — auto-scores detection cases (set
   comparison, exact TP/FP/FN) and writes `<run>/evaluation/color_review.md`
   with each generated COL-* image, the fixture's expected output, and

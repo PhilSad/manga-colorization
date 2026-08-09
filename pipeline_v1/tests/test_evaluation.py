@@ -1,9 +1,10 @@
 """Tests for evaluation/v1_1_cases.json + evaluate.py (offline).
 
-The V1.1 fixed evaluation set covers every supported failure category:
+The V1.1/V1.2 fixed evaluation set covers every supported failure category:
 character confusion (DET-001..004), out-of-vocabulary identity (OOV-001),
-palette adherence (COL-001..003), zero-panel fallback (LAY-001), blank-page
-skip (LAY-002), and oversized-input capping (SIZE-001).
+palette adherence (COL-001..003), palette geography (COL-004), zero-panel
+fallback (LAY-001), blank-page skip (LAY-002), and oversized-input capping
+(SIZE-001).
 
 Detection cases are scored automatically (set comparison with exact
 TP/FP/FN). Color cases only produce a human-review Markdown report: no code
@@ -54,7 +55,8 @@ def test_fixture_loads_and_has_all_categories():
     assert len(ids) == len(set(ids)), "case ids must be unique"
     expected_ids = {
         "DET-001", "DET-002", "DET-003", "DET-004", "OOV-001",
-        "COL-001", "COL-002", "COL-003", "LAY-001", "LAY-002", "SIZE-001",
+        "COL-001", "COL-002", "COL-003", "COL-004",
+        "LAY-001", "LAY-002", "SIZE-001",
     }
     assert set(ids) == expected_ids
     assert fixture["schema_version"] == 1
@@ -72,7 +74,7 @@ def test_fixture_inputs_resolve_to_repo_paths():
 def test_fixture_reference_pages_exist():
     """The real volume-1 / chapter-134 pages must exist on this machine."""
     fixture = load_fixture()
-    for alias in ("P003", "P004_005", "P006", "P007", "P008", "CH134_004"):
+    for alias in ("P003", "P004_005", "P006", "P007", "P008", "P013", "CH134_004"):
         path = resolve_alias(fixture, alias)
         assert path.is_file(), f"{alias} missing: {path}"
 
@@ -94,12 +96,19 @@ def test_fixture_expected_sets_match_task_spec():
 
 def test_color_cases_have_machine_readable_expectations():
     fixture = load_fixture()
-    for case_id in ("COL-001", "COL-002", "COL-003"):
+    for case_id in ("COL-001", "COL-002", "COL-003", "COL-004"):
         case = case_by_id(fixture, case_id)
         expected = case["expected"]
         for key in ("characters", "required_colors", "forbidden_colors", "preserve"):
             assert isinstance(expected[key], list) and expected[key], f"{case_id}.{key}"
         assert "forced_characters" in case["input"], case_id
+    # COL-004 additionally pins the left-to-right spatial palette order
+    # (V1.2 problem 1: colorization must not confound the hero party).
+    l2r = case_by_id(fixture, "COL-004")["expected"]["left_to_right"]
+    assert [entry["character"] for entry in l2r] == \
+        ["Heiter", "Himmel", "Frieren", "Eisen"]
+    assert [entry["hair"] for entry in l2r] == \
+        ["green", "blue", "white-pink", "yellow"]
 
 
 def test_layout_and_size_cases_have_exact_expectations():
@@ -217,7 +226,7 @@ def test_color_review_report_never_auto_verdicts(tmp_path):
     fixture = load_fixture()
     # Create the generated outputs for the COL-* cases.
     for alias, panel in (("P003", "panel_0006"), ("P007", "panel_0006"),
-                         ("P008", "panel_0003")):
+                         ("P008", "panel_0003"), ("P013", "panel_0002")):
         page = resolve_alias(fixture, alias).stem
         out_dir = run / "3_colorized" / page
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -226,7 +235,8 @@ def test_color_review_report_never_auto_verdicts(tmp_path):
 
     report = evaluate.run_evaluation(run, FIXTURE_PATH)
     color_cases = report["color"]["cases"]
-    assert {c["id"] for c in color_cases} == {"COL-001", "COL-002", "COL-003"}
+    assert {c["id"] for c in color_cases} == \
+        {"COL-001", "COL-002", "COL-003", "COL-004"}
     for case in color_cases:
         assert case["review_status"] == "Pending user review"
         assert case["generated_image"] is not None
@@ -236,11 +246,17 @@ def test_color_review_report_never_auto_verdicts(tmp_path):
 
     report_path = run / "evaluation" / "color_review.md"
     markdown = report_path.read_text(encoding="utf-8")
-    assert markdown.count("**Review status:** Pending user review") == 3
+    assert markdown.count("**Review status:** Pending user review") == 4
     assert "[ ] Pass" in markdown and "[ ] Fail" in markdown
     assert "silver-white hair" in markdown
     assert "magenta" in markdown or "purple" in markdown
     assert "light green hair" in markdown
+    # COL-004 renders the left-to-right spatial palette expectation.
+    assert "Left to right:" in markdown
+    assert "Heiter: green hair" in markdown
+    assert "Himmel: blue hair" in markdown
+    assert "Frieren: white-pink hair" in markdown
+    assert "Eisen: yellow hair" in markdown
     assert "Reviewed by a human" not in markdown  # no automated verdict wording
     # Page names contain parens; image links must be angle-bracketed and
     # resolve relative to the report.

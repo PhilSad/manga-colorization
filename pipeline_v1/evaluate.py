@@ -105,6 +105,19 @@ def validate_fixture(fixture: dict, repo_root: Path = REPO_ROOT,
                     problems.append(f"{case_id}: expected.{key} must be a non-empty list")
             if not entry.get("forced_characters"):
                 problems.append(f"{case_id}: input.forced_characters missing")
+            left_to_right = expected.get("left_to_right")
+            if left_to_right is not None:
+                if not isinstance(left_to_right, list) or not left_to_right:
+                    problems.append(
+                        f"{case_id}: expected.left_to_right must be a non-empty list")
+                else:
+                    for l2r in left_to_right:
+                        if (not isinstance(l2r, dict)
+                                or not l2r.get("character")
+                                or not l2r.get("hair")):
+                            problems.append(
+                                f"{case_id}: each expected.left_to_right entry needs "
+                                "'character' and 'hair' strings")
         elif stage == "layout":
             if "panels" not in expected:
                 problems.append(f"{case_id}: expected.panels missing")
@@ -313,7 +326,13 @@ def _relative_report_link(run_dir: Path, path: Path) -> str:
 
 
 def _expected_bullets(expected: dict) -> list[str]:
-    lines = ["- " + "; ".join(expected["required_colors"])]
+    lines = []
+    left_to_right = expected.get("left_to_right")
+    if left_to_right:
+        lines.append("- Left to right: " + "; ".join(
+            f"{entry['character']}: {entry['hair']} hair"
+            for entry in left_to_right))
+    lines.append("- " + "; ".join(expected["required_colors"]))
     lines.append("- Forbidden: " + "; ".join(expected["forbidden_colors"]))
     lines.append("- Preserve: "
                  + ", ".join(item.replace("_", " ") for item in expected["preserve"]))

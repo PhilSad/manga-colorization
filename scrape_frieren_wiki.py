@@ -41,6 +41,7 @@ USER_AGENT = (
 CHAPTER_TITLE_RE = re.compile(r"^Chapter (\d+(?:\.\d+)?)$")
 SECTION_HEADER_RE = re.compile(r"^==+\s*(.*?)\s*==+\s*$")
 PAGES_RE = re.compile(r"^\|\s*pages\s*=\s*([0-9]+(?:\.[0-9]+)?)", re.MULTILINE)
+VOLUME_RE = re.compile(r"^\|\s*volume\s*=\s*([0-9]+)", re.MULTILINE)
 CHAPTER_TITLE_FIELD_RE = re.compile(r"^\|\s*chapter title\s*=\s*(.+)$", re.MULTILINE)
 CHAR_TEMPLATE_RE = re.compile(r"\{\{Character Appearance\|(.*?)\}\}", re.DOTALL)
 LINK_RE = re.compile(r"\[\[([^\[\]|]+)(?:\|([^\[\]]*))?\]\]")
@@ -191,6 +192,7 @@ def parse_chapter(title, wikitext):
     sections = split_sections(wikitext)
 
     pages_match = PAGES_RE.search(wikitext)
+    volume_match = VOLUME_RE.search(wikitext)
     title_field_match = CHAPTER_TITLE_FIELD_RE.search(wikitext)
 
     summary = clean_text(sections.get("Summary", ""))
@@ -202,6 +204,7 @@ def parse_chapter(title, wikitext):
         "number": int(number) if number.is_integer() else number,
         "title": clean_text(title_field_match.group(1)) if title_field_match else None,
         "url": f"{WIKI}/wiki/{urllib.parse.quote(title.replace(' ', '_'))}",
+        "volume": int(volume_match.group(1)) if volume_match else None,
         "pages": int(pages_match.group(1)) if pages_match else None,
         "summary": summary or None,
         "characters": characters,
@@ -224,6 +227,7 @@ def write_outputs(out_dir, records, fetched_at):
             "number": "chapter number as listed on the wiki",
             "title": "chapter title from the infobox",
             "url": "canonical wiki page URL",
+            "volume": "volume number the chapter belongs to (infobox `|volume = N`)",
             "pages": "number of manga pages for the chapter (infobox `|pages = N`)",
             "summary": "text of the `Summary` section, wikitext cleaned",
             "characters": "ordered list from `Characters in Order of Appearance`; "
@@ -238,10 +242,10 @@ def write_outputs(out_dir, records, fetched_at):
 
     with open(out_dir / "chapters.csv", "w", newline="", encoding="utf-8") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["number", "title", "url", "pages", "summary", "characters"])
+        writer.writerow(["number", "title", "url", "volume", "pages", "summary", "characters"])
         for rec in records:
             writer.writerow([
-                rec["number"], rec["title"], rec["url"], rec["pages"],
+                rec["number"], rec["title"], rec["url"], rec["volume"], rec["pages"],
                 rec["summary"], json.dumps(rec["characters"], ensure_ascii=False),
             ])
 

@@ -22,6 +22,7 @@ The purpose is to compare methods on quality and cost, not only to produce attra
 - `methods.md`: the index and comparison table for all methods.
 - `script/`: utility scripts shared across methods, currently volume tooling: `extract_pages.py` (unpack `data/volumes/*.cbz` into `data/page_per_volume/`) and `merge_to_cbz.py` (pack a page folder back into a `.cbz`). Both are Python 3 stdlib-only.
 - `scrape_frieren_wiki.py` + `frieren_wiki_dataset/`: scraper for the Frieren wiki (MediaWiki API) and its output dataset (per-chapter page counts, summaries, characters in order of appearance). Rerun with `python3 scrape_frieren_wiki.py`; see the dataset's `README.md`.
+- `associate_chapters_to_pages.py`: maps chapters to page-file ranges in `data/page_per_volume/` (filename chapter tags + padding rule, wiki-count fallback for the mislabeled v09, overrides for missing counts). Writes `frieren_wiki_dataset/chapter_page_map.json` + `chapter_pages.csv`.
 - `server/`: self-hosted inference server for the FLUX.2 Klein 9B method (BentoML, docker-packaged; weights are an external model dir mounted at runtime, never baked into the image). See `server/README.md`. The client side lives in the method directory (`local_fal_client.py` + `run.py --endpoint`).
 - `AGENTS.md`: these repository-wide instructions.
 - `.env`: contains the gemini api key, fal api key, openai api key, and openrouter api key

@@ -15,6 +15,9 @@ python3 scrape_frieren_wiki.py
 - `chapters.csv` — flat table; the `characters` column is a JSON-encoded list.
 - `characters.csv` — long form: one row per character appearance
   (`chapter`, `position`, `name`, `type`, `link`).
+- `chapter_page_map.json` + `chapter_pages.csv` — chapter → page-file mapping
+  for `data/page_per_volume/`, produced by `associate_chapters_to_pages.py`
+  (see below).
 
 ## Fields per chapter
 
@@ -38,6 +41,32 @@ Fetched: 2025-08-09 (all 147 chapters).
   `{{Stub/Section}}` placeholder; the wiki has not written summaries for them yet.
   Missing entries are `null`/absent, not empty strings.
 - `characters`: 147/147.
+
+## Chapter → page mapping (chapter_page_map.json / chapter_pages.csv)
+
+`associate_chapters_to_pages.py` associates every chapter with the page files
+of its volume in `data/page_per_volume/`:
+
+- layout is driven by the **filename chapter tags** (`c001 (v01) - p003 ...`),
+  which partition each volume exactly; the first 3 files and the last file of
+  each volume are padding (cover/title/credits/preview) and are excluded;
+- volume 9's files are mislabeled (every page tagged `c078`), so it falls back
+  to wiki page counts and is marked `verified: false` — its wiki counts leave
+  +6 files unassigned (VIZ extra pages), so its boundaries are approximate;
+- chapters 138–147 (vol 15) have no extracted volume yet and are unmapped;
+- chapters 105/106/119 have no wiki page count; the counts are taken from the
+  files (18 each) and can be overridden/verified with `--pages "105=18"`;
+- wiki counts differ from the actual files for 48/137 chapters (VIZ adds recap
+  and ad pages, mostly at the first chapter of each volume) — the mapping uses
+  the files and records the deltas in each chapter's `notes`.
+
+```bash
+python3 associate_chapters_to_pages.py [--pages "105=18"]
+```
+
+`file_indices` are 0-based into the natural-sorted listing of the volume
+directory, end-exclusive. `p_numbers` are the VIZ page numbers from the
+filenames (a spread file covers two p-numbers).
 
 ## Notes
 

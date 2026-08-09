@@ -1,32 +1,43 @@
 #!/usr/bin/env python3
-"""Detection model sweep over the integration-suite DET/OOV cases.
+"""Detection model + mode sweep over the integration-suite DET/OOV cases.
 
 Runs the same stage-isolated panel detection the integration test performs
-(committed pre-cropped panel -> one real OpenRouter call, V1 panel prompt)
-across several OpenRouter vision models, each repeated N times to measure
-run-to-run stability. Reports per-case pass counts, modal (most frequent)
-detections, aggregate precision/recall, cost, and latency.
+(committed pre-cropped panel -> real OpenRouter call, V1 panel prompt) and
+optionally the two page-context modes the pipeline supports, across several
+OpenRouter vision models, each repeated N times to measure run-to-run
+stability. Reports per-case pass counts, modal (most frequent) detections,
+aggregate precision/recall, fallback rates, cost, and latency.
+
+Modes (mirror pipeline_v1 `--detection-mode`):
+  - panel:       V1, one call per panel, the committed crop alone
+  - page:        V1.1, one call per page (numbered panels), per-panel
+                 cropped fallbacks for missing/uncertain/unknown entries
+  - panel-page:  V1.2, one call per panel: full page (target highlighted)
+                 as context + the crop, same cropped fallbacks
 
 Output goes to `tests/output/YYYYMMDD-HHMMSS/` (gitignored, same convention
 as integration sessions):
   - manifest.json  per-call records + totals
-  - summary.json   per-model aggregation
+  - summary.json   per-(mode, model) aggregation
   - results.md     markdown tables ready to paste into pipelines.md
 
 Usage:
     .venv/bin/python pipeline_v1/tests/sweep_detection_models.py \
-        [--models google/gemma-4-31b-it,openai/gpt-5.6-luna,xiaomi/mimo-v2.5] \
-        [--reps 4] [--output-dir tests/output/YYYYMMDD-HHMMSS]
+        [--models google/gemma-4-31b-it,openai/gpt-5.6-luna] \
+        [--modes panel,page,panel-page] [--reps 4] \
+        [--output-dir tests/output/YYYYMMDD-HHMMSS]
     .venv/bin/python pipeline_v1/tests/sweep_detection_models.py \
         --re-render tests/output/YYYYMMDD-HHMMSS/summary.json   # no API calls
 
-Requires OPENROUTER_API_KEY in .env (paid calls: one per case per rep).
+Requires OPENROUTER_API_KEY in .env (paid calls: one per case per rep in
+panel/panel-page mode, one per page per rep in page mode, plus fallbacks).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from datetime import datetime
@@ -43,23 +54,28 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(REPO_ROOT / ".env")
 
+from characters import OpenRouterCharacterDetector  # noqa: E402
+from detection import YoloPanelDetector  # noqa: E402
+from extraction import save_panels  # noqa: E402
 from integration_support import (  # noqa: E402
+    PAGE_PROMPT_FILE,
+    PANEL_PROMPT_FILE,
     REFS_DIR,
-    build_panel_detector,
     case_by_id,
     crop_path,
     load_fixture,
     write_json,
 )
+from panel_ordering import reading_order  # noqa: E402
+from PIL import Image  # noqa: E402
 from test_integration_detection import DETECTION_CASES  # noqa: E402
+from util import sha256  # noqa: E402
 
-DEFAULT_MODELS = [
-    "google/gemma-4-31b-it",
-    "openai/gpt-5.6-luna",
-    "xiaomi/mimo-v2.5",
-]
+DEFAULT_MODELS = ["google/gemma-4-31b-it", "openai/gpt-5.6-luna"]
+DEFAULT_MODES = ["panel", "page", "panel-page"]
 DEFAULT_REPS = 4
 OUTPUT_ROOT = TESTS_DIR / "output"
+PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 
 
 def eval_case(case: dict, record) -> dict:
@@ -86,17 +102,79 @@ def eval_case(case: dict, record) -> dict:
     }
 
 
+def panel_keys_for(n_panels: int) -> list[str]:
+    return [f"panel_{i:04d}" for i in range(1, n_panels + 1)]
+
+
+def build_page_dirs(fixture: dict, work_dir: Path) -> dict[str, Path]:
+    """Per-alias page dirs with the real reading-order extraction (YOLO +
+    `panel_ordering.reading_order` + `save_panels` + panels.json), the same
+    code path `prepare_integration_data.py` and the pipeline use."""
+    aliases: dict[str, list[dict]] = {}
+    for cid in DETECTION_CASES:
+        case = case_by_id(fixture, cid)
+        aliases.setdefault(case["input"]["source_page"], []).append(case)
+
+    detector = YoloPanelDetector()
+    page_dirs: dict[str, Path] = {}
+    for alias, _cases in aliases.items():
+        page_path = (REPO_ROOT / fixture["aliases"][alias]).resolve()
+        boxes = detector.detect(page_path)
+        order = reading_order(boxes)
+        ordered = [boxes[i] for i in order]
+        if not ordered:
+            raise RuntimeError(f"{alias}: 0 panels detected")
+        page_dir = work_dir / alias
+        page_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(page_path) as image:
+            page = image.convert("RGB")
+        records = save_panels(page, ordered, page_dir, inset=0)
+        detections = [
+            {
+                "panel_index": index,
+                "box": [round(b.x1), round(b.y1), round(b.x2), round(b.y2)],
+                "confidence": round(b.confidence, 4),
+                "crop": rec["filename"],
+                "provenance": "yolo",
+            }
+            for index, (b, rec) in enumerate(zip(ordered, records), start=1)
+        ]
+        geometry = {
+            "page": page_path.name,
+            "page_path": str(page_path.resolve()),
+            "page_sha256": sha256(page_path),
+            "detection_order_into_reading_order": order,
+            "detections": detections,
+            "reading_order": [d["panel_index"] for d in detections],
+            "blank_page": False,
+            "skip_reason": None,
+            "full_page_fallback": False,
+        }
+        write_json(page_dir / "panels.json", geometry)
+        page_dirs[alias] = page_dir
+        print(f"  page dir {alias}: {len(ordered)} panels")
+    return page_dirs
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS),
                         help="comma-separated OpenRouter model ids")
+    parser.add_argument("--modes", default=",".join(DEFAULT_MODES),
+                        help="comma-separated modes: panel,page,panel-page")
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
     parser.add_argument("--output-dir", default=None,
                         help="explicit output dir (default: timestamped)")
     parser.add_argument("--re-render", default=None,
                         help="regenerate results.md from an existing summary.json "
                              "(no API calls)")
+    parser.add_argument("--recompute-from", default=None,
+                        help="rebuild summary.json + results.md from a manifest.json "
+                             "(recomputes aggregates with the current logic; no API calls)")
     args = parser.parse_args()
+
+    if args.recompute_from:
+        return _recompute(Path(args.recompute_from))
 
     if args.re_render:
         summary = json.loads(Path(args.re_render).read_text(encoding="utf-8"))
@@ -108,10 +186,10 @@ def main() -> int:
         return 0
 
     models = [m.strip() for m in args.models.split(",") if m.strip()]
-
+    modes = [m.strip() for m in args.modes.split(",") if m.strip()]
     fixture = load_fixture()
     cases = [case_by_id(fixture, cid) for cid in DETECTION_CASES]
-    api_key = __import__("os").getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("OPENROUTER_API_KEY not set in .env; aborting", file=sys.stderr)
         return 1
@@ -120,13 +198,15 @@ def main() -> int:
         OUTPUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "kind": "detection-model-sweep",
+        "kind": "detection-model-mode-sweep",
         "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "config": {
             "models": models,
+            "modes": modes,
             "reps": args.reps,
             "cases": [c["id"] for c in cases],
-            "prompt": "panel-only (V1 panel prompt), same as test_integration_detection.py",
+            "prompt": ("V1 panel prompt (panel), page prompt (page), "
+                       "panel-page prompt (panel-page); same as the pipeline"),
             "max_tokens": 1024,
             "temperature": 0.2,
         },
@@ -134,91 +214,140 @@ def main() -> int:
         "totals": {},
     }
     print(f"output dir: {output_dir}")
-    print(f"cases: {[c['id'] for c in cases]}")
+    print(f"cases: {[c['id'] for c in cases]} | models: {models} | modes: {modes}")
 
-    per_model: dict[str, dict] = {}
-    for model in models:
-        print(f"\n== model {model} ({args.reps} reps x {len(cases)} cases)", flush=True)
-        detector = build_panel_detector(api_key, model=model)
-        model_rows: list[dict] = []
-        for rep in range(1, args.reps + 1):
-            for case in cases:
-                cid = case["id"]
-                record = detector.detect(crop_path(cid), REFS_DIR)
-                verdict = eval_case(case, record)
-                row = {
-                    "model": model,
-                    "rep": rep,
-                    "case": cid,
-                    "expected": sorted(case["expected"]["characters"]),
-                    "detected": sorted(record.characters),
-                    "unknown_entries": record.unknown_entries,
-                    "status": record.status,
-                    **verdict,
-                    "cost_usd": record.cost_usd,
-                    "cost_source": record.cost_source,
-                    "latency_s": round(record.latency_s, 3),
-                    "model_returned": record.model_returned,
-                    "error": record.error,
-                }
-                manifest["records"].append(row)
-                model_rows.append(row)
-                tag = "PASS" if verdict["pass"] else "fail"
-                print(f"  {cid} rep{rep}: {sorted(record.characters)} {tag} "
-                      f"(${record.cost_usd or 0:.6f}, {record.latency_s:.1f}s)")
-            write_json(output_dir / "manifest.json", manifest)  # incremental
+    page_dirs = build_page_dirs(fixture, output_dir / ".pages")
+    per_mode_model: dict[tuple[str, str], dict] = {}
 
-        by_case: dict[str, dict] = {}
-        for case in cases:
-            cid = case["id"]
-            rows = [r for r in model_rows if r["case"] == cid]
-            detections = Counter(tuple(r["detected"]) for r in rows)
-            modal = max(detections.items(), key=lambda kv: (kv[1], kv[0]))[0]
-            by_case[cid] = {
-                "passes": sum(r["pass"] for r in rows),
-                "chars_matches": sum(r["chars_match"] for r in rows),
-                "modal_detection": list(modal),
-                "modal_reps": detections[modal],
-                "detection_histogram": {
-                    ", ".join(d) or "(none)": n for d, n in
-                    sorted(detections.items(), key=lambda kv: -kv[1])
-                },
-                "unknown_ok": sum(r["unknown_ok"] for r in rows),
-                "errors": sum(1 for r in rows if r["status"] == "error"),
-                "unparseable": sum(1 for r in rows if r["status"] == "unparseable"),
-                "cost_usd": sum(r["cost_usd"] or 0 for r in rows),
-            }
-        tp = sum(r["tp"] for r in model_rows)
-        fp = sum(r["fp"] for r in model_rows)
-        fn = sum(r["fn"] for r in model_rows)
-        total_expected = sum(r["expected_count"] for r in model_rows)
-        passes = sum(r["pass"] for r in model_rows)
-        per_model[model] = {
-            "by_case": by_case,
-            "aggregate": {
-                "case_reps": len(model_rows),
-                "passes": passes,
-                "pass_rate": round(passes / len(model_rows), 4),
-                "chars_matches": sum(r["chars_match"] for r in model_rows),
-                "tp": tp, "fp": fp, "fn": fn,
-                "precision": round(tp / (tp + fp), 4) if tp + fp else None,
-                "recall": round(tp / (tp + fn), 4) if tp + fn else None,
-                "total_expected": total_expected,
-                "errors": sum(1 for r in model_rows if r["status"] == "error"),
-                "unparseable": sum(1 for r in model_rows if r["status"] == "unparseable"),
-                "cost_usd": round(sum(r["cost_usd"] or 0 for r in model_rows), 8),
-                "latency_avg_s": round(sum(r["latency_s"] for r in model_rows)
-                                      / len(model_rows), 2),
-            },
-        }
-        manifest["totals"][model] = per_model[model]["aggregate"]
-        write_json(output_dir / "manifest.json", manifest)
+    for mode in modes:
+        for model in models:
+            print(f"\n== mode={mode} model={model} "
+                  f"({args.reps} reps x {len(cases)} cases)", flush=True)
+            detector = OpenRouterCharacterDetector(model=model, api_key=api_key)
+            detector.prepare(
+                REFS_DIR,
+                prompt_file=PAGE_PROMPT_FILE,
+                panel_prompt_file=PANEL_PROMPT_FILE,
+                panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+            )
+            method = ("detect_page" if mode == "page"
+                      else "detect_panels_with_page" if mode == "panel-page"
+                      else "detect")
+            rows: list[dict] = []
+            page_totals: dict[str, dict] = {}
+
+            for rep in range(1, args.reps + 1):
+                if mode == "panel":
+                    for case in cases:
+                        cid = case["id"]
+                        record = detector.detect(crop_path(cid), REFS_DIR)
+                        verdict = eval_case(case, record)
+                        row = {
+                            "mode": mode, "model": model, "rep": rep,
+                            "case": cid,
+                            "expected": sorted(case["expected"]["characters"]),
+                            "detected": sorted(record.characters),
+                            "unknown_entries": record.unknown_entries,
+                            "status": record.status, "source": record.source,
+                            "page_parse_ok": None, "fallback": False,
+                            **verdict,
+                            "cost_usd": record.cost_usd,
+                            "cost_source": record.cost_source,
+                            "latency_s": round(record.latency_s, 3),
+                            "model_returned": record.model_returned,
+                            "error": record.error,
+                        }
+                        manifest["records"].append(row)
+                        rows.append(row)
+                        tag = "PASS" if verdict["pass"] else "fail"
+                        print(f"  {cid} rep{rep}: {sorted(record.characters)} {tag} "
+                              f"(${record.cost_usd or 0:.6f}, "
+                              f"{record.latency_s:.1f}s)", flush=True)
+                else:
+                    # page / panel-page: one page-scoped call per alias.
+                    cases_by_alias: dict[str, list[dict]] = {}
+                    for case in cases:
+                        cases_by_alias.setdefault(
+                            case["input"]["source_page"], []).append(case)
+                    for alias, alias_cases in cases_by_alias.items():
+                        page_dir = page_dirs[alias]
+                        page_path = (REPO_ROOT / fixture["aliases"][alias]).resolve()
+                        geometry = json.loads(
+                            (page_dir / "panels.json").read_text(encoding="utf-8")
+                        )
+                        expected = panel_keys_for(len(geometry["detections"]))
+                        page_record = getattr(detector, method)(
+                            page_path, page_dir, expected, REFS_DIR
+                        )
+                        pt = page_totals.setdefault(alias, {
+                            "page_calls": 0, "fallback_calls": 0,
+                            "cost_usd": 0.0, "latency_s": 0.0,
+                        })
+                        pt["page_calls"] += page_record.page_calls
+                        pt["fallback_calls"] += page_record.fallback_calls
+                        pt["cost_usd"] = round(
+                            pt["cost_usd"] + (page_record.cost_usd or 0.0), 8)
+                        pt["latency_s"] = round(
+                            pt["latency_s"] + page_record.total_latency_s, 3)
+                        for case in alias_cases:
+                            cid = case["id"]
+                            panel_key = case["input"]["panel"]
+                            record = page_record.panels.get(panel_key)
+                            if record is None:
+                                record = _missing_record(panel_key)
+                            verdict = eval_case(case, record)
+                            if mode == "page":
+                                # cost/latency attributed at page level: share
+                                # equally across the page's panels.
+                                share = max(1, len(expected))
+                                cost = (page_record.cost_usd or 0.0) / share
+                                lat = page_record.total_latency_s / share
+                            else:
+                                cost = record.cost_usd
+                                lat = record.latency_s
+                            row = {
+                                "mode": mode, "model": model, "rep": rep,
+                                "case": cid,
+                                "expected": sorted(case["expected"]["characters"]),
+                                "detected": sorted(record.characters),
+                                "unknown_entries": record.unknown_entries,
+                                "status": record.status, "source": record.source,
+                                "page_parse_ok": page_record.page_parse_ok,
+                                "fallback": record.source == "fallback",
+                                **verdict,
+                                "cost_usd": round(cost, 8) if cost is not None else None,
+                                "cost_source": (record.cost_source if mode == "panel-page"
+                                                else "page-level-share"),
+                                "latency_s": round(lat, 3),
+                                "model_returned": record.model_returned,
+                                "error": record.error,
+                            }
+                            manifest["records"].append(row)
+                            rows.append(row)
+                            tag = "PASS" if verdict["pass"] else "fail"
+                            fbk = " (fallback)" if record.source == "fallback" else ""
+                            print(f"  {cid} rep{rep}: {sorted(record.characters)} "
+                                  f"{tag}{fbk} (${cost or 0:.6f}, {lat:.1f}s)",
+                                  flush=True)
+                write_json(output_dir / "manifest.json", manifest)  # incremental
+
+            per_mode_model[(mode, model)] = _aggregate(rows)
+            manifest["totals"][f"{mode}|{model}"] = \
+                per_mode_model[(mode, model)]["aggregate"]
+            write_json(output_dir / "manifest.json", manifest)
 
     summary = {
+        "kind": "detection-model-mode-sweep",
         "models": models,
+        "modes": modes,
         "reps": args.reps,
         "cases": [c["id"] for c in cases],
-        "per_model": per_model,
+        "page_totals": {f"{mode}|{model}|{alias}": pt
+                        for mode in modes for model in models
+                        for alias, pt in page_totals.items()},
+        "per_mode_model": {
+            f"{mode}|{model}": agg for (mode, model), agg in per_mode_model.items()
+        },
     }
     write_json(output_dir / "summary.json", summary)
     (output_dir / "results.md").write_text(
@@ -228,76 +357,181 @@ def main() -> int:
     return 0
 
 
+def _recompute(manifest_path: Path) -> int:
+    """Rebuild summary.json + results.md from a saved manifest.json, using
+    the current aggregation logic (e.g. after a bug fix). No API calls."""
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    config = manifest["config"]
+    rows = manifest["records"]
+    fixture = load_fixture()
+    cases = [case_by_id(fixture, cid) for cid in config["cases"]]
+    models, modes = config["models"], config["modes"]
+    per = {}
+    for mode in modes:
+        for model in models:
+            key = f"{mode}|{model}"
+            per[key] = _aggregate(
+                [r for r in rows if r["mode"] == mode and r["model"] == model]
+            )
+    summary = {
+        "kind": manifest.get("kind", "detection-model-mode-sweep"),
+        "models": models,
+        "modes": modes,
+        "reps": config["reps"],
+        "cases": config["cases"],
+        "per_mode_model": per,
+    }
+    out_dir = manifest_path.parent
+    write_json(out_dir / "summary.json", summary)
+    (out_dir / "results.md").write_text(
+        render_markdown(summary, cases), encoding="utf-8"
+    )
+    print(f"recomputed {out_dir / 'summary.json'} + {out_dir / 'results.md'}"
+          f" from {manifest_path.name}")
+    return 0
+
+
+def _missing_record(panel_key: str):
+    from characters import CharacterRecord
+    return CharacterRecord(
+        status="error", characters=[], unknown_entries=[], response_text="",
+        usage={}, cost_usd=None, cost_source="missing", latency_s=0.0,
+        model_returned=None, attempts=0,
+        error=f"missing panel record {panel_key}", source="missing",
+    )
+
+
+def _aggregate(rows: list[dict]) -> dict:
+    by_case: dict[str, dict] = {}
+    for case_id in DETECTION_CASES:
+        r = [x for x in rows if x["case"] == case_id]
+        if not r:
+            continue
+        detections = Counter(tuple(x["detected"]) for x in r)
+        modal = max(detections.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        by_case[case_id] = {
+            "passes": sum(x["pass"] for x in r),
+            "chars_matches": sum(x["chars_match"] for x in r),
+            "modal_detection": list(modal),
+            "modal_reps": detections[modal],
+            "detection_histogram": {
+                ", ".join(d) or "(none)": n for d, n in
+                sorted(detections.items(), key=lambda kv: -kv[1])
+            },
+            "unknown_ok": sum(x["unknown_ok"] for x in r),
+            "fallbacks": sum(1 for x in r if x.get("fallback")),
+            "errors": sum(1 for x in r if x["status"] in ("error", "unparseable")
+                          or (x.get("mode") == "page"
+                              and x.get("page_parse_ok") is False)),
+            "cost_usd": sum(x["cost_usd"] or 0 for x in r),
+        }
+    tp = sum(x["tp"] for x in rows)
+    fp = sum(x["fp"] for x in rows)
+    fn = sum(x["fn"] for x in rows)
+    n = len(rows)
+    return {
+        "by_case": by_case,
+        "aggregate": {
+            "case_reps": n,
+            "passes": sum(x["pass"] for x in rows),
+            "pass_rate": round(sum(x["pass"] for x in rows) / n, 4) if n else None,
+            "chars_matches": sum(x["chars_match"] for x in rows),
+            "tp": tp, "fp": fp, "fn": fn,
+            "precision": round(tp / (tp + fp), 4) if tp + fp else None,
+            "recall": round(tp / (tp + fn), 4) if tp + fn else None,
+            "total_expected": sum(x["expected_count"] for x in rows),
+            "fallbacks": sum(1 for x in rows if x.get("fallback")),
+            "errors": sum(1 for x in rows if x["status"] in ("error", "unparseable")
+                          or (x.get("mode") == "page"
+                              and x.get("page_parse_ok") is False)),
+            "cost_usd": round(sum(x["cost_usd"] or 0 for x in rows), 8),
+            "latency_avg_s": round(sum(x["latency_s"] for x in rows) / n, 2) if n else None,
+        },
+    }
+
+
 def render_markdown(summary: dict, cases: list[dict]) -> str:
     """Markdown tables (per-case pass counts + modal detections + aggregates)."""
     models = summary["models"]
+    modes = summary.get("modes", ["panel"])
     reps = summary["reps"]
-    per_model = summary["per_model"]
+    per = summary.get("per_mode_model", {})
+    # Backwards-compatible with the panel-only sweep summary format.
+    if not per and "per_model" in summary:
+        per = {f"panel|{m}": v for m, v in summary["per_model"].items()}
+    cells = [(mode, model) for mode in modes for model in models]
+    col_labels = [f"{mode}·{model.split('/')[-1]}" for mode, model in cells]
 
     lines: list[str] = []
-    lines.append(f"### Detection model sweep — {', '.join(models)} "
-                 f"({reps} reps x {len(cases)} cases, live OpenRouter, panel-only mode)")
+    lines.append(f"### Detection sweep — modes x models "
+                 f"({', '.join(modes)} x {', '.join(m.split('/')[-1] for m in models)}, "
+                 f"{reps} reps x {len(cases)} cases, live OpenRouter)")
     lines.append("")
 
     # --- table 1: pass counts per case -----------------------------------
-    header = "| Case | expected | " + " | ".join(models) + " |"
-    lines.append(header)
-    lines.append("|" + "|".join(["---"] * (2 + len(models))) + "|")
-    total_pass = [0] * len(models)
+    lines.append(f"Per-case pass count over the {reps} reps (pass = exact "
+                 f"character set + `unknown_present` semantics):")
+    lines.append("")
+    lines.append("| Case | expected | " + " | ".join(col_labels) + " |")
+    lines.append("|" + "|".join(["---"] * (2 + len(cells))) + "|")
+    total_pass = [0] * len(cells)
     total_case_reps = len(cases) * reps
     for case in cases:
         cid = case["id"]
         exp = ", ".join(case["expected"]["characters"]) or "—"
         row = [cid, exp]
-        for m in models:
-            info = per_model[m]["by_case"][cid]
+        for i, (mode, model) in enumerate(cells):
+            info = per[f"{mode}|{model}"]["by_case"][cid]
             passes = info["passes"]
-            total_pass[models.index(m)] += passes
-            errs = info["errors"] + info["unparseable"]
+            total_pass[i] += passes
+            fbks = info.get("fallbacks", 0)
             cell = f"{passes}/{reps}"
-            if errs:
-                cell += f" ({errs} parse-fail)"
+            if fbks:
+                cell += f" ({fbks} fbk)"
             row.append(cell)
         lines.append("| " + " | ".join(row) + " |")
     lines.append("| **Total** | | " + " | ".join(
-        f"**{total_pass[i]}/{total_case_reps}**" for i in range(len(models))) + " |")
+        f"**{total_pass[i]}/{total_case_reps}**" for i in range(len(cells))) + " |")
     lines.append("")
 
-    # --- table 2: modal detection per model -------------------------------
-    lines.append("Modal (most frequent) detection per model over the reps:")
+    # --- table 2: modal detection per mode/model --------------------------
+    lines.append("Modal (most frequent) detection per mode/model over the reps:")
     lines.append("")
-    header = "| Case | expected | " + " | ".join(
-        f"{m.split('/')[-1]}" for m in models) + " |"
-    lines.append(header)
-    lines.append("|" + "|".join(["---"] * (2 + len(models))) + "|")
+    lines.append("| Case | expected | " + " | ".join(col_labels) + " |")
+    lines.append("|" + "|".join(["---"] * (2 + len(cells))) + "|")
     for case in cases:
         cid = case["id"]
         exp = ", ".join(case["expected"]["characters"]) or "—"
         row = [cid, exp]
-        for m in models:
-            info = per_model[m]["by_case"][cid]
+        for mode, model in cells:
+            info = per[f"{mode}|{model}"]["by_case"][cid]
             modal = ", ".join(info["modal_detection"]) or "∅"
             row.append(f"{modal} ({info['modal_reps']}/{reps})")
         lines.append("| " + " | ".join(row) + " |")
     lines.append("")
 
     # --- table 3: aggregates ----------------------------------------------
-    lines.append("Aggregates over all case-reps (TP/FP/FN on known characters):")
+    lines.append("Aggregates over all case-reps (TP/FP/FN on known characters; "
+                 "fallbacks = reps resolved by a cropped-panel call; "
+                 "parse-fail = unparseable/error calls or unparsed page answers):")
     lines.append("")
-    lines.append("| model | pass | chars match | precision | recall | errors | cost | avg latency |")
+    lines.append("| mode · model | pass | precision | recall | fallbacks | "
+                 "parse-fail | cost | avg latency |")
     lines.append("|---|---|---|---|---|---|---|---|")
-    for m in models:
-        a = per_model[m]["aggregate"]
+    for mode, model in cells:
+        a = per[f"{mode}|{model}"]["aggregate"]
         lines.append(
-            f"| {m} | {a['passes']}/{a['case_reps']} "
-            f"({a['pass_rate']:.0%}) | {a['chars_matches']}/{a['case_reps']} "
+            f"| {mode} · {model.split('/')[-1]} "
+            f"| {a['passes']}/{a['case_reps']} "
+            f"({a['pass_rate']:.0%}) "
             f"| {a['precision'] if a['precision'] is not None else '—'} "
             f"| {a['recall'] if a['recall'] is not None else '—'} "
-            f"| {a['errors']} | ${a['cost_usd']:.6f} "
-            f"| {a['latency_avg_s']:.1f}s |"
+            f"| {a.get('fallbacks', 0)} | {a.get('errors', 0)} "
+            f"| ${a['cost_usd']:.6f} | {a['latency_avg_s']:.1f}s |"
         )
     lines.append("")
-    total_cost = sum(per_model[m]["aggregate"]["cost_usd"] for m in models)
+    total_cost = sum(per[f"{m}|{md}"]["aggregate"]["cost_usd"]
+                     for m in modes for md in models)
     lines.append(f"Total OpenRouter cost for the sweep: ${total_cost:.6f}.")
     lines.append("")
     return "\n".join(lines)

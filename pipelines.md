@@ -256,6 +256,87 @@ Findings:
   (equal pass rate, best price/latency/stability). luna is worth re-testing
   with page-level context for the flashback-era cases; mimo-v2.5 is out.
 
+### Detection mode sweep — panel vs page vs panel-page (2026-08-09, live OpenRouter)
+
+The follow-up sweep runs the two viable models (gemma-4-31b-it, gpt-5.6-luna)
+× the pipeline's three detection modes × 4 reps over the same 11 DET/OOV
+cases: panel (crop only), page (one call per page, numbered panels),
+panel-page (one call per panel, full page highlighted + crop). Per-call
+records: `pipeline_v1/tests/output/20260809-211355/`; total sweep cost
+$0.056. Pass = exact character set + `unknown_present` semantics.
+
+| Case | expected | panel·gemma | panel·luna | page·gemma | page·luna | panel-page·gemma | panel-page·luna |
+|---|---|---|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | 0/4 | 0/4 | 0/4 | 4/4 | 4/4 | 3/4 |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | 0/4 | 2/4 | 0/4 | 4/4 | 4/4 | 4/4 |
+| DET-003 | Heiter | 2/4 | 1/4 | 4/4 | 0/4 (4 fbk) | 4/4 | 4/4 |
+| DET-004 | Frieren, Heiter | 1/4 | 0/4 | 4/4 | 2/4 (4 fbk) | 4/4 | 2/4 (1 fbk) |
+| OOV-001 | — | 0/4 | 0/4 | 0/4 | 0/4 (4 fbk) | 0/4 | 0/4 |
+| DET-005 | — | 4/4 | 4/4 | 4/4 | 4/4 (2 fbk) | 4/4 | 4/4 |
+| DET-006 | Frieren | 4/4 | 3/4 | 4/4 | 4/4 (2 fbk) | 4/4 | 4/4 |
+| DET-007 | Frieren | 3/4 | 4/4 | 4/4 | 4/4 (2 fbk) | 4/4 | 4/4 |
+| DET-008 | Frieren, Fern | 1/4 | 3/4 | 0/4 | 2/4 (2 fbk) | 3/4 | 1/4 (3 fbk) |
+| DET-009 | Frieren, Fern | 1/4 | 3/4 | 0/4 | 3/4 (2 fbk) | 4/4 | 4/4 |
+| DET-010 | Frieren | 3/4 | 0/4 | 4/4 | 2/4 (2 fbk) | 3/4 | 4/4 |
+| **Total** | | **19/44** | **20/44** | **24/44** | **29/44** | **38/44** | **34/44** |
+
+Modal (most frequent) detection per mode/model over the 4 reps:
+
+| Case | expected | panel·gemma | panel·luna | page·gemma | page·luna | panel-page·gemma | panel-page·luna |
+|---|---|---|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | Fern, Stark (3/4) | Uebel (1/4) | Himmel (4/4) | Frieren, Himmel (4/4) | Frieren, Himmel (4/4) | Frieren, Himmel (3/4) |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | Heiter, Himmel (2/4) | Eisen, Frieren, Heiter, Himmel (2/4) | Frieren, Heiter, Himmel (4/4) | Eisen, Frieren, Heiter, Himmel (4/4) | Eisen, Frieren, Heiter, Himmel (4/4) | Eisen, Frieren, Heiter, Himmel (4/4) |
+| DET-003 | Heiter | Heiter (2/4) | Denken (3/4) | Heiter (4/4) | Denken (3/4) | Heiter (4/4) | Heiter (4/4) |
+| DET-004 | Frieren, Heiter | Frieren (2/4) | Flamme, Heiter (2/4) | Frieren, Heiter (4/4) | Frieren, Heiter (2/4) | Frieren, Heiter (4/4) | Frieren, Heiter (2/4) |
+| OOV-001 | — | Heiter (2/4) | Heiter (3/4) | Denken (3/4) | Wirbel (2/4) | Denken (4/4) | Wirbel (4/4) |
+| DET-005 | — | ∅ (4/4) | ∅ (4/4) | ∅ (4/4) | ∅ (4/4) | ∅ (4/4) | ∅ (4/4) |
+| DET-006 | Frieren | Frieren (4/4) | Frieren (3/4) | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) |
+| DET-007 | Frieren | Frieren (3/4) | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) | Frieren (4/4) |
+| DET-008 | Frieren, Fern | Aura, Frieren (2/4) | Fern, Frieren (3/4) | Frieren (4/4) | Frieren (2/4) | Fern, Frieren (3/4) | ∅ (3/4) |
+| DET-009 | Frieren, Fern | Aura, Frieren (3/4) | Fern, Frieren (3/4) | Frieren (4/4) | Fern, Frieren (3/4) | Fern, Frieren (4/4) | Fern, Frieren (4/4) |
+| DET-010 | Frieren | Frieren (3/4) | Serie (4/4) | Frieren (4/4) | Serie (2/4) | Frieren (3/4) | Frieren (4/4) |
+
+Aggregates over all case-reps (TP/FP/FN on known characters; fallbacks =
+reps resolved by a cropped-panel call; parse-fail = unparseable/error calls
+or unparsed page answers; page-mode cost/latency shared across the page's
+panels):
+
+| mode · model | pass | precision | recall | fallbacks | parse-fail | cost | avg latency |
+|---|---|---|---|---|---|---|---|
+| panel · gemma-4-31b-it | 19/44 (43%) | 0.623 | 0.594 | 0 | 1 | $0.0031 | 2.9 s |
+| panel · gpt-5.6-luna | 20/44 (45%) | 0.649 | 0.578 | 0 | 4 | $0.0123 | 5.6 s |
+| page · gemma-4-31b-it | 24/44 (55%) | 0.906 | 0.750 | 0 | 0 | $0.0009 | 2.1 s |
+| page · gpt-5.6-luna | 29/44 (66%) | 0.836 | 0.797 | 24 | 24 | $0.0178 | 7.8 s |
+| panel-page · gemma-4-31b-it | 38/44 (86%) | 0.912 | 0.969 | 0 | 0 | $0.0052 | 5.5 s |
+| panel-page · gpt-5.6-luna | 34/44 (77%) | 0.900 | 0.844 | 4 | 4 | $0.0162 | 8.0 s |
+
+Findings:
+
+- **The mode matters far more than the model.** panel-page (V1.2) nearly
+  doubles panel-only pass rates for both models (gemma 43% → 86%, luna 45% →
+  77%). Page context resolves the flashback-era confusion outright:
+  panel-page·gemma gets DET-001 and DET-002 4/4 (hero party complete) and
+  DET-003/004 (Heiter) 4/4 — the exact failures panel-only mode tracks.
+- **gemma + panel-page is the best combination**: 38/44, precision 0.912,
+  recall 0.969, zero fallbacks and zero parse-fails, ~$0.005 per 44
+  case-reps. It fixes the p130 look-alike cases too: DET-009 4/4, DET-008
+  3/4, DET-010 3/4 (panel-only modal for DET-008/009 was even `{Aura,
+  Frieren}` — a demon forced into a Frieren/Fern panel).
+- **page mode is a distant second and luna's 66% is misleading**: 24/44 of
+  luna's page-mode case-reps came from cropped-panel fallbacks because its
+  page-level answers fail the strict per-panel JSON format (24 parse-fail; 6
+  of 16 page calls unparsed). When luna's page answer does parse it is
+  excellent (DET-001/002 4/4), but it cannot be relied on. gemma's page
+  mode parsed 44/44 and is the cheapest (one call serves the whole page) but
+  under-detects on numbered-page-only prompts (DET-001 modal `{Himmel}`,
+  DET-002 modal `{Frieren, Heiter, Himmel}` — misses a hero-party member).
+- **OOV-001 stays unsolved in every mode/model**: Clematis is forced to
+  Denken/Wirbel/Heiter and never reported unknown.
+- **Recommendation**: switch the pipeline default from `page` to
+  `panel-page` with `google/gemma-4-31b-it` — at ~$0.0001/case-rep and ~5 s
+  per panel it costs about 5× a page call but is worth it; luna is the
+  fallback candidate (34/44) if gemma regresses.
+
 ### Color — explicit palettes (human review pending)
 
 The three COL cases were run with forced ground-truth identities (Run

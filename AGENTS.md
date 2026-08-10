@@ -216,8 +216,10 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 - Requirements: `OPENROUTER_API_KEY` in `.env` (paid detection) and the Spark
   FLUX server running (`curl http://spark:3000/healthz`). Offline demo without
   any of that: `pipeline_v1/run.py --mock --limit 1` (mock backends). Tests:
-  `.venv/bin/pytest pipeline_v1/tests -q` (fully offline; the real smoke test
-  is `pipeline_v1/scripts/smoke_real.sh` and is not part of pytest).
+  `.venv/bin/pytest pipeline_v1/tests -q` (fully offline; the real full-pipeline
+  run with real backends is covered by the `integration`-marked
+  `test_end_to_end_integration.py`, and `scripts/smoke_real.sh` remains handy
+  for a quick manual run on any input folder).
 - Cost: character detection ~$0.00008/panel (measured via `usage.cost`, paid
   OpenRouter tier; recorded in `2_characters/` and the manifest
   `totals.openrouter_cost_usd`); colorization $0 per call (self-hosted FLUX on
@@ -226,7 +228,10 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration` —
   no mocks: real OpenRouter gemma panel detection (DET/OOV — one test per
   detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`), real FLUX on
-  Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY). Inputs
+  Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY), plus a
+  full-pipeline end-to-end test (`test_end_to_end_integration.py`, E2E-P130)
+  running all four stages with real backends on one real page (volume-1
+  p130). Inputs
   are committed under `tests/data/` (per-case crops, plus full committed
   pages and per-page panel sets for the detection pages; regenerate with
   `tests/prepare_integration_data.py`); each session writes a timestamped

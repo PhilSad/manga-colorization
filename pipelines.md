@@ -132,7 +132,14 @@ spread. It adds a fixed evaluation contract
 and the real-network **integration suite** (`pytest pipeline_v1/tests -m integration`,
 no mocks) that runs the fixed set live against the real backends; the earlier
 `evaluate.py` CLI (auto-scored detection + human `color_review.md`) has been
-retired in its favour. All V1.1 runs used a fixed seed
+retired in its favour. On top of the stage-isolated DET/OOV/COL/SIZE/LAY
+tests, a full end-to-end integration test (`test_end_to_end_integration.py`,
+case E2E-P130) runs the entire pipeline — real YOLO + real OpenRouter
+`panel-page` detection + real FLUX on Spark + stitching — on volume-1 p130
+(the DET-005..010 page) and asserts the wiring end to end: panel crops
+reproduce the committed fixture set byte-for-byte, every panel gets a
+character record and a colorized output, and the stitch preserves the B&W
+gutters. All V1.1 runs used a fixed seed
 (`1337`); V1 used the default (random) seed.
 
 Changed settings vs V1: **per-page character detection** (one paid call per

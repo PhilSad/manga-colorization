@@ -67,7 +67,6 @@ from integration_support import (  # noqa: E402
     PANEL_PROMPT_FILE,
     REFS_DIR,
     case_by_id,
-    crop_path,
     load_fixture,
     write_json,
 )
@@ -247,6 +246,7 @@ def main() -> int:
             detector = OpenRouterCharacterDetector(
                 model=model, api_key=api_key,
                 chapter_casts_file=CHAPTER_CASTS_FILE,
+                chapter_page_map_file=CHAPTER_PAGE_MAP_FILE,
                 workers=args.workers,
             )
             detector.prepare(
@@ -434,7 +434,11 @@ def _run_item(
     if mode == "panel":
         case = item
         cid = case["id"]
-        record = detector.detect(crop_path(cid), REFS_DIR)
+        page_dir = page_dirs[case["input"]["source_page"]]
+        page_record = detector.detect(
+            "panel", None, page_dir, [case["input"]["panel"]], REFS_DIR
+        )
+        record = page_record.panels[case["input"]["panel"]]
         verdict = eval_case(case, record)
         rows.append({
             "mode": mode, "model": model, "rep": rep, "case": cid,
@@ -455,24 +459,10 @@ def _run_item(
     page_path = (REPO_ROOT / fixture["aliases"][alias]).resolve()
     geometry = json.loads((page_dir / "panels.json").read_text(encoding="utf-8"))
     expected = panel_keys_for(len(geometry["detections"]))
-    cast_key = None
-    if mode == "panel-page-cast":
-        from characters import cast_key_for_page
-
-        cast_key = cast_key_for_page(
-            page_path, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
-        )
-        if hasattr(detector, "set_cast"):
-            detector.set_cast(cast_key)
-    if cast_key is not None:
-        page_record = detector.detect_panels_with_page(
-            page_path, page_dir, expected, REFS_DIR, cast_key=cast_key
-        )
-    else:
-        method = "detect_page" if mode == "page" else "detect_panels_with_page"
-        page_record = getattr(detector, method)(
-            page_path, page_dir, expected, REFS_DIR
-        )
+    page_record = detector.detect(
+        mode, page_path, page_dir, expected, REFS_DIR
+    )
+    cast_key = page_record.cast_key
     pt = {alias: {
         "page_calls": page_record.page_calls,
         "fallback_calls": page_record.fallback_calls,

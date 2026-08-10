@@ -2,23 +2,26 @@
 
 One parametrized test function per detection mode, each run over the full
 case set with **committed inputs** from `tests/data/` — no panel detection in
-the tests themselves (the layout-stage crop-stability tripwire guards that):
+the tests themselves (the layout-stage crop-stability tripwire guards that).
+All four modes go through the unified `OpenRouterCharacterDetector.detect(
+mode, ...)` entry point, which dispatches to the mode's strategy
+(`characters.DETECTION_STRATEGIES`):
 
-- `test_detection_panel` — `OpenRouterCharacterDetector.detect` on the
-  committed crop (V1 prompt; also the fallback path).
-- `test_detection_panel_page` — `detect_panels_with_page`: the numbered
-  committed page + the committed crop (the pipeline's default mode).
-- `test_detection_panel_page_cast` — same, with the chapter-cast shortlist
-  (`fixture["cast_keys"][alias]`).
-- `test_detection_page` — `detect_page`: one page-level mapping call per
-  case; the case's panel entry is kept (missing/uncertain/unknown entries
-  trigger the built-in per-panel fallback).
+- `panel` — one call per committed crop (V1 prompt; also the fallback path).
+- `panel-page` — the numbered committed page + the committed crop (the
+  pipeline's default detection mode).
+- `panel-page-cast` — panel-page with the chapter-cast shortlist
+  (`fixture["cast_keys"][alias]`, passed explicitly so the fixture stays the
+  single source of truth).
+- `page` — one page-level mapping call per case; the case's panel entry is
+  kept (missing/uncertain/unknown entries trigger the built-in per-panel
+  fallback).
 
-Every mode asserts the same expected character set / unknown flags from the
-fixture (`assert_matches`); per-(mode, case) records with `usage.cost` land
-in the timestamped integration run dir. Known-failing cases (DET-006..010,
-OOV-001) assert the *correct* outcome and fail loudly on a live run — they
-stay tracked in the fixture, never xfailed.
+Every mode returns a per-page `PageCharacterRecord`; the per-panel record is
+asserted against the same fixture expectations (`assert_matches`), and a slim
+record with `usage.cost` lands in the timestamped integration run dir.
+Known-failing cases (DET-006..010, OOV-001) assert the *correct* outcome and
+fail loudly on a live run — they stay tracked in the fixture, never xfailed.
 """
 
 from __future__ import annotations
@@ -31,7 +34,6 @@ from integration_support import (
     build_panel_detector,
     case_by_id,
     committed_page,
-    crop_path,
     load_fixture,
     materialize_panels_dir,
     record_detection,
@@ -53,10 +55,18 @@ def detector(openrouter_key):
 
 
 @pytest.mark.parametrize("case_id", DETECTION_CASES)
-def test_detection_panel(integration_run, detector, case_id):
+def test_detection_panel(integration_run, detector, case_id, tmp_path):
     """panel mode: the committed crop alone (V1 prompt, the fallback path)."""
     case = case_by_id(FIXTURE, case_id)
-    record = detector.detect(crop_path(case_id), REFS_DIR)
+    alias = case["input"]["source_page"]
+    page_record = detector.detect(
+        "panel",
+        committed_page(alias),
+        materialize_panels_dir(alias, tmp_path),
+        [case["input"]["panel"]],
+        REFS_DIR,
+    )
+    record = page_record.panels[case["input"]["panel"]]
     record_detection(integration_run, "panel", case_id, record, case)
     assert_matches(record, case)
 
@@ -67,7 +77,8 @@ def test_detection_panel_page(integration_run, detector, case_id, tmp_path):
     pipeline's default detection mode)."""
     case = case_by_id(FIXTURE, case_id)
     alias = case["input"]["source_page"]
-    page_record = detector.detect_panels_with_page(
+    page_record = detector.detect(
+        "panel-page",
         committed_page(alias),
         materialize_panels_dir(alias, tmp_path),
         [case["input"]["panel"]],
@@ -82,16 +93,16 @@ def test_detection_panel_page(integration_run, detector, case_id, tmp_path):
 def test_detection_panel_page_cast(integration_run, detector, case_id, tmp_path):
     """panel-page-cast mode: panel-page with the chapter-cast shortlist
     (Flamme is excluded from ch. 5's cast, so DET-006..010 must not guess
-    her)."""
+    her). The cast key comes from the fixture, not from pipeline data."""
     case = case_by_id(FIXTURE, case_id)
     alias = case["input"]["source_page"]
-    cast_key = FIXTURE["cast_keys"][alias]
-    page_record = detector.detect_panels_with_page(
+    page_record = detector.detect(
+        "panel-page-cast",
         committed_page(alias),
         materialize_panels_dir(alias, tmp_path),
         [case["input"]["panel"]],
         REFS_DIR,
-        cast_key=cast_key,
+        cast_key=FIXTURE["cast_keys"][alias],
     )
     record = page_record.panels[case["input"]["panel"]]
     record_detection(integration_run, "panel-page-cast", case_id, record, case)
@@ -104,7 +115,8 @@ def test_detection_page(integration_run, detector, case_id, tmp_path):
     kept (missing/uncertain/unknown entries fall back per panel)."""
     case = case_by_id(FIXTURE, case_id)
     alias = case["input"]["source_page"]
-    page_record = detector.detect_page(
+    page_record = detector.detect(
+        "page",
         committed_page(alias),
         materialize_panels_dir(alias, tmp_path),
         [case["input"]["panel"]],

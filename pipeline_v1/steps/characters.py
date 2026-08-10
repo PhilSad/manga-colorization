@@ -1,21 +1,25 @@
 """Pipeline stage 3: character detection (per panel or per page).
 
-V1.1 (`detection_mode="page"`, task 0003): one paid call per page mapping
-numbered panels to canonical characters, with cropped-panel fallbacks for
-missing/invalid/uncertain results. `detection_mode="panel"` keeps the V1
-one-call-per-panel behaviour. `detection_mode="panel-page"` (V1.2, default)
-keeps the one-call-per-panel granularity but sends the full page as context
-plus the target panel, with the same cropped-panel fallback as page mode.
-`detection_mode="panel-page-cast"` is panel-page with an automatically derived
-per-chapter cast shortlist (the page's chapter via `chapter_page_map.json`;
-`--cast-key` overrides the derivation): the panel-page prompt is rendered for
-that cast per page, thread-safely, so look-alike characters outside the
-chapter cast cannot be guessed (e.g. Flamme on p130 of ch. 5). Panels with
+The detection algorithm is selected by `--detection-mode` and implemented as
+one strategy per mode (see `characters.DETECTION_STRATEGIES`):
+
+- `panel`: one call per panel, the crop alone (V1 prompt).
+- `page` (V1.1, task 0003): one paid call per page mapping numbered panels to
+  canonical characters, with cropped-panel fallbacks for missing/invalid/
+  uncertain results.
+- `panel-page` (V1.2, default): one call per panel — the full page as context
+  plus the target panel, with the same cropped-panel fallback as page mode.
+- `panel-page-cast`: panel-page with an automatically derived per-chapter cast
+  shortlist (the page's chapter via `chapter_page_map.json`; `--cast-key`
+  overrides the derivation): the panel-page prompt is rendered for that cast
+  per page, thread-safely, so look-alike characters outside the chapter cast
+  cannot be guessed (e.g. Flamme on p130 of ch. 5).
+
+Every strategy returns a per-page `PageCharacterRecord`; the step writes one
+JSON record per panel into `2_characters/<page>/` plus a flat `summary.json`
+with call/cost totals split into primary and fallback calls. Panels with
 forced ground-truth identities (`--force-characters`, task 0001) never make a
 paid call. `--only-panel` restricts which panels are processed.
-
-Writes one JSON record per panel into `2_characters/<page>/` plus a flat
-`summary.json` with call/cost totals split into page and fallback calls.
 """
 
 from __future__ import annotations
@@ -59,7 +63,7 @@ def _new_totals() -> dict:
 def run_characters_step(
     ctx: RunContext,
     config: PipelineConfig,
-    detector,  # CharacterDetector | PageCharacterDetector
+    detector,  # anything with strategy_for(mode) -> DetectionStrategy
 ) -> dict:
     """Run stage 3 for all panels extracted by stage 1+2.
 
@@ -87,6 +91,7 @@ def run_characters_step(
     except (OSError, ValueError):
         profiles = {}
 
+    strategy = detector.strategy_for(config.detection_mode)
     records: list[dict] = []
     totals = _new_totals()
 
@@ -98,7 +103,7 @@ def run_characters_step(
         if config.workers <= 1:
             for page_dir in page_dirs:
                 page_records, page_totals, worked = _process_page(
-                    ctx, config, detector, page_dir, profiles
+                    ctx, config, strategy, page_dir, profiles
                 )
                 records.extend(page_records)
                 _merge_totals(totals, page_totals)
@@ -111,7 +116,7 @@ def run_characters_step(
             ) as pool:
                 futures = {
                     pool.submit(
-                        _process_page, ctx, config, detector, page_dir, profiles
+                        _process_page, ctx, config, strategy, page_dir, profiles
                     ): page_dir
                     for page_dir in page_dirs
                 }
@@ -133,7 +138,7 @@ def run_characters_step(
 def _process_page(
     ctx: RunContext,
     config: PipelineConfig,
-    detector,  # CharacterDetector | PageCharacterDetector
+    strategy,  # DetectionStrategy (characters.DETECTION_STRATEGIES[mode])
     page_dir: Path,
     profiles: dict,
 ) -> tuple[list[dict], dict, bool]:
@@ -177,43 +182,12 @@ def _process_page(
             needed.append(panel_path)
     worked = bool(needed or forced)
 
-    threaded = config.workers > 1
-    page_capable = config.detection_mode == "page" and hasattr(
-        detector, "detect_page"
-    )
-    panel_page_capable = config.detection_mode in ("panel-page", "panel-page-cast") \
-        and hasattr(detector, "detect_panels_with_page")
-    if page_capable and needed:
+    if needed:
         page_docs, page_det_totals = _detect_page(
-            ctx, config, detector, page, page_dir, needed, out_page_dir
+            ctx, config, strategy, page, page_dir, needed, out_page_dir
         )
         _merge_totals(page_totals, page_det_totals)
         docs.extend(page_docs)
-    elif panel_page_capable and needed:
-        cast_key = None
-        if config.detection_mode == "panel-page-cast":
-            cast_key = _apply_page_cast(config, detector, page_dir)
-        page_docs, page_det_totals = _detect_page(
-            ctx, config, detector, page, page_dir, needed, out_page_dir,
-            method="detect_panels_with_page",
-            provenance="panel_page_calls.json",
-            label="panel+page",
-            cast_key=cast_key,
-        )
-        _merge_totals(page_totals, page_det_totals)
-        docs.extend(page_docs)
-    elif needed:
-        for panel_path in tqdm(
-            needed,
-            desc=f"characters: {page} (panel mode)",
-            unit="panel", leave=False, disable=threaded,
-        ):
-            record = detector.detect(panel_path, config.refs_dir)
-            doc = record.to_dict(panel_path, page=page)
-            write_json(out_page_dir / f"{panel_path.stem}.json", doc)
-            docs.append(doc)
-            _count_record(page_totals, record)
-
     for stem, names in forced.items():
         panel_path = _find_panel(page_dir, stem)
         if panel_path is None:
@@ -227,49 +201,20 @@ def _process_page(
     return docs, page_totals, worked
 
 
-def _apply_page_cast(config, detector, page_dir: Path) -> str | None:
-    """Derive the chapter-cast key for a page in `panel-page-cast` mode:
-    `--cast-key` wins, otherwise the page's chapter via
-    `characters.cast_key_for_page` (chapter_page_map.json -> filename tag ->
-    `NNN-` prefix). The detector's shared prompts are switched to that cast so
-    cropped-panel fallbacks reuse it; pages without a cast fall back to the
-    full roster. Returns the key (None = full roster) for the provenance."""
-    from run_context import read_json
-
-    geometry = read_json(page_dir / "panels.json")
-    page_path = Path(geometry["page_path"])
-    from characters import cast_key_for_page
-
-    key = config.cast_key or cast_key_for_page(
-        page_path, config.chapter_casts_file, config.chapter_page_map_file
-    )
-    if hasattr(detector, "set_cast"):
-        detector.set_cast(key)
-    return key
-
-
 def _detect_page(
     ctx: RunContext,
     config: PipelineConfig,
-    detector,
+    strategy,
     page: str,
     page_dir: Path,
     needed: list[Path],
     out_page_dir: Path,
-    *,
-    method: str = "detect_page",
-    provenance: str = "page_call.json",
-    label: str = "page-level",
-    cast_key: str | None = None,
 ) -> tuple[list[dict], dict]:
-    """Page-scoped detection calls for `needed` panels + fallbacks.
+    """Detect `needed` panels of one page through the mode's strategy (one
+    uniform path for every `--detection-mode`; the strategy carries its
+    provenance file name, progress label, and cast handling).
 
-    `method` selects the detector entry point (`detect_page` for one call per
-    page, `detect_panels_with_page` for one panel+page call per panel);
-    `provenance`/`label` tune the recorded call file and progress output;
-    `cast_key` (panel-page-cast mode) is forwarded to the detector call and
-    recorded in the provenance.
-    """
+    Returns (per-panel docs, page totals delta)."""
     from run_context import read_json
 
     totals = _new_totals()
@@ -277,18 +222,13 @@ def _detect_page(
     page_image = Path(geometry["page_path"])
     expected = [panel.stem for panel in needed]
     print(
-        f"  characters: {page} {label} detection "
+        f"  characters: {page} {strategy.label} detection "
         f"(panels {expected}) ...",
         flush=True,
     )
-    if cast_key is not None:
-        page_record = getattr(detector, method)(
-            page_image, page_dir, expected, config.refs_dir, cast_key=cast_key
-        )
-    else:
-        page_record = getattr(detector, method)(
-            page_image, page_dir, expected, config.refs_dir
-        )
+    page_record = strategy.detect(
+        page_image, page_dir, expected, config.refs_dir
+    )
     totals["page_calls"] += page_record.page_calls
     totals["fallback_calls"] += page_record.fallback_calls
     totals["cost_usd"] = round(
@@ -302,20 +242,22 @@ def _detect_page(
     if page_record.error is not None:
         totals["error_calls"] += page_record.page_calls
 
-    # Provenance: the raw page-level answer + parse outcome.
-    write_json(out_page_dir / provenance, {
-        "page": page,
-        "expected_panels": expected,
-        "cast_key": cast_key,
-        "status": page_record.status,
-        "page_calls": page_record.page_calls,
-        "fallback_calls": page_record.fallback_calls,
-        "cost_usd": page_record.cost_usd,
-        "latency_s": round(page_record.total_latency_s, 3),
-        "parse_ok": page_record.page_parse_ok,
-        "response_text": page_record.page_response_text,
-        "error": page_record.error,
-    })
+    # Provenance: the raw page-level answer + parse outcome (page-context
+    # strategies only; panel mode writes no provenance file).
+    if strategy.provenance is not None:
+        write_json(out_page_dir / strategy.provenance, {
+            "page": page,
+            "expected_panels": expected,
+            "cast_key": page_record.cast_key,
+            "status": page_record.status,
+            "page_calls": page_record.page_calls,
+            "fallback_calls": page_record.fallback_calls,
+            "cost_usd": page_record.cost_usd,
+            "latency_s": round(page_record.total_latency_s, 3),
+            "parse_ok": page_record.page_parse_ok,
+            "response_text": page_record.page_response_text,
+            "error": page_record.error,
+        })
 
     docs: list[dict] = []
     for panel_path in needed:
@@ -331,21 +273,6 @@ def _detect_page(
         elif record.status == "error":
             totals["error_calls"] += 1
     return docs, totals
-
-
-def _count_record(totals: dict, record) -> None:
-    totals["api_calls"] += 1
-    if record.status in ("ok", "ok-with-unknown"):
-        totals["successful_calls"] += 1
-    else:
-        totals["error_calls"] += 1
-    totals["total_latency_s"] = round(
-        totals["total_latency_s"] + record.latency_s, 3
-    )
-    if record.cost_usd is not None:
-        totals["cost_usd"] = round(totals["cost_usd"] + record.cost_usd, 8)
-    else:
-        totals["unpriced_calls"] += 1
 
 
 def _merge_totals(target: dict, source: dict) -> None:

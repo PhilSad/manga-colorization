@@ -1,7 +1,8 @@
 """Mock backends for offline runs (`--mock`) and the test suite.
 
-These implement the same protocols as the real backends (PanelDetector,
-CharacterDetector, Colorizer) with deterministic, dependency-free behaviour:
+These implement the same interfaces as the real backends (PanelDetector,
+Colorizer, and the character-detection strategy interface via
+`strategy_for(mode)`) with deterministic, dependency-free behaviour:
 no YOLO weights, no OpenRouter calls, no FLUX server.
 """
 
@@ -61,6 +62,12 @@ class MockCharacterDetector:
 
     def __init__(self, by_panel: dict[str, list[str]] | None = None) -> None:
         self.by_panel = by_panel or {}
+
+    def strategy_for(self, mode: str) -> "_MockPanelStrategy":
+        """Per-panel mock: every mode falls back to per-panel mock calls
+        (mirrors the pre-strategy step behaviour, where a detector without
+        page capabilities ran the per-panel loop regardless of mode)."""
+        return _MockPanelStrategy(self)
 
     def detect(self, panel: Path, refs_dir: Path) -> CharacterRecord:
         names = self.by_panel.get(panel.stem, [])
@@ -126,6 +133,23 @@ class MockPageCharacterDetector:
         self.calls: list[tuple[Path, list[str]]] = []
         self.cast_keys: list[str | None] = []
         self.current_cast: str | None = None
+        self.cast_key: str | None = None  # fixed --cast-key override
+
+    def strategy_for(self, mode: str):
+        """Page-context mock supports "page", "panel-page", and
+        "panel-page-cast" (panel mode uses MockCharacterDetector)."""
+        strategies = {
+            "page": _MockPageStrategy,
+            "panel-page": _MockPanelPageStrategy,
+            "panel-page-cast": _MockPanelPageCastStrategy,
+        }
+        strategy_cls = strategies.get(mode)
+        if strategy_cls is None:
+            raise ValueError(
+                f"MockPageCharacterDetector supports modes "
+                f"{sorted(strategies)}, got {mode!r}"
+            )
+        return strategy_cls(self)
 
     def set_cast(self, cast_key: str | None) -> None:
         """Mirror of OpenRouterCharacterDetector.set_cast (panel-page-cast)."""
@@ -220,4 +244,112 @@ class MockPageCharacterDetector:
                 model_returned="mock", attempts=1, finished_at="mock",
                 source="panel-page", uncertain=False,
             )
+        return record
+
+
+# ---------------------------------------------------------------------------
+# Detection strategies (mock adapters)
+
+# The step selects a strategy per --detection-mode; the mocks mirror the real
+# strategies' uniform interface (mode/label/provenance + detect()).
+PIPELINE_DIR = Path(__file__).resolve().parent
+CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
+CHAPTER_PAGE_MAP_FILE = (
+    PIPELINE_DIR.parent / "frieren_wiki_dataset" / "chapter_page_map.json"
+)
+
+
+class _MockPanelStrategy:
+    """mode="panel": one mock call per panel, aggregated per page."""
+
+    mode = "panel"
+    label = "panel"
+    provenance = None
+
+    def __init__(self, detector: MockCharacterDetector) -> None:
+        self.detector = detector
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        from characters import CharacterRecord, PageCharacterRecord
+
+        record = PageCharacterRecord(
+            status="ok",
+            page=Path(page).stem if page is not None else panels_dir.name,
+        )
+        for panel_key in expected_panels:
+            panel = panels_dir / f"{panel_key}.png"
+            if not panel.is_file():
+                record.status = "partial" if record.status == "ok" else record.status
+                record.panels[panel_key] = CharacterRecord(
+                    status="error", characters=[], unknown_entries=[],
+                    response_text="", usage={}, cost_usd=None,
+                    cost_source="unavailable", latency_s=0.0,
+                    model_returned=None, attempts=0,
+                    error=f"crop missing: {panel}", finished_at="mock",
+                    source="panel",
+                )
+                continue
+            rec = self.detector.detect(panel, refs_dir)
+            record.panels[panel_key] = rec
+            record.page_calls += 1
+            record.cost_usd += rec.cost_usd or 0.0
+            record.total_latency_s += rec.latency_s
+            if rec.cost_usd is None:
+                record.unpriced_calls += 1
+        return record
+
+
+class _MockPageStrategy:
+    """mode="page": delegates to MockPageCharacterDetector.detect_page."""
+
+    mode = "page"
+    label = "page-level"
+    provenance = "page_call.json"
+
+    def __init__(self, detector: MockPageCharacterDetector) -> None:
+        self.detector = detector
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        return self.detector.detect_page(
+            page, panels_dir, expected_panels, refs_dir
+        )
+
+
+class _MockPanelPageStrategy:
+    """mode="panel-page": delegates to detect_panels_with_page."""
+
+    mode = "panel-page"
+    label = "panel+page"
+    provenance = "panel_page_calls.json"
+
+    def __init__(self, detector: MockPageCharacterDetector) -> None:
+        self.detector = detector
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        return self.detector.detect_panels_with_page(
+            page, panels_dir, expected_panels, refs_dir, cast_key=cast_key
+        )
+
+
+class _MockPanelPageCastStrategy(_MockPanelPageStrategy):
+    """mode="panel-page-cast": derive the chapter cast like the real
+    strategy (explicit key -> detector's fixed cast -> cast_key_for_page),
+    switch the mock's prompts, and delegate."""
+
+    mode = "panel-page-cast"
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        from characters import cast_key_for_page
+
+        key = cast_key or self.detector.cast_key
+        if key is None:
+            key = cast_key_for_page(
+                page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
+            )
+        if key is not None:
+            self.detector.set_cast(key)
+        record = self.detector.detect_panels_with_page(
+            page, panels_dir, expected_panels, refs_dir, cast_key=key
+        )
+        record.cast_key = key
         return record

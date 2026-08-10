@@ -40,10 +40,10 @@ def build_backends(config):
         from orchestrator import Backends
 
         print("[mock] mock backends enabled (no external calls)", file=sys.stderr)
-        if config.detection_mode in ("page", "panel-page"):
-            character_detector = MockPageCharacterDetector()
-        else:
+        if config.detection_mode == "panel":
             character_detector = MockCharacterDetector()
+        else:
+            character_detector = MockPageCharacterDetector()
         return Backends(
             detector=MockPanelDetector(),
             character_detector=character_detector,
@@ -73,6 +73,7 @@ def build_backends(config):
         temperature=config.temperature,
         profiles_file=config.profiles_file,
         chapter_casts_file=config.chapter_casts_file,
+        chapter_page_map_file=config.chapter_page_map_file,
         cast_key=config.cast_key,
         workers=config.workers,
     )

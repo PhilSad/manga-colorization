@@ -172,6 +172,14 @@ def make_detector(tmp_path, script):
     return detector
 
 
+def detect_panel(detector, panel, refs):
+    """Panel-mode detection through the unified API: the per-panel record
+    for `panel` (the single expected panel of its directory)."""
+    return detector.detect(
+        "panel", None, panel.parent, [panel.stem], refs
+    ).panels[panel.stem]
+
+
 def test_detect_success_ok(tmp_path):
     panel = make_panel(tmp_path)
 
@@ -182,7 +190,7 @@ def test_detect_success_ok(tmp_path):
         )
 
     detector = make_detector(tmp_path, [ok])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "ok"
     assert record.characters == ["Frieren", "Fern"]
     assert record.cost_usd == 0.0001234
@@ -198,7 +206,7 @@ def test_detect_ok_with_unknown(tmp_path):
         return FakeResponse('{"characters": ["Frieren", "Gandalf"]}', usage=FakeUsage())
 
     detector = make_detector(tmp_path, [ok_unknown])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "ok-with-unknown"
     assert record.characters == ["Frieren"]
     assert record.unknown_entries == ["Gandalf"]
@@ -211,7 +219,7 @@ def test_detect_unparseable(tmp_path):
         return FakeResponse("I think Frieren appears", usage=FakeUsage())
 
     detector = make_detector(tmp_path, [garbage])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "unparseable"
     assert record.characters == []
 
@@ -223,7 +231,7 @@ def test_detect_cost_missing_is_unpriced(tmp_path):
         return FakeResponse('{"characters": []}', usage=FakeUsage(cost=None))
 
     detector = make_detector(tmp_path, [no_cost])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "ok"
     assert record.cost_usd is None
     assert record.cost_source == "unavailable"
@@ -241,7 +249,7 @@ def test_detect_rate_limit_retry_then_success(tmp_path):
         RateLimitError, "slow down", headers={"retry-after": "0"}, status=429
     )
     detector = make_detector(tmp_path, [rate_limited, success])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "ok"
     assert record.attempts == 2
 
@@ -257,7 +265,7 @@ def test_detect_rate_limit_exhausted(tmp_path):
     characters.MAX_ATTEMPTS = 3
     try:
         detector = make_detector(tmp_path, [rate_limited] * 10)
-        record = detector.detect(panel, make_refs(tmp_path))
+        record = detect_panel(detector, panel, make_refs(tmp_path))
     finally:
         characters.BASE_BACKOFF_S = 5.0
         characters.MAX_ATTEMPTS = 8
@@ -280,7 +288,7 @@ def test_detect_bad_request_json_format_fallback(tmp_path):
         status=400,
     )
     detector = make_detector(tmp_path, [bad_request, success])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "ok"
     # First call had response_format, retry did not.
     calls = detector.client.chat.completions.calls
@@ -291,7 +299,7 @@ def test_detect_bad_request_json_format_fallback(tmp_path):
 def test_detect_generic_exception_recorded(tmp_path):
     panel = make_panel(tmp_path)
     detector = make_detector(tmp_path, [RuntimeError("boom")])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     assert record.status == "error"
     assert "RuntimeError" in record.error
     assert record.characters == []
@@ -304,7 +312,7 @@ def test_record_to_dict_shape(tmp_path):
         return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage(cost=0.0001))
 
     detector = make_detector(tmp_path, [ok])
-    record = detector.detect(panel, make_refs(tmp_path))
+    record = detect_panel(detector, panel, make_refs(tmp_path))
     doc = record.to_dict(panel, page="0134-004")
     assert doc["panel"] == "panel_0001.png"
     assert doc["page"] == "0134-004"
@@ -324,6 +332,9 @@ def make_step_fixture(tmp_path):
     panels_root.mkdir(parents=True)
     for name in ("panel_0001.png", "panel_0002.png"):
         Image.new("RGB", (16, 16), "white").save(panels_root / name)
+    (panels_root / "panels.json").write_text(json.dumps({
+        "page_path": str(tmp_path / "0134-004.png"), "detections": [],
+    }), encoding="utf-8")
     refs = make_refs(tmp_path)
     config = PipelineConfig(
         input_dir=tmp_path / "pages",
@@ -336,11 +347,45 @@ def make_step_fixture(tmp_path):
     return config
 
 
+class _StubPanelStrategy:
+    """Stub's strategy_for("panel"): loops the stub's per-panel detect and
+    aggregates into a per-page record (uniform strategy interface)."""
+
+    mode = "panel"
+    label = "panel"
+    provenance = None
+
+    def __init__(self, detector):
+        self.detector = detector
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        from characters import PageCharacterRecord
+
+        record = PageCharacterRecord(
+            status="ok",
+            page=Path(page).stem if page is not None else panels_dir.name,
+        )
+        for panel_key in expected_panels:
+            panel = panels_dir / f"{panel_key}.png"
+            rec = self.detector.detect(panel, refs_dir)
+            record.panels[panel_key] = rec
+            record.page_calls += 1
+            record.cost_usd += rec.cost_usd or 0.0
+            record.total_latency_s += rec.latency_s
+            if rec.cost_usd is None:
+                record.unpriced_calls += 1
+        return record
+
+
 class StubCharacterDetector:
     """Returns canned records; records the panels it was called with."""
 
     def __init__(self):
         self.called: list[Path] = []
+
+    def strategy_for(self, mode):
+        assert mode == "panel"
+        return _StubPanelStrategy(self)
 
     def detect(self, panel, refs_dir):
         self.called.append(panel)
@@ -363,11 +408,12 @@ def test_characters_step(tmp_path):
     from steps.characters import run_characters_step
 
     config = make_step_fixture(tmp_path)
+    config.detection_mode = "panel"  # per-panel step path (stub is panel-only)
     # Move the fixtures into a real RunContext layout.
     ctx = RunContext.create(tmp_path / "output", {"status": "running"})
     panels_root = ctx.step_dir("panels") / "0134-004"
     panels_root.mkdir(parents=True)
-    for path in (tmp_path / "1_panels" / "0134-004").glob("*.png"):
+    for path in (tmp_path / "1_panels" / "0134-004").iterdir():
         (panels_root / path.name).write_bytes(path.read_bytes())
 
     detector = StubCharacterDetector()
@@ -380,7 +426,7 @@ def test_characters_step(tmp_path):
         "unpriced_calls": 1,
         "total_latency_s": 3.0,
         "cost_usd": 0.00005,
-        "page_calls": 0,
+        "page_calls": 2,  # panel mode: primary per-panel calls (unified strategy)
         "fallback_calls": 0,
         "forced_panels": 0,
     }
@@ -466,8 +512,8 @@ def test_detect_page_complete_response_no_fallbacks(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.status == "ok"
     assert record.page_calls == 1
@@ -502,8 +548,8 @@ def test_detect_page_uncertain_triggers_fallback(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.status == "partial"
     assert record.page_calls == 1
@@ -537,8 +583,8 @@ def test_detect_page_missing_panel_triggers_fallback(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.fallback_calls == 1
     assert record.panels["panel_0002"].source == "fallback"
@@ -566,8 +612,8 @@ def test_detect_page_rejects_extra_panel_keys(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     # panel_0099 is rejected (not accepted into the results); panel_0002
     # missing -> fallback.
@@ -599,8 +645,8 @@ def test_detect_page_retries_once_on_unparseable_answer(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.status == "ok"
     assert record.page_calls == 2       # one retry, no per-panel fallbacks
@@ -628,8 +674,8 @@ def test_detect_page_still_falls_back_after_retry_fails(tmp_path):
     )
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)
-    record = detector.detect_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.page_calls == 2
     assert record.fallback_calls == 2   # both panels fall back after the retry
@@ -709,8 +755,8 @@ def test_detect_panels_with_page_all_ok(tmp_path):
         )
 
     detector = _make_panel_page_detector(tmp_path, [p1, p2])
-    record = detector.detect_panels_with_page(
-        page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
+    record = detector.detect(
+        "panel-page", page_path, page_dir, ["panel_0001", "panel_0002"], make_refs(tmp_path)
     )
     assert record.status == "ok"
     assert record.page_calls == 2       # one panel+page call per panel
@@ -747,8 +793,8 @@ def test_detect_panels_with_page_uncertain_falls_back(tmp_path):
         return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage(cost=0.0001))
 
     detector = _make_panel_page_detector(tmp_path, [uncertain, fallback])
-    record = detector.detect_panels_with_page(
-        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    record = detector.detect(
+        "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
     )
     assert record.status == "partial"
     assert record.page_calls == 1
@@ -773,8 +819,8 @@ def test_detect_panels_with_page_unknown_falls_back(tmp_path):
         return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage())
 
     detector = _make_panel_page_detector(tmp_path, [unknown, fallback])
-    record = detector.detect_panels_with_page(
-        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    record = detector.detect(
+        "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
     )
     assert record.status == "partial"
     assert record.fallback_calls == 1
@@ -793,8 +839,8 @@ def test_detect_panels_with_page_unparseable_falls_back(tmp_path):
         return FakeResponse('{"characters": ["Fern"]}', usage=FakeUsage(cost=0.0001))
 
     detector = _make_panel_page_detector(tmp_path, [garbage, fallback])
-    record = detector.detect_panels_with_page(
-        page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+    record = detector.detect(
+        "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
     )
     assert record.status == "partial"
     assert record.page_calls == 1
@@ -822,8 +868,8 @@ def test_detect_panels_with_page_error_falls_back(tmp_path):
         detector = _make_panel_page_detector(
             tmp_path, [rate_limited, rate_limited, fallback]
         )
-        record = detector.detect_panels_with_page(
-            page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+        record = detector.detect(
+            "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
         )
     finally:
         characters.BASE_BACKOFF_S = 5.0
@@ -847,8 +893,8 @@ def test_detect_panels_with_page_requires_prompt(tmp_path):
     detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
                      panel_prompt_file=PANEL_PROMPT_FILE)  # no panel-page file
     with pytest.raises(ValueError, match="panel-page prompt"):
-        detector.detect_panels_with_page(
-            page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
+        detector.detect(
+            "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path)
         )
 
 
@@ -1081,8 +1127,8 @@ def test_detect_panels_with_page_cast_key_renders_prompt(tmp_path):
         panel_prompt_file=PANEL_PROMPT_FILE,
         panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
     )
-    detector.detect_panels_with_page(
-        page_path, page_dir, ["panel_0001"], make_refs(tmp_path),
+    detector.detect(
+        "panel-page", page_path, page_dir, ["panel_0001"], make_refs(tmp_path),
         cast_key="c005",
     )
     content = detector.client.chat.completions.calls[0]["messages"][0]["content"]

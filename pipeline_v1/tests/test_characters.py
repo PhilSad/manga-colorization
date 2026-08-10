@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from config import PIPELINE_DIR
 PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
 PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
+PANEL_PAGE_PREV2_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page_prev2.txt"
 PROFILES_FILE = PIPELINE_DIR / "character_profiles.json"
 
 
@@ -493,6 +495,60 @@ def _page_fixture(tmp_path):
     return page_path, page_dir
 
 
+def _multi_page_fixture(
+    tmp_path: Path, stems: list[str], *, blank: set[str] | None = None
+) -> tuple[Path, Path]:
+    """A run-like layout with consecutive pages: `1_panels/<stem>/` per page
+    (panels.json + two crops + overlay) and a source image `<stem>.png` at
+    the tmp root. Returns (target page image path, target page dir); the
+    target is the last stem. `blank` marks stems whose page dir has no
+    detections (`blank_page: true`), like the panels step's blank-page skip."""
+    from detection import PanelBox
+    from extraction import draw_overlay, save_panels
+    from PIL import ImageDraw
+
+    blank = blank or set()
+    target = stems[-1]
+    target_dir: Path | None = None
+    for stem in stems:
+        image = Image.new("RGB", (500, 700), "white")
+        # Distinct marker per page so sibling images are byte-distinguishable.
+        ImageDraw.Draw(image).rectangle(
+            (0, 0, 9, 9),
+            fill=tuple((stems.index(stem) + 1) * 40 for _ in range(3)),
+        )
+        src = tmp_path / f"{stem}.png"
+        image.save(src)
+        page_dir = tmp_path / "1_panels" / stem
+        page_dir.mkdir(parents=True)
+        if stem in blank:
+            (page_dir / "panels.json").write_text(json.dumps({
+                "page": f"{stem}.png", "page_path": str(src),
+                "detections": [], "blank_page": True,
+            }), encoding="utf-8")
+        else:
+            boxes = [
+                PanelBox(20, 20, 480, 300, 0.9),
+                PanelBox(20, 320, 480, 680, 0.9),
+            ]
+            ordered = [boxes[0], boxes[1]]
+            save_panels(image, ordered, page_dir, extension=".png")
+            draw_overlay(image, ordered, page_dir / "overlay.png")
+            (page_dir / "panels.json").write_text(json.dumps({
+                "page": f"{stem}.png", "page_path": str(src),
+                "detections": [
+                    {"panel_index": 1, "box": [20, 20, 480, 300],
+                     "crop": "panel_0001.png"},
+                    {"panel_index": 2, "box": [20, 320, 480, 680],
+                     "crop": "panel_0002.png"},
+                ],
+            }), encoding="utf-8")
+        if stem == target:
+            target_dir = page_dir
+    assert target_dir is not None
+    return src, target_dir
+
+
 def test_detect_page_complete_response_no_fallbacks(tmp_path):
     from characters import OpenRouterCharacterDetector
 
@@ -737,6 +793,22 @@ def _make_panel_page_detector(tmp_path, script):
     return detector
 
 
+def _make_panel_page_prev2_detector(tmp_path, script):
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it",
+        api_key="dummy",
+        client=FakeClient(script),
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+        panel_page_prev2_prompt_file=PANEL_PAGE_PREV2_PROMPT_FILE,
+    )
+    return detector
+
+
 def test_detect_panels_with_page_all_ok(tmp_path):
     from characters import OpenRouterCharacterDetector
 
@@ -898,6 +970,181 @@ def test_detect_panels_with_page_requires_prompt(tmp_path):
         )
 
 
+# ---------------------------------------------------------------------------
+# V1.2b: panel+page+prev2 detection (two preceding pages as story context)
+
+def test_detect_panels_with_page_prev2_all_ok(tmp_path):
+    """panel-page-prev2: each call sends the two preceding pages as extra
+    context images (oldest first), then the highlighted current page, then
+    the crop; records carry source 'panel-page-prev2'."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _multi_page_fixture(
+        tmp_path, ["0134-002", "0134-003", "0134-004"]
+    )
+
+    def p1():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    def p2():
+        return FakeResponse(
+            '{"characters": ["Fern"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00018),
+        )
+
+    detector = _make_panel_page_prev2_detector(tmp_path, [p1, p2])
+    record = detector.detect(
+        "panel-page-prev2", page_path, page_dir,
+        ["panel_0001", "panel_0002"], make_refs(tmp_path),
+    )
+    assert record.status == "ok"
+    assert record.page_calls == 2       # one panel-page-prev2 call per panel
+    assert record.fallback_calls == 0
+    assert record.cost_usd == pytest.approx(0.00033, abs=1e-9)
+    assert record.panels["panel_0001"].characters == ["Frieren"]
+    assert record.panels["panel_0001"].source == "panel-page-prev2"
+    assert record.panels["panel_0002"].characters == ["Fern"]
+    assert len(detector.client.chat.completions.calls) == 2
+    # content: text + prev-2 + prev-1 + highlighted page + crop
+    first_content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in first_content] == [
+        "text", "image_url", "image_url", "image_url", "image_url",
+    ]
+    # the two context images are exactly the two preceding pages' bytes
+    prev2_url = f"data:image/png;base64,{base64.b64encode((tmp_path / '0134-002.png').read_bytes()).decode()}"
+    prev1_url = f"data:image/png;base64,{base64.b64encode((tmp_path / '0134-003.png').read_bytes()).decode()}"
+    assert first_content[1]["image_url"]["url"] == prev2_url
+    assert first_content[2]["image_url"]["url"] == prev1_url
+    assert first_content[1]["image_url"]["url"] != first_content[2]["image_url"]["url"]
+
+
+def test_detect_panels_with_page_prev2_no_previous_pages(tmp_path):
+    """First page of the input: no preceding pages -> the call degrades to a
+    plain panel-page shape (text + highlighted page + crop)."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)  # only 0134-004 exists
+
+    def ok():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = _make_panel_page_prev2_detector(tmp_path, [ok])
+    record = detector.detect(
+        "panel-page-prev2", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.status == "ok"
+    assert record.page_calls == 1
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == ["text", "image_url", "image_url"]
+
+
+def test_detect_panels_with_page_prev2_one_previous_page(tmp_path):
+    """Only one preceding page exists -> exactly one context image."""
+    page_path, page_dir = _multi_page_fixture(tmp_path, ["0134-003", "0134-004"])
+
+    def ok():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = _make_panel_page_prev2_detector(tmp_path, [ok])
+    record = detector.detect(
+        "panel-page-prev2", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.status == "ok"
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == [
+        "text", "image_url", "image_url", "image_url",
+    ]
+    prev1_url = f"data:image/png;base64,{base64.b64encode((tmp_path / '0134-003.png').read_bytes()).decode()}"
+    assert content[1]["image_url"]["url"] == prev1_url
+
+
+def test_detect_panels_with_page_prev2_skips_blank_previous(tmp_path):
+    """A blank page (no detections) between the target and the story context
+    is skipped; the search continues further back."""
+    page_path, page_dir = _multi_page_fixture(
+        tmp_path, ["0134-002", "0134-003", "0134-004"], blank={"0134-003"}
+    )
+
+    def ok():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = _make_panel_page_prev2_detector(tmp_path, [ok])
+    record = detector.detect(
+        "panel-page-prev2", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.status == "ok"
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert [part["type"] for part in content] == [
+        "text", "image_url", "image_url", "image_url",
+    ]
+    # the sole context image is the non-blank 0134-002, not the blank 0134-003
+    prev2_url = f"data:image/png;base64,{base64.b64encode((tmp_path / '0134-002.png').read_bytes()).decode()}"
+    assert content[1]["image_url"]["url"] == prev2_url
+
+
+def test_detect_panels_with_page_prev2_uncertain_falls_back(tmp_path):
+    """Explicit `uncertain` falls back to the cropped-panel V1 call; the
+    fallback call has no context images."""
+    page_path, page_dir = _multi_page_fixture(tmp_path, ["0134-003", "0134-004"])
+
+    def uncertain():
+        return FakeResponse(
+            '{"characters": [], "uncertain": true}', usage=FakeUsage(cost=0.00015)
+        )
+
+    def fallback():
+        return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage(cost=0.0001))
+
+    detector = _make_panel_page_prev2_detector(tmp_path, [uncertain, fallback])
+    record = detector.detect(
+        "panel-page-prev2", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.status == "partial"
+    assert record.page_calls == 1
+    assert record.fallback_calls == 1
+    assert record.cost_usd == pytest.approx(0.00025, abs=1e-9)
+    assert record.panels["panel_0001"].source == "fallback"
+    assert record.panels["panel_0001"].characters == ["Frieren"]
+    fallback_content = detector.client.chat.completions.calls[1]["messages"][0]["content"]
+    assert [part["type"] for part in fallback_content] == ["text", "image_url"]
+
+
+def test_detect_panels_with_page_prev2_requires_prompt(tmp_path):
+    """panel-page-prev2 detection without its prompt file fails loudly."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([]),
+    )
+    detector.prepare(make_refs(tmp_path), prompt_file=PROMPT_FILE,
+                     panel_prompt_file=PANEL_PROMPT_FILE,
+                     panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE)
+    # no panel-page-prev2 file
+    with pytest.raises(ValueError, match="panel-page-prev2 prompt"):
+        detector.detect(
+            "panel-page-prev2", page_path, page_dir,
+            ["panel_0001"], make_refs(tmp_path),
+        )
+
+
 def test_characters_step_panel_page_mode(tmp_path):
     """panel-page step: one panel+page call per panel plus per-panel fallbacks."""
     from mock_backends import MockPageCharacterDetector
@@ -937,6 +1184,52 @@ def test_characters_step_panel_page_mode(tmp_path):
     p1 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0001.json")
     p2 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0002.json")
     assert p1["source"] == "panel-page" and p1["characters"] == ["Frieren"]
+    assert p2["source"] == "fallback"
+
+
+def test_characters_step_panel_page_prev2_mode(tmp_path):
+    """panel-page-prev2 step: one call per panel plus per-panel fallbacks;
+    provenance written to panel_page_prev2_calls.json and panel records
+    sourced 'panel-page-prev2'."""
+    from mock_backends import MockPageCharacterDetector
+    from run_context import RunContext
+    from steps.characters import run_characters_step
+
+    config = make_step_fixture(tmp_path)
+    config.detection_mode = "panel-page-prev2"
+    ctx = RunContext.create(tmp_path / "output", {"status": "running"})
+    panels_root = ctx.step_dir("panels") / "0134-004"
+    panels_root.mkdir(parents=True)
+    for path in (tmp_path / "1_panels" / "0134-004").glob("*.png"):
+        (panels_root / path.name).write_bytes(path.read_bytes())
+    (panels_root / "panels.json").write_text(json.dumps({
+        "page_path": str(tmp_path / "0134-004.png"), "detections": [],
+    }), encoding="utf-8")
+
+    detector = MockPageCharacterDetector({
+        "0134-004": {"panel_0001": (["Frieren"], False)},
+    })
+    result = run_characters_step(ctx, config, detector)
+
+    totals = result["totals"]
+    assert totals["api_calls"] == 3      # 2 panel-page-prev2 calls + 1 fallback
+    assert totals["page_calls"] == 2
+    assert totals["fallback_calls"] == 1  # panel_0002 uncovered -> fallback
+    assert totals["successful_calls"] == 2
+    assert totals["cost_usd"] == pytest.approx(0.0005, abs=1e-9)
+    assert len(detector.calls) == 1        # one per-page batch of calls
+    # Provenance file for the panel+page+prev2 calls.
+    from run_context import read_json
+
+    provenance = read_json(
+        ctx.step_dir("characters") / "0134-004" / "panel_page_prev2_calls.json"
+    )
+    assert provenance["page_calls"] == 2
+    assert provenance["fallback_calls"] == 1
+    # Panel records written with sources.
+    p1 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0001.json")
+    p2 = read_json(ctx.step_dir("characters") / "0134-004" / "panel_0002.json")
+    assert p1["source"] == "panel-page-prev2" and p1["characters"] == ["Frieren"]
     assert p2["source"] == "fallback"
 
 

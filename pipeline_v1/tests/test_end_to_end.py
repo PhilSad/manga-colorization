@@ -153,6 +153,46 @@ def test_pipeline_end_to_end(pipeline_inputs, mock_backends):
     assert totals["openrouter_cost_usd"] == pytest.approx(0.0005, abs=1e-9)
 
 
+def test_pipeline_end_to_end_panel_page_prev2(pipeline_inputs, tmp_path):
+    """The full pipeline with detection_mode='panel-page-prev2' and the
+    page-context mock: per-panel records sourced 'panel-page-prev2' and the
+    panel+page+prev2 provenance file written."""
+    from mock_backends import MockPageCharacterDetector
+
+    page_path, refs, _ = pipeline_inputs
+    page_name = page_path.stem
+    by_page = {
+        page_name: {
+            f"panel_000{i}": (list(CHARACTERS_BY_PANEL[f"panel_000{i}"]), False)
+            for i in range(1, 6)
+        }
+    }
+    backends = Backends(
+        detector=MockPanelDetector(
+            [PanelBox(*panel_box(panel_id), 0.95) for panel_id in READING_ORDER]
+        ),
+        character_detector=MockPageCharacterDetector(by_page),
+        colorizer=MockColorizer(),
+    )
+    config = make_config(tmp_path, refs, detection_mode="panel-page-prev2")
+    ctx = PipelineRunner(config, backends).run()
+
+    assert ctx.manifest["status"] == "completed"
+    assert ctx.manifest["configuration"]["detection_mode"] == "panel-page-prev2"
+    chars_dir = ctx.run_dir / "2_characters" / page_name
+    for i in range(1, 6):
+        doc = read_json(chars_dir / f"panel_000{i}.json")
+        assert doc["source"] == "panel-page-prev2"
+        assert doc["characters"] == CHARACTERS_BY_PANEL[f"panel_000{i}"]
+    assert (chars_dir / "panel_page_prev2_calls.json").is_file()
+    totals = ctx.manifest["totals"]
+    assert totals["character_calls"] == 5
+    assert totals["page_character_calls"] == 5
+    assert totals["fallback_character_calls"] == 0
+    assert totals["openrouter_cost_usd"] == pytest.approx(0.001, abs=1e-9)
+    assert totals["pages_stitched"] == 1
+
+
 def test_pipeline_end_to_end_via_cli(pipeline_inputs, tmp_path):
     """The CLI wiring itself: `run.py --mock` on the synthetic page."""
     page_path, refs, _ = pipeline_inputs

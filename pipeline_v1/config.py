@@ -37,6 +37,7 @@ DEFAULT_VLM_MODEL = "google/gemma-4-31b-it"
 DEFAULT_VLM_PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 DEFAULT_VLM_PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
 DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
+DEFAULT_VLM_PANEL_PAGE_PREV2_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page_prev2.txt"
 DEFAULT_COLORIZER_PROMPT_FILE = PIPELINE_DIR / "colorizer_prompt.txt"
 DEFAULT_PROFILES_FILE = PIPELINE_DIR / "character_profiles.json"
 DEFAULT_CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
@@ -67,10 +68,13 @@ class PipelineConfig:
     api_key_env: str = "OPENROUTER_API_KEY"
     # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
     # V1 per-panel behaviour; per-panel calls that send the full page as
-    # context plus the target panel (panel-page); or panel-page with an
-    # automatically derived per-chapter cast shortlist (panel-page-cast).
-    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast
+    # context plus the target panel (panel-page); panel-page with an
+    # automatically derived per-chapter cast shortlist (panel-page-cast); or
+    # panel-page sending the two preceding pages as extra story context
+    # (panel-page-prev2).
+    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast | panel-page-prev2
     vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
+    vlm_panel_page_prev2_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PREV2_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
     chapter_casts_file: Path = DEFAULT_CHAPTER_CASTS_FILE
     # page -> chapter map for panel-page-cast (auto shortlist derivation)
@@ -136,6 +140,7 @@ class PipelineConfig:
             "api_key_env": self.api_key_env,
             "detection_mode": self.detection_mode,
             "vlm_panel_page_prompt_file": str(self.vlm_panel_page_prompt_file),
+            "vlm_panel_page_prev2_prompt_file": str(self.vlm_panel_page_prev2_prompt_file),
             "cast_key": self.cast_key,
             "chapter_casts_file": str(self.chapter_casts_file),
             "chapter_page_map_file": str(self.chapter_page_map_file),
@@ -204,10 +209,12 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError(
             f"--from-step must be one of {STEP_ORDER}, got {config.from_step!r}"
         )
-    if config.detection_mode not in ("page", "panel", "panel-page", "panel-page-cast"):
+    if config.detection_mode not in (
+        "page", "panel", "panel-page", "panel-page-cast", "panel-page-prev2"
+    ):
         raise ValueError(
-            "--detection-mode must be 'page', 'panel', 'panel-page' "
-            "or 'panel-page-cast'"
+            "--detection-mode must be 'page', 'panel', 'panel-page', "
+            "'panel-page-cast' or 'panel-page-prev2'"
         )
     if config.blank_ink_threshold < 0 or config.blank_ink_threshold >= 1:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
@@ -253,8 +260,13 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--vlm-panel-page-prompt-file", type=Path,
                         default=DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE,
                         help="Panel+page prompt (detection_mode='panel-page' calls).")
+    parser.add_argument("--vlm-panel-page-prev2-prompt-file", type=Path,
+                        default=DEFAULT_VLM_PANEL_PAGE_PREV2_PROMPT_FILE,
+                        help="Panel+page+prev2 prompt (detection_mode="
+                             "'panel-page-prev2' calls).")
     parser.add_argument("--detection-mode",
-                        choices=("page", "panel", "panel-page", "panel-page-cast"),
+                        choices=("page", "panel", "panel-page", "panel-page-cast",
+                                 "panel-page-prev2"),
                         default="panel-page",
                         help="page: one paid call per page with per-panel fallbacks "
                              "(V1.1); panel: V1 behaviour, one call per panel; "
@@ -262,7 +274,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                              "context plus the target panel (per-panel fallback); "
                              "panel-page-cast: panel-page with an automatically "
                              "derived per-chapter cast shortlist (from the page's "
-                             "chapter via chapter_page_map.json, --cast-key wins).")
+                             "chapter via chapter_page_map.json, --cast-key wins); "
+                             "panel-page-prev2: panel-page that also sends the two "
+                             "preceding pages in reading order as story context "
+                             "(fewer when they do not exist).")
     parser.add_argument("--cast-key", default=None,
                         help="chapter_casts.json shortlist key (e.g. c001); with "
                              "panel-page-cast it overrides the automatic per-page "
@@ -347,6 +362,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             vlm_prompt_file=args.vlm_prompt_file,
             vlm_panel_prompt_file=args.vlm_panel_prompt_file,
             vlm_panel_page_prompt_file=args.vlm_panel_page_prompt_file,
+            vlm_panel_page_prev2_prompt_file=args.vlm_panel_page_prev2_prompt_file,
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             sleep_s=args.sleep,

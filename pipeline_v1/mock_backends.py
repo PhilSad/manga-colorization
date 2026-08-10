@@ -136,11 +136,13 @@ class MockPageCharacterDetector:
         self.cast_key: str | None = None  # fixed --cast-key override
 
     def strategy_for(self, mode: str):
-        """Page-context mock supports "page", "panel-page", and
-        "panel-page-cast" (panel mode uses MockCharacterDetector)."""
+        """Page-context mock supports "page", "panel-page",
+        "panel-page-prev2" and "panel-page-cast" (panel mode uses
+        MockCharacterDetector)."""
         strategies = {
             "page": _MockPageStrategy,
             "panel-page": _MockPanelPageStrategy,
+            "panel-page-prev2": _MockPanelPagePrev2Strategy,
             "panel-page-cast": _MockPanelPageCastStrategy,
         }
         strategy_cls = strategies.get(mode)
@@ -213,6 +215,7 @@ class MockPageCharacterDetector:
         refs_dir: Path,
         *,
         cast_key: str | None = None,
+        source: str = "panel-page",
     ) -> "PageCharacterRecord":
         from characters import CharacterRecord, PageCharacterRecord
 
@@ -242,7 +245,7 @@ class MockPageCharacterDetector:
                 response_text="{}", usage={"total_tokens": 10},
                 cost_usd=0.0002, cost_source="mock", latency_s=0.01,
                 model_returned="mock", attempts=1, finished_at="mock",
-                source="panel-page", uncertain=False,
+                source=source, uncertain=False,
             )
         return record
 
@@ -328,6 +331,22 @@ class _MockPanelPageStrategy:
     def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
         return self.detector.detect_panels_with_page(
             page, panels_dir, expected_panels, refs_dir, cast_key=cast_key
+        )
+
+
+class _MockPanelPagePrev2Strategy(_MockPanelPageStrategy):
+    """mode="panel-page-prev2": delegates exactly like panel-page (the mock
+    has no page images to send, so the preceding pages are not represented),
+    recording the prev2 source on panel records."""
+
+    mode = "panel-page-prev2"
+    label = "panel+page+prev2"
+    provenance = "panel_page_prev2_calls.json"
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        return self.detector.detect_panels_with_page(
+            page, panels_dir, expected_panels, refs_dir,
+            cast_key=cast_key, source="panel-page-prev2",
         )
 
 

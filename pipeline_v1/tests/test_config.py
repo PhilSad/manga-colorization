@@ -99,6 +99,23 @@ def test_panel_page_cast_flags_parse():
     assert config.chapter_page_map_file == Path("custom/map.json")
 
 
+def test_panel_page_prev2_flags_parse():
+    config = parse_args([
+        "--detection-mode", "panel-page-prev2",
+        "--vlm-panel-page-prev2-prompt-file", "custom/prev2.txt",
+    ])
+    assert config.detection_mode == "panel-page-prev2"
+    assert config.vlm_panel_page_prev2_prompt_file == Path("custom/prev2.txt")
+    assert config.to_dict()["vlm_panel_page_prev2_prompt_file"] == str(
+        Path("custom/prev2.txt")
+    )
+
+
+def test_invalid_detection_mode_rejected():
+    with pytest.raises(SystemExit):
+        parse_args(["--detection-mode", "panel-page-prev3"])
+
+
 def test_invalid_v1_1_values_rejected():
     for argv in (
         ["--detection-mode", "pagex"],

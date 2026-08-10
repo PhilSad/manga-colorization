@@ -125,6 +125,7 @@ class PipelineRunner:
             ("vlm_prompt", self.config.vlm_prompt_file),
             ("vlm_panel_prompt", self.config.vlm_panel_prompt_file),
             ("vlm_panel_page_prompt", self.config.vlm_panel_page_prompt_file),
+            ("vlm_panel_page_prev2_prompt", self.config.vlm_panel_page_prev2_prompt_file),
             ("colorizer_prompt", self.config.colorizer_prompt_file),
             ("profiles", self.config.profiles_file),
         ):
@@ -143,7 +144,9 @@ class PipelineRunner:
                 "model": self.config.vlm_model,
                 "tier": "paid (user-funded)",
                 "cost_source": "usage.cost per call (USD), measured",
-                "note": "Per-call cost is recorded in the 2_characters records.",
+                "note": ("Per-call cost is recorded in the 2_characters records. "
+                          "panel-page-prev2 sends two extra full-page images per "
+                          "call: expect ~2-3x the panel-page prompt tokens."),
             },
             "colorization": {
                 "model": ("black-forest-labs/FLUX.2-klein-9B (step-distilled) + "

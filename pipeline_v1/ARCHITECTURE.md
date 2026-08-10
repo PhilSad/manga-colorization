@@ -86,6 +86,13 @@ page (input_dir)
 - **Page-level detection (V1.1)**: one paid call per page; the annotated page
   carries the reading-order numbers used by extraction. Missing/invalid/
   uncertain panel entries trigger cropped-panel fallbacks.
+- **Panel+page detection (V1.2)**: one call per panel; the numbered annotated
+  page (target highlighted) is sent as global context plus the crop.
+  `panel-page-prev2` additionally sends the two preceding non-blank pages in
+  reading order as story context, found via the sibling page dirs in
+  `1_panels/` (`panels.json` `page_path`); fewer are sent at the start of a
+  book, degrading to plain `panel-page` shape. The per-panel call/fallback
+  loop is shared between the two modes.
 - **Targeted reruns (V1.1)**: `--only-panel PAGE:PANEL` restricts processing;
   `--force-characters` injects ground-truth identities without paid calls;
   `--resume RUN --from-step STEP` copies only the outputs before STEP.

@@ -9,6 +9,9 @@ one strategy per mode (see `characters.DETECTION_STRATEGIES`):
   uncertain results.
 - `panel-page` (V1.2, default): one call per panel — the full page as context
   plus the target panel, with the same cropped-panel fallback as page mode.
+- `panel-page-prev2`: panel-page that also sends the two preceding pages in
+  reading order as extra story context (fewer when they do not exist; blank
+  pages are skipped), so the model can use recent story events to disambiguate.
 - `panel-page-cast`: panel-page with an automatically derived per-chapter cast
   shortlist (the page's chapter via `chapter_page_map.json`; `--cast-key`
   overrides the derivation): the panel-page prompt is rendered for that cast
@@ -77,6 +80,7 @@ def run_characters_step(
     throttle (ignored when workers > 1).
     """
     from profiles import load_profiles
+    print(f"characters: detection mode {config.detection_mode}", flush=True)
 
     panels_root = ctx.step_dir("panels")
     page_dirs = sorted(path for path in panels_root.iterdir() if path.is_dir())

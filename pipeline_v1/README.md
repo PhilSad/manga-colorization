@@ -23,7 +23,11 @@ Pipeline stages (per page):
    panel-only behaviour; `--detection-mode page` makes one call per page;
    `--detection-mode panel-page` (V1.2) keeps one call per panel
    but sends the full page as global context plus the target panel, with the
-   same cropped-panel fallback as page mode. An optional cached
+   same cropped-panel fallback as page mode. `--detection-mode panel-page-prev2`
+   additionally sends the two preceding pages in reading order as story
+   context (fewer when they do not exist; blank pages are skipped), so the
+   model can use recent story events to disambiguate identity — expect
+   ~2–3× the panel-page prompt tokens per call. An optional cached
    chapter cast shortlist (`--cast-key`)
    focuses the prompt; identity hints come from the shared character
    profiles (task 0002) → `2_characters/<page>/<panel>.json`
@@ -87,10 +91,12 @@ Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 outputs; with `--from-step` only the earlier step outputs are copied, task
 0001), `--atlas-columns N`, `--num-inference-steps` (4 for the
 step-distilled model; 20–50 if the server runs the undistilled base),
-`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast`
+`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast|panel-page-prev2`
 (panel-page = one call per panel with the full page as context,
 `prompt_panel_page.txt`; panel-page-cast = same with an automatically derived
-per-chapter cast shortlist from `chapter_page_map.json`, `--cast-key` wins),
+per-chapter cast shortlist from `chapter_page_map.json`, `--cast-key` wins;
+panel-page-prev2 = panel-page that also sends the two preceding pages in
+reading order as story context, `prompt_panel_page_prev2.txt`),
 `--cast-key c001` (chapter cast shortlist), `--no-full-page-fallback`,
 `--max-megapixels 2.0` (FLUX request cap),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),

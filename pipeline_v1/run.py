@@ -83,11 +83,20 @@ def build_backends(config):
         raise SystemExit(
             f"panel-page prompt file not found: {config.vlm_panel_page_prompt_file}"
         )
+    if (
+        config.detection_mode == "panel-page-prev2"
+        and not config.vlm_panel_page_prev2_prompt_file.is_file()
+    ):
+        raise SystemExit(
+            f"panel-page-prev2 prompt file not found: "
+            f"{config.vlm_panel_page_prev2_prompt_file}"
+        )
     character_detector.prepare(
         config.refs_dir,
         config.vlm_prompt_file,
         config.vlm_panel_prompt_file,
         config.vlm_panel_page_prompt_file,
+        config.vlm_panel_page_prev2_prompt_file,
     )
 
     if not config.colorizer_prompt_file.is_file():

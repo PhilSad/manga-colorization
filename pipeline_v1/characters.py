@@ -18,6 +18,9 @@ unified `detect(mode, ...)` entry point:
 - `panel-page` (V1.2, default): one paid call per panel that sends the full
   page (numbered, target panel highlighted) as global context *plus* the
   cropped panel, with the same cropped-panel fallback as page mode.
+- `panel-page-prev2`: panel-page that also sends the two preceding pages in
+  reading order as extra story context (fewer when they do not exist; blank
+  pages are skipped), so the model can use recent story events to disambiguate.
 - `panel-page-cast`: panel-page with an automatically derived per-chapter
   cast shortlist (explicit `cast_key` -> `--cast-key` -> `cast_key_for_page`).
 
@@ -359,6 +362,7 @@ class OpenRouterCharacterDetector:
         prompt_template: str | None = None,
         panel_prompt_template: str | None = None,
         panel_page_prompt_template: str | None = None,
+        panel_page_prev2_prompt_template: str | None = None,
         max_tokens: int = 1024,
         temperature: float = 0.0,
         client: Any = None,  # injected OpenAI-compatible client (tests)
@@ -374,6 +378,7 @@ class OpenRouterCharacterDetector:
         self.prompt_template = prompt_template
         self.panel_prompt_template = panel_prompt_template
         self.panel_page_prompt_template = panel_page_prompt_template
+        self.panel_page_prev2_prompt_template = panel_page_prev2_prompt_template
         self.max_tokens = max_tokens
         self.temperature = temperature
         if client is not None:
@@ -395,12 +400,14 @@ class OpenRouterCharacterDetector:
         self.prompt: str = ""
         self.panel_prompt: str = ""
         self.panel_page_prompt: str = ""
+        self.panel_page_prev2_prompt: str = ""
         # Guards prompt swaps (set_cast) against readers in worker threads.
         self._prompt_lock = threading.Lock()
         # Raw templates (kept so prompts can be rebuilt per chapter cast).
         self._page_template: str = ""
         self._panel_template: str = ""
         self._panel_page_template: str = ""
+        self._panel_page_prev2_template: str = ""
 
     def prepare(
         self,
@@ -408,6 +415,7 @@ class OpenRouterCharacterDetector:
         prompt_file: Path | None = None,
         panel_prompt_file: Path | None = None,
         panel_page_prompt_file: Path | None = None,
+        panel_page_prev2_prompt_file: Path | None = None,
     ) -> None:
         """Load the canonical list, profiles, cast shortlist and build the
         prompts once per run."""
@@ -431,10 +439,20 @@ class OpenRouterCharacterDetector:
         if panel_page_template is None and panel_page_prompt_file is not None:
             panel_page_template = Path(panel_page_prompt_file).read_text(encoding="utf-8")
         self._panel_page_template = panel_page_template or ""
+
+        panel_page_prev2_template = self.panel_page_prev2_prompt_template
+        if (
+            panel_page_prev2_template is None
+            and panel_page_prev2_prompt_file is not None
+        ):
+            panel_page_prev2_template = Path(
+                panel_page_prev2_prompt_file
+            ).read_text(encoding="utf-8")
+        self._panel_page_prev2_template = panel_page_prev2_template or ""
         self._build_prompts()
 
     def _build_prompts(self) -> None:
-        """(Re)build the three prompts from the stored templates + current
+        """(Re)build the four prompts from the stored templates + current
         cast shortlist. Called by `prepare` and by `set_cast`."""
         shortlist = cast_shortlist_for(self.chapter_casts_file, self.cast_key)
         self.prompt = build_prompt(
@@ -449,6 +467,10 @@ class OpenRouterCharacterDetector:
             self._panel_page_template, self.canonical,
             profiles=self.profiles, cast_shortlist=shortlist,
         )
+        self.panel_page_prev2_prompt = build_prompt(
+            self._panel_page_prev2_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
 
     def panel_page_prompt_for(self, cast_key: str | None) -> str:
         """The panel-page prompt rendered for a given cast shortlist. Always
@@ -461,8 +483,19 @@ class OpenRouterCharacterDetector:
             profiles=self.profiles, cast_shortlist=shortlist,
         )
 
+    def panel_page_prev2_prompt_for(self, cast_key: str | None) -> str:
+        """The panel-page-prev2 prompt rendered for a given cast shortlist.
+        Always renders fresh from immutable inputs (template, roster,
+        profiles), so per-page casts are thread-safe. `None` restores the
+        full roster."""
+        shortlist = cast_shortlist_for(self.chapter_casts_file, cast_key)
+        return build_prompt(
+            self._panel_page_prev2_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
     def set_cast(self, cast_key: str | None) -> None:
-        """Switch the chapter-cast shortlist for all three prompts (no-op when
+        """Switch the chapter-cast shortlist for all four prompts (no-op when
         unchanged). Called per page in `panel-page-cast` mode so that
         cropped-panel fallbacks reuse the page's cast; lock-guarded for
         worker threads."""
@@ -500,9 +533,9 @@ class OpenRouterCharacterDetector:
         cast_key: str | None = None,
     ) -> PageCharacterRecord:
         """Unified character detection: dispatch `mode` ("panel", "page",
-        "panel-page", "panel-page-cast") to its strategy. Every mode returns
-        a per-page `PageCharacterRecord`; the per-panel results live in
-        `record.panels[key]`."""
+        "panel-page", "panel-page-cast", "panel-page-prev2") to its
+        strategy. Every mode returns a per-page `PageCharacterRecord`; the
+        per-panel results live in `record.panels[key]`."""
         return self.strategy_for(mode).detect(
             page, panels_dir, expected_panels, refs_dir, cast_key=cast_key
         )
@@ -795,6 +828,7 @@ class DetectionStrategy(Protocol):
     label: str                 # step progress label
     provenance: str | None     # provenance call-file name (None: no file)
 
+
     def detect(
         self,
         page: Path,
@@ -1026,6 +1060,158 @@ class PageStrategy:
         return record
 
 
+def _detect_panels_with_page_context(
+    detector: OpenRouterCharacterDetector,
+    record: PageCharacterRecord,
+    prompt: str,
+    progress_desc: str,
+    source: str,
+    panels_dir: Path,
+    expected_panels: list[str],
+    refs_dir: Path,
+    annotated: Path,
+    boxes: list,
+    context_images: list[tuple[str, bytes]] | None = None,
+) -> None:
+    """Shared per-panel loop for the page-context strategies (panel-page,
+    panel-page-prev2): one call per panel sending `prompt`, optional extra
+    context images (e.g. the preceding pages), the numbered annotated page
+    with the target highlighted, and the cropped panel. Unparseable,
+    explicit-`uncertain`, unknown-character, and error results fall back to
+    the cropped-panel V1 call. Mutates `record` in place."""
+    for panel_key in tqdm(
+        expected_panels,
+        desc=progress_desc,
+        unit="panel", leave=False, disable=detector.workers > 1,
+    ):
+        panel = _find_panel_file(panels_dir, panel_key)
+        if panel is None:
+            fallback = detector._fallback_panel(panel_key, panels_dir, refs_dir)
+            record.fallback_calls += 1
+            record.cost_usd += fallback.cost_usd or 0.0
+            record.total_latency_s += fallback.latency_s
+            if fallback.cost_usd is None:
+                record.unpriced_calls += 1
+            record.panels[panel_key] = fallback
+            record.status = "partial" if record.status == "ok" else record.status
+            continue
+
+        highlighted = _highlighted_page(annotated, boxes, panel_key)
+        info = file_record(panel)
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": prompt},
+        ]
+        if context_images:
+            for mime, data in context_images:
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{_b64(data)}"},
+                })
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{_b64(highlighted)}"},
+        })
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{info['mime_type']};base64,{_b64(panel.read_bytes())}"
+            },
+        })
+        result = detector._call(content)
+        record.page_calls += 1
+        record.cost_usd += result.cost_usd or 0.0
+        record.total_latency_s += result.latency_s
+        if result.cost_usd is None:
+            record.unpriced_calls += 1
+
+        known: list[str] = []
+        unknown: list[str] = []
+        uncertain = False
+        parsed = parse_panel_with_page(result.text) if result.error is None else None
+        if parsed is not None:
+            known, unknown = validate_characters(
+                parsed["characters"], detector.canonical
+            )
+            uncertain = parsed["uncertain"]
+
+        if (
+            result.error is None
+            and parsed is not None
+            and not uncertain
+            and not unknown
+        ):
+            record.panels[panel_key] = CharacterRecord(
+                status="ok",
+                characters=known,
+                unknown_entries=[],
+                response_text=result.text,
+                usage=result.usage,
+                cost_usd=result.cost_usd,
+                cost_source=result.cost_source,
+                latency_s=result.latency_s,
+                model_returned=result.model_returned,
+                attempts=result.attempts,
+                error=None,
+                finished_at=_iso_now(),
+                source=source,
+                uncertain=False,
+            )
+            continue
+
+        # Fallback: panel-only prompt (V1), mirrors page-mode behaviour.
+        record.status = "partial" if record.status == "ok" else record.status
+        fallback = detector._fallback_panel(panel_key, panels_dir, refs_dir)
+        record.fallback_calls += 1
+        record.cost_usd += fallback.cost_usd or 0.0
+        record.total_latency_s += fallback.latency_s
+        if fallback.cost_usd is None:
+            record.unpriced_calls += 1
+        record.panels[panel_key] = fallback
+
+
+def _previous_page_images(
+    panels_dir: Path, count: int = 2
+) -> list[tuple[str, bytes]]:
+    """(mime, bytes) of the up-to-`count` preceding pages in reading order,
+    oldest first, for use as extra detection context.
+
+    The preceding pages are the nearest page dirs before `panels_dir` in the
+    run's `1_panels/` layout, read via each sibling's `panels.json`
+    `page_path`. Blank pages (no detections) are skipped and the search
+    continues further back. Returns fewer than `count` images at the start
+    of a book, and `[]` when there are no preceding pages — the caller then
+    degrades to plain panel-page behaviour."""
+    panels_root = panels_dir.parent
+    ordered = sorted(path for path in panels_root.iterdir() if path.is_dir())
+    names = [path.name for path in ordered]
+    if panels_dir.name not in names:
+        return []
+    index = names.index(panels_dir.name)
+    found: list[Path] = []
+    for candidate in reversed(ordered[:index]):
+        if len(found) >= count:
+            break
+        geometry_path = candidate / "panels.json"
+        if not geometry_path.is_file():
+            continue
+        try:
+            geometry = json.loads(geometry_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if geometry.get("blank_page") or not geometry.get("detections"):
+            continue
+        page_path = Path(geometry.get("page_path") or "")
+        if not page_path.is_file():
+            continue
+        found.append(page_path)
+    found.reverse()  # oldest first
+    images: list[tuple[str, bytes]] = []
+    for path in found:
+        info = file_record(path)
+        images.append((info["mime_type"], path.read_bytes()))
+    return images
+
+
 class PanelPageStrategy:
     """mode="panel-page": one paid call per panel — the full page (numbered,
     target panel highlighted) as global context *plus* the cropped panel.
@@ -1067,90 +1253,77 @@ class PanelPageStrategy:
         # cast_key=None means "the detector's current cast" (panel-page with
         # --cast-key); an explicit key (panel-page-cast) renders that cast.
         effective_cast = detector.cast_key if cast_key is None else cast_key
+        print(f'effective cast for {page.stem}: {effective_cast}', flush=True)
         record.cast_key = effective_cast
-        panel_page_prompt = detector.panel_page_prompt_for(effective_cast)
+        prompt = detector.panel_page_prompt_for(effective_cast)
 
         page_image, boxes = _page_geometry(panels_dir)
         annotated = _annotated_page(page_image, panels_dir)
+        _detect_panels_with_page_context(
+            detector, record, prompt,
+            progress_desc=f"characters: {page.stem} (panel-page)",
+            source="panel-page",
+            panels_dir=panels_dir, expected_panels=expected_panels,
+            refs_dir=refs_dir, annotated=annotated, boxes=boxes,
+        )
+        return record
 
-        for panel_key in tqdm(
-            expected_panels,
-            desc=f"characters: {page.stem} (panel-page)",
-            unit="panel", leave=False, disable=detector.workers > 1,
-        ):
-            panel = _find_panel_file(panels_dir, panel_key)
-            if panel is None:
-                fallback = detector._fallback_panel(panel_key, panels_dir, refs_dir)
-                record.fallback_calls += 1
-                record.cost_usd += fallback.cost_usd or 0.0
-                record.total_latency_s += fallback.latency_s
-                if fallback.cost_usd is None:
-                    record.unpriced_calls += 1
-                record.panels[panel_key] = fallback
-                record.status = "partial" if record.status == "ok" else record.status
-                continue
 
-            highlighted = _highlighted_page(annotated, boxes, panel_key)
-            info = file_record(panel)
-            content = [
-                {"type": "text", "text": panel_page_prompt},
-                {"type": "image_url",
-                 "image_url": {
-                     "url": f"data:image/png;base64,{_b64(highlighted)}"
-                 }},
-                {"type": "image_url",
-                 "image_url": {"url": f"data:{info['mime_type']};base64,{_b64(panel.read_bytes())}"}},
-            ]
-            result = detector._call(content)
-            record.page_calls += 1
-            record.cost_usd += result.cost_usd or 0.0
-            record.total_latency_s += result.latency_s
-            if result.cost_usd is None:
-                record.unpriced_calls += 1
+class PanelPagePrev2Strategy(PanelPageStrategy):
+    """mode="panel-page-prev2": panel-page with the two preceding pages (in
+    reading order) sent as extra story-context images, so the model can use
+    recent story events, dialogue and outfits to disambiguate identity.
+    Pages with fewer preceding pages degrade gracefully to plain panel-page
+    behaviour (0 or 1 images instead of 2).
 
-            known: list[str] = []
-            unknown: list[str] = []
-            uncertain = False
-            parsed = parse_panel_with_page(result.text) if result.error is None else None
-            if parsed is not None:
-                known, unknown = validate_characters(
-                    parsed["characters"], detector.canonical
-                )
-                uncertain = parsed["uncertain"]
+    The preceding pages are the nearest non-blank page dirs before the
+    current one in the run's `1_panels/` layout (`_previous_page_images`);
+    their raw page images are read via `panels.json` `page_path`. Per-panel
+    fallback semantics are identical to panel-page (shared loop).
+    """
 
-            if (
-                result.error is None
-                and parsed is not None
-                and not uncertain
-                and not unknown
-            ):
-                record.panels[panel_key] = CharacterRecord(
-                    status="ok",
-                    characters=known,
-                    unknown_entries=[],
-                    response_text=result.text,
-                    usage=result.usage,
-                    cost_usd=result.cost_usd,
-                    cost_source=result.cost_source,
-                    latency_s=result.latency_s,
-                    model_returned=result.model_returned,
-                    attempts=result.attempts,
-                    error=None,
-                    finished_at=_iso_now(),
-                    source="panel-page",
-                    uncertain=False,
-                )
-                continue
+    mode = "panel-page-prev2"
+    label = "panel+page+prev2"
+    provenance = "panel_page_prev2_calls.json"
 
-            # Fallback: panel-only prompt (V1), mirrors page-mode behaviour.
-            record.status = "partial" if record.status == "ok" else record.status
-            fallback = detector._fallback_panel(panel_key, panels_dir, refs_dir)
-            record.fallback_calls += 1
-            record.cost_usd += fallback.cost_usd or 0.0
-            record.total_latency_s += fallback.latency_s
-            if fallback.cost_usd is None:
-                record.unpriced_calls += 1
-            record.panels[panel_key] = fallback
+    PREV_PAGE_COUNT = 2
+
+    def detect(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+        *,
+        cast_key: str | None = None,
+    ) -> PageCharacterRecord:
+        detector = self.detector
+        if not detector.canonical:
+            detector.prepare(refs_dir)
+        if not detector._panel_page_prev2_template:
+            raise ValueError(
+                "panel-page-prev2 detection needs a panel-page-prev2 prompt "
+                "(--vlm-panel-page-prev2-prompt-file)"
+            )
+        record = PageCharacterRecord(status="ok", page=page.stem)
+        effective_cast = detector.cast_key if cast_key is None else cast_key
+        print(f'effective cast for {page.stem}: {effective_cast}', flush=True)
+        record.cast_key = effective_cast
+        prompt = detector.panel_page_prev2_prompt_for(effective_cast)
+
+        page_image, boxes = _page_geometry(panels_dir)
+        annotated = _annotated_page(page_image, panels_dir)
+        context_images = _previous_page_images(
+            panels_dir, count=self.PREV_PAGE_COUNT
+        )
+        _detect_panels_with_page_context(
+            detector, record, prompt,
+            progress_desc=f"characters: {page.stem} (panel-page-prev2)",
+            source="panel-page-prev2",
+            panels_dir=panels_dir, expected_panels=expected_panels,
+            refs_dir=refs_dir, annotated=annotated, boxes=boxes,
+            context_images=context_images,
+        )
         return record
 
 
@@ -1195,5 +1368,6 @@ DETECTION_STRATEGIES: dict[str, type[DetectionStrategy]] = {
     "panel": PanelStrategy,
     "page": PageStrategy,
     "panel-page": PanelPageStrategy,
+    "panel-page-prev2": PanelPagePrev2Strategy,
     "panel-page-cast": PanelPageCastStrategy,
 }

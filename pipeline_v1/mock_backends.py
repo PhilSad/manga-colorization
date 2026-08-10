@@ -8,6 +8,7 @@ no YOLO weights, no OpenRouter calls, no FLUX server.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PIL import Image
@@ -128,12 +129,16 @@ class MockPageCharacterDetector:
     page-level (`detect_page`) and the panel+page (`detect_panels_with_page`)
     protocols."""
 
-    def __init__(self, by_page: dict[str, dict[str, tuple[list[str], bool]]] | None = None):
+    def __init__(
+        self,
+        by_page: dict[str, dict[str, tuple[list[str], bool]]] | None = None,
+        cast_key: str | None = None,
+    ):
         self.by_page = by_page or {}
         self.calls: list[tuple[Path, list[str]]] = []
         self.cast_keys: list[str | None] = []
         self.current_cast: str | None = None
-        self.cast_key: str | None = None  # fixed --cast-key override
+        self.cast_key: str | None = cast_key  # fixed --cast-key override
 
     def strategy_for(self, mode: str):
         """Page-context mock supports "page", "panel-page",
@@ -367,6 +372,13 @@ class _MockPanelPageCastStrategy(_MockPanelPageStrategy):
             )
         if key is not None:
             self.detector.set_cast(key)
+        else:
+            print(
+                f"  characters: {page.name}: no chapter cast derivable for "
+                "panel-page-cast (full roster used)",
+                file=sys.stderr,
+                flush=True,
+            )
         record = self.detector.detect_panels_with_page(
             page, panels_dir, expected_panels, refs_dir, cast_key=key
         )

@@ -43,7 +43,9 @@ def build_backends(config):
         if config.detection_mode == "panel":
             character_detector = MockCharacterDetector()
         else:
-            character_detector = MockPageCharacterDetector()
+            character_detector = MockPageCharacterDetector(
+                cast_key=config.cast_key
+            )
         return Backends(
             detector=MockPanelDetector(),
             character_detector=character_detector,

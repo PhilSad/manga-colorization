@@ -5,8 +5,9 @@ evaluation cases are built on.
 Deliberately NOT stage-isolated: this runs the FULL four-stage pipeline on one
 real page with the same real backends `run.py` builds (`run.build_backends`)
 — real YOLO26n panel detection + reading-order extraction, real OpenRouter
-`google/gemma-4-31b-it` character detection (`panel-page` mode, the pipeline
-default), real FLUX.2 Klein 9B + LoRA colorization on the Spark server, and
+`google/gemma-4-31b-it` character detection (`DETECTION_MODE`, currently
+`panel-page-prev2`), real FLUX.2 Klein 9B + LoRA colorization on the Spark
+server, and
 stitching — and asserts the wiring end to end:
 
 - the panel extraction reproduces the committed fixture set byte-for-byte
@@ -53,16 +54,21 @@ from integration_support import (
     PANELS_ROOT,
     REFS_DIR,
     committed_page,
+    load_fixture,
 )
 from orchestrator import PipelineRunner
 from run import build_backends
 
 pytestmark = pytest.mark.integration
 
+FIXTURE = load_fixture()
+
 # Volume-1 p130 (ch. 5), the DET-005..010 fixture page: 6 panels in reading
 # order; the committed per-page set lives at tests/data/panels/P130/.
 PAGE_ALIAS = "P130"
 EXPECTED_PANELS = 6
+CAST_KEY = FIXTURE["cast_keys"][PAGE_ALIAS]  # "c005" — single source of truth
+DETECTION_MODE = "panel-page-prev2"   # the detection mode under test
 
 
 def _panel_stem(index: int) -> str:
@@ -92,7 +98,12 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         endpoint=spark_endpoint,
         vlm_model=DETECTION_MODEL,
         sleep_s=0.0,
-        detection_mode="panel-page",   # the pipeline default
+        detection_mode=DETECTION_MODE,
+        # panel-page-cast needs the chapter shortlist explicitly: the run
+        # input is the renamed P130 copy, so cast_key_for_page (volume map /
+        # filename tag / NNN- prefix) cannot derive c005 from it — same
+        # contract as the stage-isolated detection tests (fixture cast_keys).
+        cast_key=CAST_KEY if DETECTION_MODE == "panel-page-cast" else None,
         flux_steps=FLUX_STEPS,
         guidance_scale=FLUX_GUIDANCE,
         lora_scale=FLUX_LORA_SCALE,
@@ -137,6 +148,15 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         doc = _read_json(chars_dir / f"{stem}.json")
         detected[stem] = doc["characters"]
         assert doc["status"] != "error", f"{stem}: {doc.get('error')}"
+
+    # The cast shortlist must actually be applied in panel-page-cast mode
+    # (a silent full-roster fallback would defeat the page's purpose).
+    if DETECTION_MODE == "panel-page-cast":
+        provenance = _read_json(chars_dir / "panel_page_calls.json")
+        assert provenance["cast_key"] == CAST_KEY, (
+            f"panel-page-cast run recorded cast {provenance['cast_key']!r}, "
+            f"expected {CAST_KEY!r}"
+        )
 
     # 4. Colorize: one output per panel, each differing from its B&W crop; a
     #    filtered atlas is sent exactly for the panels with characters.

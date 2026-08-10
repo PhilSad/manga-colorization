@@ -34,6 +34,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -1359,6 +1360,14 @@ class PanelPageCastStrategy(PanelPageStrategy):
             )
         if key is not None:
             detector.set_cast(key)
+        else:
+            print(
+                f"  characters: {page.stem}: no chapter cast derivable for "
+                "panel-page-cast (full roster used); pass --cast-key or use a "
+                "page name/volume the map can resolve",
+                file=sys.stderr,
+                flush=True,
+            )
         return super().detect(
             page, panels_dir, expected_panels, refs_dir, cast_key=key
         )

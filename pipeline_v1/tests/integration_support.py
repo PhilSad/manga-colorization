@@ -49,7 +49,7 @@ PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
 PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
 
 # Real models used by the suite (override via env).
-DETECTION_MODEL = "google/gemma-4-31b-it"
+DETECTION_MODEL = "openai/gpt-5.6-luna" #"google/gemma-4-31b-it"
 VERIFY_MODEL = "openai/gpt-5.6-luna"
 
 # FLUX settings for the step-distilled Spark server (matches the pipeline).

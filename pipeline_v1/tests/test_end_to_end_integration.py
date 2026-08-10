@@ -21,8 +21,10 @@ stitching — and asserts the wiring end to end:
   changes only the panel interiors.
 
 Input: the committed `tests/data/pages/P130.png` — a byte-identical copy of
-the gitignored volume page (see `prepare_integration_data.py` provenance), so
-the test needs no extracted-volume data.
+the gitignored volume page (see `prepare_integration_data.py` provenance) —
+copied into the run under its real volume filename (fixture alias basename,
+"... - c005 (v01) - p130 ...png") so `panel-page-cast` auto-derivation
+resolves the chapter, so the test needs no extracted-volume data.
 
 Prerequisites (skipped with a printed reason when missing, like the rest of
 the integration suite): Spark FLUX server up (`curl http://spark:3000/healthz`)
@@ -39,6 +41,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -69,6 +72,10 @@ PAGE_ALIAS = "P130"
 EXPECTED_PANELS = 6
 CAST_KEY = FIXTURE["cast_keys"][PAGE_ALIAS]  # "c005" — single source of truth
 DETECTION_MODE = "panel-page-prev2"   # the detection mode under test
+# The run input is copied under its real volume filename (the fixture alias's
+# basename) so panel-page-cast's auto-derivation (`cast_key_for_page` reads
+# the '- c005 -' chapter tag) resolves the chapter like a real volume run.
+INPUT_FILENAME = Path(FIXTURE["aliases"][PAGE_ALIAS]).name
 
 
 def _panel_stem(index: int) -> str:
@@ -84,12 +91,15 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
     """Full pipeline, real backends, one page (volume-1 p130)."""
     page = committed_page(PAGE_ALIAS)          # tests/data/pages/P130.png
 
-    # Input dir containing only this page (a copy, so the run is
-    # self-contained and page_path stays inside the run dir).
+    # Input dir containing only this page, copied under its real volume
+    # filename (INPUT_FILENAME): the run stays self-contained (page_path
+    # inside the run dir) while the name lets panel-page-cast derive the
+    # chapter cast from the '- c005 -' tag.
     e2e_root = integration_run.run_dir / "e2e"
     input_dir = e2e_root / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy(page, input_dir / page.name)
+    input_image = input_dir / INPUT_FILENAME
+    shutil.copy(page, input_image)
 
     config = PipelineConfig(
         input_dir=input_dir,
@@ -99,11 +109,6 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         vlm_model=DETECTION_MODEL,
         sleep_s=0.0,
         detection_mode=DETECTION_MODE,
-        # panel-page-cast needs the chapter shortlist explicitly: the run
-        # input is the renamed P130 copy, so cast_key_for_page (volume map /
-        # filename tag / NNN- prefix) cannot derive c005 from it — same
-        # contract as the stage-isolated detection tests (fixture cast_keys).
-        cast_key=CAST_KEY if DETECTION_MODE == "panel-page-cast" else None,
         flux_steps=FLUX_STEPS,
         guidance_scale=FLUX_GUIDANCE,
         lora_scale=FLUX_LORA_SCALE,
@@ -118,7 +123,9 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
     for name in ("1_panels", "2_characters", "3_colorized", "4_stitched"):
         assert (ctx.run_dir / name).is_dir(), f"missing {name}/"
 
-    page_stem = page.stem
+    # Run page stem is the real volume filename (the input copy), not the
+    # committed alias stem.
+    page_stem = input_image.stem
 
     # 2. Panels: reading order, geometry and byte-identical crops vs the
     #    committed fixture set (YOLO/ordering drift guard).
@@ -149,7 +156,8 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         detected[stem] = doc["characters"]
         assert doc["status"] != "error", f"{stem}: {doc.get('error')}"
 
-    # The cast shortlist must actually be applied in panel-page-cast mode
+    # The cast shortlist must actually be applied in panel-page-cast mode: the
+    # run input's real filename is what the pipeline derives the chapter from
     # (a silent full-roster fallback would defeat the page's purpose).
     if DETECTION_MODE == "panel-page-cast":
         provenance = _read_json(chars_dir / "panel_page_calls.json")

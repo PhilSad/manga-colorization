@@ -1,0 +1,84 @@
+{
+  "page": "CH134_004.png",
+  "page_path": "pipeline_v1/tests/data/pages/CH134_004.png",
+  "page_sha256": "b4c5c0cb9af401803c9f620b7de717de451bbfc761453b82d8af1eac21b2d0b7",
+  "detection_order_into_reading_order": [
+    1,
+    3,
+    0,
+    2,
+    4
+  ],
+  "detections": [
+    {
+      "panel_index": 1,
+      "box": [
+        618,
+        0,
+        1093,
+        972
+      ],
+      "confidence": 0.9795,
+      "crop": "panel_0001.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 2,
+      "box": [
+        105,
+        166,
+        602,
+        399
+      ],
+      "confidence": 0.9619,
+      "crop": "panel_0002.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 3,
+      "box": [
+        104,
+        425,
+        602,
+        973
+      ],
+      "confidence": 0.9838,
+      "crop": "panel_0003.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 4,
+      "box": [
+        540,
+        996,
+        1199,
+        1800
+      ],
+      "confidence": 0.978,
+      "crop": "panel_0004.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 5,
+      "box": [
+        103,
+        997,
+        524,
+        1648
+      ],
+      "confidence": 0.8497,
+      "crop": "panel_0005.png",
+      "provenance": "yolo"
+    }
+  ],
+  "reading_order": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "blank_page": false,
+  "skip_reason": null,
+  "full_page_fallback": false
+}

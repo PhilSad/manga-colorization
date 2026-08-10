@@ -224,9 +224,11 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   Spark, electricity only).
 - Evaluation: the fixed failure set (`evaluation/v1_1_cases.json`) is run by
   the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration` —
-  no mocks: real OpenRouter gemma panel detection (DET/OOV), real FLUX on
+  no mocks: real OpenRouter gemma panel detection (DET/OOV — one test per
+  detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`), real FLUX on
   Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY). Inputs
-  are committed under `tests/data/` (regenerate with
+  are committed under `tests/data/` (per-case crops, plus full committed
+  pages and per-page panel sets for the detection pages; regenerate with
   `tests/prepare_integration_data.py`); each session writes a timestamped
   `tests/output/YYYYMMDD-HHMMSS/` dir with per-case records and measured
   `usage.cost`. Known-failing cases fail loudly (tracked, not xfailed).
@@ -255,11 +257,13 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
      fixture `description` when a new case class is added.
   3. **Regenerate the committed crops:**
      `.venv/bin/python pipeline_v1/tests/prepare_integration_data.py` creates
-     `tests/data/panels/<case_id>.png` from the durable page and rewrites the
-     `tests/data/README.md` provenance. Then check `git status` that all
-     pre-existing crops stayed byte-identical — if any changed, detection is
-     no longer deterministic on those pages and the fixture's panel IDs may
-     no longer match the committed crops.
+     the per-case crops `tests/data/panels/<case_id>.png`, plus the full
+     per-page sets for detection pages (`tests/data/pages/<alias>.png` and
+     `tests/data/panels/<alias>/` with all crops and `panels.json`), from the
+     durable pages, and rewrites the `tests/data/README.md` provenance. Then
+     check `git status` that all pre-existing crops stayed byte-identical —
+     if any changed, detection is no longer deterministic on those pages and
+     the fixture's panel IDs may no longer match the committed crops.
   4. **Wire the case into the integration suite:** add its id to the stage's
      case list in `pipeline_v1/tests/test_integration_<stage>.py` (e.g.
      `DETECTION_CASES` in `test_integration_detection.py`) and update the

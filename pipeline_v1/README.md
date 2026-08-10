@@ -158,27 +158,49 @@ recorded per call.
   real API calls**, one timestamped output dir per session under
   `tests/output/YYYYMMDD-HHMMSS/` with a manifest of per-case records and
   measured `usage.cost`. Inputs are committed under `tests/data/`
-  (pre-cropped panels + the one layout page; regenerate with
-  `tests/prepare_integration_data.py`):
+  (pre-cropped panels, committed pages + complete per-page panel sets for
+  the detection pages, the one layout page; regenerate with
+  `tests/prepare_integration_data.py`). Tests consume committed inputs and
+  call the real function directly — no panel detection inside the
+  detection/color tests:
 
-  - `test_integration_detection.py` (DET-001..004, OOV-001): the committed
-    crop -> real OpenRouter `google/gemma-4-31b-it` panel detection ->
-    assert the fixture's character set. Currently 1/5 pass — the four
-    failures are the fixture's documented V1 baselines (flashback cast,
-    multi-character collapse, missed Heiter, Clematis forced to Denken).
-  - `test_integration_color.py` (COL-001..004, SIZE-001): the committed
-    crop + `forced_characters` -> real FLUX.2 Klein 9B on Spark -> real
-    `openai/gpt-5.6-luna` validation (palette adherence for COL-001..003,
-    left-to-right for COL-004). Live run 2026-08-09: COL-003/COL-004 pass
-    (the V1.2 palette-geography bug is gone at seed 1337), COL-001/002 fail
-    (Frieren's hair renders lavender-purple, forbidden); SIZE-001 asserts
-    the 1600x1248 request cap.
-  - `test_integration_layout.py` (LAY-001..002): the committed page -> real
-    YOLO26n, reusing the pipeline's blank-check/full-page fallback policy.
+  - `test_integration_detection.py` (DET-001..010, OOV-001): four
+    parametrized tests, one per detection mode (`panel`, `panel-page`,
+    `panel-page-cast`, `page`), each over all 11 cases -> real OpenRouter
+    `google/gemma-4-31b-it` -> assert the fixture's character set. The
+    page-context modes use the committed full page + its complete panel
+    set; `panel-page-cast` adds the chapter-cast shortlist
+    (`fixture["cast_keys"]`). Known-failing cases fail loudly and stay
+    tracked; per-mode live verdicts are in pipelines.md.
+  - `test_integration_color.py` (COL-001..004, SIZE-001): one parametrized
+    test over all five cases: committed crop + `forced_characters` -> real
+    FLUX.2 Klein 9B on Spark -> real `openai/gpt-5.6-luna` validation
+    (palette adherence for COL-001..003, left-to-right for COL-004);
+    SIZE-001 asserts the 1600x1248 request cap (no VLM verification).
+  - `test_integration_layout.py` (LAY-001..002 + crop-stability tripwire):
+    the committed page -> real YOLO26n, reusing the pipeline's
+    blank-check/full-page fallback policy. The tripwire re-extracts the
+    committed detection pages and asserts the crops still match
+    byte-for-byte, so the eval cases' panel references cannot silently go
+    stale.
+  - `test_end_to_end_integration.py` (E2E-P130): the FULL pipeline — real
+    YOLO + real OpenRouter `panel-page` detection + real FLUX on Spark +
+    stitching — on one real page (volume-1 p130, the DET-005..010 page).
+    Deliberately NOT stage-isolated: runs the same real backends `run.py`
+    builds and asserts the wiring end to end (panel crops reproduce the
+    committed fixture set byte-for-byte, every panel gets a character
+    record with no call errors and a colorized output differing from its
+    B&W crop, the stitch preserves the B&W gutters pixel-exactly).
+    Detection identities are recorded for provenance but not asserted —
+    DET-006..008 are known Flamme/Frieren failures owned by the
+    stage-isolated detection suite. Needs the Spark server + API key
+    (skips otherwise). ~6 OpenRouter calls + 6 FLUX calls (first pays the
+    model-load cost).
 
   The colorize tests need the Spark server up and `OPENROUTER_API_KEY`
   (detection + validation); missing prerequisites skip their tests with a
-  printed reason. Measured suite cost ≈ $0.002–0.003 per full run.
+  printed reason. Measured suite cost ≈ $0.005–0.01 per full run (44
+  detection calls + 5 FLUX + 4 VLM verifications).
 - `character_profiles.json` + `profiles.py` — canonical names, identity cues
   (detection hints), palette descriptions (FLUX prompt conditioning),
   reference files, aliases, variants.
@@ -216,7 +238,9 @@ above). Skipped whenever a prerequisite is missing (`OPENROUTER_API_KEY`,
 Spark server), printed reason; plain `pytest` never touches the network.
 
 The real smoke run (real YOLO + OpenRouter + Spark) is
-`pipeline_v1/scripts/smoke_real.sh` and is **not** part of pytest.
+`pipeline_v1/scripts/smoke_real.sh` (still handy for a quick manual run on
+any input folder); the same full-pipeline path on a fixed page is also in
+pytest as `test_end_to_end_integration.py` (real backends, `-m integration`).
 
 ## Reproducibility
 

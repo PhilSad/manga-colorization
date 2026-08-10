@@ -3,13 +3,14 @@
 Fixed inputs for the real-network integration suite (`pytest -m integration`). Regenerate with `pipeline_v1/tests/prepare_integration_data.py`.
 
 - `panels/<case_id>.png` — the pre-cropped panel for each DET/OOV/COL/SIZE case, produced by the real reading-order extraction (YOLO26n + `panel_ordering.reading_order`), so the fixture's panel IDs stay meaningful. The integration tests take these crops as input; they never run panel detection themselves.
+- `pages/<alias>.png` + `panels/<alias>/` — for each page the detection cases reference, the full page, **all** its panel crops, and a `panels.json` geometry (repo-relative `page_path`). The page-context detection modes (`page`, `panel-page`, `panel-page-cast`) annotate the whole numbered page before the call, so they need the complete crop set, not just the case crop.
 - `pages/lay_001_page.png` — p006, the full-page illustration the LAY-001 layout test runs real YOLO on.
 
 ## Provenance of the last regeneration
 
 ```json
 {
-  "generated_at": "2026-08-09T20:39:52+02:00",
+  "generated_at": "2026-08-10T22:31:37+02:00",
   "detector": "leoxs22/manga-panel-detector-yolo26n",
   "confidence": 0.25,
   "panel_inset": 0,

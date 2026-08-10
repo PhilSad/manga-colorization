@@ -452,10 +452,23 @@ regression is a user judgement pending on these two images.
 ### Integration-suite evaluation (2026-08-09, live backends, seed 1337)
 
 The evaluation of `evaluation/v1_1_cases.json` now runs as stage-isolated
-real-network pytest (`-m integration`): committed pre-cropped panels in
-`pipeline_v1/tests/data/`, real gemma-4-31b-it detection, real FLUX on Spark +
-real gpt-5.6-luna validation, real YOLO; one timestamped run per session in
-`pipeline_v1/tests/output/`. Findings (measured `usage.cost` ≈ $0.0022/session):
+real-network pytest (`-m integration`): committed inputs in
+`pipeline_v1/tests/data/` (pre-cropped panels, plus committed pages and
+complete per-page panel sets for the detection pages), real gemma-4-31b-it
+detection, real FLUX on Spark + real gpt-5.6-luna validation, real YOLO;
+one timestamped run per session in `pipeline_v1/tests/output/`.
+
+**Suite restructured 2026-08-10:** the detection stage now runs **all four
+detection modes** (`page`, `panel`, `panel-page`, `panel-page-cast`) as four
+parametrized tests over the same 11 DET/OOV cases, consuming the committed
+per-page inputs — the tests call the real detector functions directly and no
+longer run panel detection themselves. A crop-stability tripwire in the
+layout stage re-extracts the committed pages and asserts the crops still
+match byte-for-byte, so the eval cases' panel references cannot silently go
+stale. Per-mode live verdicts are pending the next `pytest -m integration`
+run; the findings below are the pre-restructure baselines.
+
+Findings (measured `usage.cost` ≈ $0.0022/session, pre-restructure):
 
 - **Detection (panel-only mode): 1/5 pass.** DET-003 (Heiter close-up) passes;
   DET-001 reproduces the exact V1 baseline `{Fern, Stark}` (flashback cast),

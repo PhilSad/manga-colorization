@@ -1,14 +1,24 @@
 #!/usr/bin/env python3
 """Regenerate the committed integration-test inputs under `tests/data/`.
 
-The integration tests (test_integration_*.py) are stage-isolated: they take a
-**pre-cropped panel** as input (never a full page), so `tests/data/panels/`
-must hold the exact crops the fixture's panel IDs refer to — the crops
-produced by the real reading-order extraction (`YoloPanelDetector` +
-`panel_ordering.reading_order` + `extraction.save_panels`, same code the
-pipeline uses). This script produces them from the durable source pages under
-`data/` (gitignored) and commits the crops + the one full page the layout
-tests need (P006) into `tests/data/`.
+The integration tests (test_integration_*.py) are stage-isolated and consume
+**committed inputs** — they never run panel detection themselves (except the
+layout-stage tripwire, which checks that live extraction still reproduces the
+committed crops). This script produces those committed inputs from the durable
+source pages under `data/` (gitignored):
+
+- `panels/<case_id>.png` — the pre-cropped panel for each DET/OOV/COL/SIZE
+  case, produced by the real reading-order extraction (`YoloPanelDetector` +
+  `panel_ordering.reading_order` + `extraction.save_panels`, same code the
+  pipeline uses), so the fixture's panel IDs stay meaningful.
+- `pages/<alias>.png` + `panels/<alias>/` — for each page the detection
+  cases (DET/OOV) reference, the full page plus **all** of its panel crops
+  and a `panels.json` geometry (repo-relative `page_path`). The page-context
+  detection modes (`page`, `panel-page`, `panel-page-cast`) need the whole
+  numbered page, not just the case crop, so the annotation overlay matches
+  the real path.
+- `pages/lay_001_page.png` — p006, the full-page illustration the LAY-001
+  layout test runs real YOLO on.
 
 Usage:
     .venv/bin/python pipeline_v1/tests/prepare_integration_data.py
@@ -19,6 +29,7 @@ YOLO weights are auto-downloaded on first use (pipeline_v1/models/).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sys
@@ -44,6 +55,15 @@ PAGES_ROOT = DATA_ROOT / "pages"
 CROP_STAGES = ("characters", "color", "size")
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+
+
 def main() -> int:
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     aliases = fixture["aliases"]
@@ -58,6 +78,14 @@ def main() -> int:
     by_page: dict[str, list[tuple[str, str]]] = {}
     for case_id, alias, panel in wanted:
         by_page.setdefault(alias, []).append((case_id, panel))
+
+    # Pages whose full crop set + geometry the page-context detection modes
+    # need (the characters-stage pages only; color/size cases stay crop-only).
+    detection_aliases = sorted({
+        case["input"]["source_page"]
+        for case in fixture["cases"]
+        if case["stage"] == "characters" and case["input"].get("panel")
+    })
 
     PANELS_ROOT.mkdir(parents=True, exist_ok=True)
     PAGES_ROOT.mkdir(parents=True, exist_ok=True)
@@ -106,6 +134,8 @@ def main() -> int:
             shutil.copy(src, dst)
             print(f"  {case_id}: {alias} {panel_key} -> {dst.name} "
                   f"({src.stat().st_size // 1024} KiB, box {boxes_by_index[index].as_int_tuple()})")
+        if alias in detection_aliases:
+            _write_page_set(alias, page_path, records, ordered, order, tmp)
         shutil.rmtree(tmp)
 
     # LAY-001 needs the full p006 page (no crop).
@@ -118,6 +148,47 @@ def main() -> int:
     )
     print(f"\nprovenance written to {DATA_ROOT / 'README.md'}")
     return 0
+
+
+def _write_page_set(
+    alias: str,
+    source_path: Path,
+    records: list[dict],
+    ordered: list,
+    order: list[int],
+    crops_dir: Path,
+) -> None:
+    """Commit the full page + all panel crops + geometry for one detection
+    page, mirroring the real pipeline's `panels` step output so the
+    page-context detection modes get a faithful numbered page."""
+    page_dir = PANELS_ROOT / alias
+    page_dir.mkdir(parents=True, exist_ok=True)
+    for record in records:
+        shutil.copy(crops_dir / record["filename"], page_dir / record["filename"])
+    page_dst = PAGES_ROOT / f"{alias}.png"
+    shutil.copy(source_path, page_dst)
+    _write_json(page_dir / "panels.json", {
+        "page": page_dst.name,
+        "page_path": page_dst.relative_to(REPO_ROOT).as_posix(),
+        "page_sha256": _sha256(page_dst),
+        "detection_order_into_reading_order": order,
+        "detections": [
+            {
+                "panel_index": record["panel_index"],
+                "box": box.as_int_tuple(),
+                "confidence": round(box.confidence, 4),
+                "crop": record["filename"],
+                "provenance": "yolo",
+            }
+            for record, box in zip(records, ordered)
+        ],
+        "reading_order": [record["panel_index"] for record in records],
+        "blank_page": False,
+        "skip_reason": None,
+        "full_page_fallback": False,
+    })
+    print(f"  page-set {alias}: {len(records)} panels -> "
+          f"pages/{alias}.png + panels/{alias}/")
 
 
 def _readme(provenance: dict) -> str:
@@ -133,6 +204,12 @@ def _readme(provenance: dict) -> str:
         "extraction (YOLO26n + `panel_ordering.reading_order`), so the "
         "fixture's panel IDs stay meaningful. The integration tests take "
         "these crops as input; they never run panel detection themselves.",
+        "- `pages/<alias>.png` + `panels/<alias>/` — for each page the "
+        "detection cases reference, the full page, **all** its panel crops, "
+        "and a `panels.json` geometry (repo-relative `page_path`). The "
+        "page-context detection modes (`page`, `panel-page`, "
+        "`panel-page-cast`) annotate the whole numbered page before the "
+        "call, so they need the complete crop set, not just the case crop.",
         "- `pages/lay_001_page.png` — p006, the full-page illustration the "
         "LAY-001 layout test runs real YOLO on.",
         "",

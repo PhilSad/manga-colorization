@@ -1,0 +1,98 @@
+{
+  "page": "P130.png",
+  "page_path": "pipeline_v1/tests/data/pages/P130.png",
+  "page_sha256": "24b20fad9a1630c33cb7bd9452d87f13e5947408c444182444112e80e437672c",
+  "detection_order_into_reading_order": [
+    0,
+    3,
+    5,
+    1,
+    4,
+    2
+  ],
+  "detections": [
+    {
+      "panel_index": 1,
+      "box": [
+        138,
+        0,
+        1364,
+        656
+      ],
+      "confidence": 0.9861,
+      "crop": "panel_0001.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 2,
+      "box": [
+        738,
+        690,
+        1500,
+        1199
+      ],
+      "confidence": 0.9788,
+      "crop": "panel_0002.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 3,
+      "box": [
+        738,
+        1235,
+        1499,
+        1646
+      ],
+      "confidence": 0.9766,
+      "crop": "panel_0003.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 4,
+      "box": [
+        132,
+        689,
+        717,
+        1648
+      ],
+      "confidence": 0.9832,
+      "crop": "panel_0004.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 5,
+      "box": [
+        869,
+        1682,
+        1500,
+        2056
+      ],
+      "confidence": 0.9774,
+      "crop": "panel_0005.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 6,
+      "box": [
+        129,
+        1682,
+        847,
+        2250
+      ],
+      "confidence": 0.9826,
+      "crop": "panel_0006.png",
+      "provenance": "yolo"
+    }
+  ],
+  "reading_order": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+  ],
+  "blank_page": false,
+  "skip_reason": null,
+  "full_page_fallback": false
+}

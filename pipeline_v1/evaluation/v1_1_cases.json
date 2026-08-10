@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "V1.1/V1.2 fixed evaluation set: real V1/V1.1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, palette geography, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets; COL-004 additionally asserts the left-to-right spatial palette assignment. DET-005..010 cover volume-1 p130's six panels (Flamme/Frieren look-alike confusion, see per-case notes).",
+  "description": "V1.1/V1.2 fixed evaluation set: real V1/V1.1 failure cases (character confusion, out-of-vocabulary identity, palette adherence, palette geography, zero-panel fallback, blank-page skip, oversized-input capping). Inputs are source pages (durable); panel IDs refer to the crops produced by the reading-order extraction. Character arrays are compared as sets; COL-004 additionally asserts the left-to-right spatial palette assignment. DET-005..010 cover volume-1 p130's six panels (Flamme/Frieren look-alike confusion, see per-case notes). The integration suite runs the DET/OOV cases through all four detection modes (page, panel, panel-page, panel-page-cast); `cast_keys` maps each detection source page to its chapter-cast key for the panel-page-cast mode.",
   "aliases": {
     "P003": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p003 [VIZ Media] [Digital] [1r0n].png",
     "P004_005": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p004-p005 [VIZ Media] [Digital] [1r0n].png",
@@ -10,6 +10,12 @@
     "P013": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c001 (v01) - p013 [VIZ Media] [Digital] [1r0n].png",
     "P130": "data/page_per_volume/Frieren - Beyond Journey's End v01 (2021) (Digital) (1r0n) (f2)/Frieren - Beyond Journey's End - c005 (v01) - p130 [VIZ Media] [Digital] [1r0n].png",
     "CH134_004": "data/chapter_134/0134-004.png"
+  },
+  "cast_keys": {
+    "P003": "c001",
+    "P008": "c001",
+    "P130": "c005",
+    "CH134_004": "c134"
   },
   "cases": [
     {

@@ -1,0 +1,70 @@
+{
+  "page": "P008.png",
+  "page_path": "pipeline_v1/tests/data/pages/P008.png",
+  "page_sha256": "dce82132b89ca0e6e7e0cafee0dc5e51cf1fec0bf12da5efa8c6f486a6ed1b8b",
+  "detection_order_into_reading_order": [
+    2,
+    3,
+    0,
+    1
+  ],
+  "detections": [
+    {
+      "panel_index": 1,
+      "box": [
+        109,
+        0,
+        1499,
+        671
+      ],
+      "confidence": 0.9817,
+      "crop": "panel_0001.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 2,
+      "box": [
+        636,
+        705,
+        1500,
+        1501
+      ],
+      "confidence": 0.9797,
+      "crop": "panel_0002.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 3,
+      "box": [
+        109,
+        705,
+        618,
+        1500
+      ],
+      "confidence": 0.9863,
+      "crop": "panel_0003.png",
+      "provenance": "yolo"
+    },
+    {
+      "panel_index": 4,
+      "box": [
+        116,
+        1538,
+        1342,
+        2072
+      ],
+      "confidence": 0.9826,
+      "crop": "panel_0004.png",
+      "provenance": "yolo"
+    }
+  ],
+  "reading_order": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "blank_page": false,
+  "skip_reason": null,
+  "full_page_fallback": false
+}

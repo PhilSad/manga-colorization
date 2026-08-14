@@ -8,6 +8,9 @@ formal method or pipeline).
 
 - `data/pages/`: committed input pages (volume 1, pages p004–p005 … p010,
   original filenames, reading order). The shared input set for experiments.
+- `data/panels/`: committed panel crops extracted from `data/pages/` (run
+  `20260815-014738`), one subdirectory per page, `panel_000N.png` numbered in
+  reading order. Regenerate with `split_panels.py` and copy from the run dir.
 - `output/`: timestamped run dirs (`YYYYMMDD-HHMMSS/`), gitignored.
 - `split_panels.py`: panel extraction, pipeline_v1-style.
 

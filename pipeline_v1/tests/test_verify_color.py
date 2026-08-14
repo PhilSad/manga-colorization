@@ -84,10 +84,12 @@ def test_color_verdict_schema_is_strict_and_complete():
 
 def test_verify_sends_structured_output_request(tmp_path):
     """One verify call sends the strict json_schema response_format and
-    `provider.require_parameters` (never silent degradation), and maps the
+    `provider.require_parameters` (never silent degradation), carries the
+    colorized panel + crop + reference atlas as images, and maps the
     structured verdict onto the record status."""
     colorized = _panel(tmp_path / "colorized.png")
     crop = _panel(tmp_path / "crop.png")
+    atlas = _panel(tmp_path / "atlas.jpg")
 
     def ok():
         return FakeResponse(
@@ -98,7 +100,7 @@ def test_verify_sends_structured_output_request(tmp_path):
     verifier = ColorVerifier(
         model="openai/gpt-5.6-luna", client=FakeClient([ok])
     )
-    record = verifier.verify(colorized, crop)
+    record = verifier.verify(colorized, crop, atlas=atlas)
 
     assert record.status == "verified"
     assert record.good_color is True
@@ -108,6 +110,14 @@ def test_verify_sends_structured_output_request(tmp_path):
     call = verifier.client.chat.completions.calls[0]
     assert call["response_format"] == RESPONSE_FORMAT
     assert call["extra_body"] == {"provider": {"require_parameters": True}}
+    # gpt-5.6-luna does not support temperature; sending it would make
+    # require_parameters reject every endpoint (routing 404).
+    assert "temperature" not in call
+    # text + colorized + crop + atlas = 4 content parts, atlas last
+    parts = call["messages"][0]["content"]
+    assert len(parts) == 4
+    assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert parts[3]["image_url"]["url"].startswith("data:image/jpeg;base64,")
 
 
 def test_verify_mismatch_when_good_color_false(tmp_path):
@@ -160,3 +170,22 @@ def test_verify_unparseable_content(tmp_path):
     record = verifier.verify(colorized, None)
     assert record.status == "unparseable"
     assert record.good_color is None
+
+
+def test_verify_not_found_not_retried(tmp_path):
+    """A routing 404 (no endpoint supports the required parameters) is
+    deterministic — recorded as an error after exactly one attempt, no
+    backoff retries."""
+    from openai import NotFoundError
+
+    colorized = _panel(tmp_path / "colorized.png")
+    not_found = make_openai_error(
+        NotFoundError, "No endpoints found that can handle the requested parameters",
+        status=404,
+    )
+    verifier = ColorVerifier(client=FakeClient([not_found]))
+    record = verifier.verify(colorized, None)
+
+    assert record.status == "error"
+    assert "NotFoundError" in record.error
+    assert len(verifier.client.chat.completions.calls) == 1

@@ -44,15 +44,24 @@ removes the unparseable-verdict class in practice.
 
 - `characters.call_vlm` gained an optional `response_format` parameter:
   when set (json_schema structured outputs), the request also carries
-  `provider.require_parameters: true` and a BadRequest rejection is recorded
-  as `status=error` — never silently retried without the schema. Detection's
-  legacy `json_object` path (with its retry-without fallback) is unchanged.
+  `provider.require_parameters: true`, omits `temperature` (gpt-5.6-luna
+  does not list it as a supported parameter — with `require_parameters` a
+  rejected parameter excludes every endpoint), and a BadRequest/NotFound
+  rejection is recorded as `status=error` — never silently retried without
+  the schema, and routing 404s are not retried at all. Detection's legacy
+  `json_object` path (with its retry-without fallback) is unchanged.
 - `verify_color.py` is now one `ColorVerifier` + `parse_color_verdict` +
   `verify_color_prompt.txt`; `verify_l2r_prompt.txt` and
   `verify_palette_prompt.txt` were deleted.
 - The integration suite asserts `status == "verified"` for COL-001..004
   (COL-004 stays a known-failing case until the geographic-atlas fix
   lands); the manifest records `good_color` + `analyse` per call.
+- The verifier's prompt takes three images: the colorized panel, the
+  monochrome crop, and the **reference atlas of the detected characters**
+  (the same contact sheet sent to FLUX) — so the model checks the palette
+  against the characters that should appear rather than whoever it happens
+  to identify (a hallucinated identity otherwise produces vacuous
+  `good_color: true` verdicts).
 - Cost per verification call is unchanged (one OpenRouter call per panel,
   `usage.cost` accounting kept).
 - The generic prompt trusts the model's world knowledge of Frieren; if live

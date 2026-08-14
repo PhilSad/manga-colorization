@@ -203,8 +203,9 @@ recorded per call.
     FLUX.2 Klein 9B on Spark -> real `openai/gpt-5.6-luna` validation via one
     generic strict structured-output palette verdict (`analyse`/`good_color`,
     json_schema + `provider.require_parameters`, no fixture expectations in
-    the prompt); SIZE-001 asserts the 1600x1248 request cap (no VLM
-    verification).
+    the prompt; the verdict also gets the reference atlas of the forced
+    characters as context); SIZE-001 asserts the 1600x1248 request cap (no
+    VLM verification).
   - `test_integration_layout.py` (LAY-001..002 + crop-stability tripwire):
     the committed page -> real YOLO26n, reusing the pipeline's
     blank-check/full-page fallback policy. The tripwire re-extracts the

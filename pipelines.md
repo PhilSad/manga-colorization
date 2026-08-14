@@ -487,9 +487,12 @@ prompt — "are all the characters' color palettes correct?" — answered as a
 strict structured output (`analyse: str`, `good_color: bool`) via OpenRouter's
 `json_schema` response_format with `provider.require_parameters: true`; no
 fixture expectations are rendered into the prompt (they remain in
-`v1_1_cases.json` as documentation). The historical color verdicts below were
-produced with the previous two-verifier scheme and are not directly
-comparable.
+`v1_1_cases.json` as documentation). The verdict call also receives the
+**reference atlas of the detected/forced characters** (the same contact sheet
+the colorizer saw) as image #3, so luna checks each character's palette
+against the characters that should appear rather than whoever it happens to
+identify. The historical color verdicts below were produced with the previous
+two-verifier scheme and are not directly comparable.
 
 **panel-page-prev2 live run** (2026-08-14, 1 rep per case, temperature 0.0,
 model chosen via `INTEGRATION_DETECTION_MODEL`; records:

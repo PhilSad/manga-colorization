@@ -166,18 +166,23 @@ class ColorVerifier:
         self,
         colorized: Path,
         input_crop: Path | None,
+        atlas: Path | None = None,
     ) -> ColorVerifyRecord:
         """Ask the VLM whether every character in the colorized panel has its
         canonical Frieren palette.
 
         Sends the colorized panel as the primary image plus the monochrome
-        crop as context when available. One paid OpenRouter call with strict
-        json_schema structured output (`analyse`/`good_color`).
+        crop and the reference atlas of the detected characters (the same
+        contact sheet the colorizer saw) as context when available. One paid
+        OpenRouter call with strict json_schema structured output
+        (`analyse`/`good_color`). The request omits `temperature`
+        (gpt-5.6-luna does not support it; sending it would make
+        `provider.require_parameters` reject every endpoint).
         """
         template = self.prompt_template or VERIFY_PROMPT_FILE.read_text(
             encoding="utf-8"
         )
-        content = _content_with_images(template, (colorized, input_crop))
+        content = _content_with_images(template, (colorized, input_crop, atlas))
 
         result = call_vlm(
             self.client, self.model, content,

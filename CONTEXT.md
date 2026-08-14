@@ -34,6 +34,7 @@ no implementation details.
   returned by the OpenRouter vision-language model (`openai/gpt-5.6-luna`,
   strict json_schema) for the COL-* eval cases — one generic judgment of
   whether every character in the colorized panel has its canonical Frieren
-  palette, with no fixture expectations rendered into the prompt. It does not
-  itself distinguish palette *adherence* from palette *geography*; that
+  palette, with no fixture expectations rendered into the prompt and the
+  reference atlas of the detected characters sent as a context image. It does
+  not itself distinguish palette *adherence* from palette *geography*; that
   distinction lives at the case level in the fixture's `failure` tag.

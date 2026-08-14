@@ -54,7 +54,7 @@ COLOR_CASES = ["COL-001", "COL-002", "COL-003", "COL-004", "SIZE-001"]
 def _colorize(integration_run, case_id, spark_endpoint, case):
     """Real FLUX colorization of the committed crop with the forced
     characters' atlas (crop-only when no characters are forced, i.e.
-    SIZE-001). Returns (colorize_record, colorized_path)."""
+    SIZE-001). Returns (colorize_record, colorized_path, atlas_path)."""
     from atlas import build_filtered_atlas
 
     forced = case["input"].get("forced_characters", [])
@@ -75,7 +75,7 @@ def _colorize(integration_run, case_id, spark_endpoint, case):
         colorized,
         palette_instruction=palette_instruction_for(forced) if forced else "",
     )
-    return record, colorized
+    return record, colorized, atlas_path
 
 
 @pytest.mark.parametrize("case_id", COLOR_CASES)
@@ -86,7 +86,7 @@ def test_color_case(integration_run, openrouter_key, spark_endpoint, case_id):
     expected = case["expected"]
     crop = crop_path(case_id)
 
-    colorize_record, colorized = _colorize(
+    colorize_record, colorized, atlas_path = _colorize(
         integration_run, case_id, spark_endpoint, case
     )
     assert colorize_record.status == "ok", (
@@ -96,11 +96,12 @@ def test_color_case(integration_run, openrouter_key, spark_endpoint, case_id):
     verdict = None
     if "left_to_right" in expected or "required_colors" in expected:
         # COL-001..004: one generic canonical-palette verdict (strict
-        # structured output). COL-004 is the known V1.2 geography failure
+        # structured output) with the reference atlas of the forced
+        # characters as context. COL-004 is the known V1.2 geography failure
         # (uniform blue wash) and is expected to fail loudly until the
         # geographic-atlas fix lands.
         verifier = build_color_verifier(openrouter_key)
-        verdict = verifier.verify(colorized, crop)
+        verdict = verifier.verify(colorized, crop, atlas=atlas_path)
         known = (
             " Known V1.2 failure (ideas.md problem 1): the atlas is not yet "
             "built in left-to-right reading order with geographic identity info."

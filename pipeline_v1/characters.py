@@ -589,8 +589,18 @@ def call_vlm(
     passed (verify_color.py's strict json_schema structured output), it is
     sent verbatim plus `provider.require_parameters: true`, so the request
     only routes to endpoints that support it; a rejection is recorded as an
-    error and never silently downgraded to loose JSON."""
-    from openai import APIError, APIConnectionError, BadRequestError, RateLimitError
+    error and never silently downgraded to loose JSON. Structured requests
+    also omit `temperature` (gpt-5.6-luna does not list it as a supported
+    parameter — `require_parameters` would otherwise reject every endpoint)
+    and a routing 404 (NotFoundError) is recorded immediately, not
+    retried."""
+    from openai import (
+        APIError,
+        APIConnectionError,
+        BadRequestError,
+        NotFoundError,
+        RateLimitError,
+    )
 
     messages = [{"role": "user", "content": content}]
     structured = response_format is not None
@@ -604,8 +614,9 @@ def call_vlm(
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": temperature,
         }
+        if not structured:
+            kwargs["temperature"] = temperature
         if current_format is not None:
             kwargs["response_format"] = current_format
         if structured:
@@ -650,6 +661,14 @@ def call_vlm(
             )
             time.sleep(delay)
             continue
+        except NotFoundError as error:
+            # Routing/config 404 (e.g. no endpoint supports the required
+            # parameters under require_parameters): deterministic, no retry.
+            return _CallResult(
+                text="", usage={}, cost_usd=None, cost_source="unavailable",
+                latency_s=time.monotonic() - started, model_returned=None,
+                attempts=attempts, error=f"NotFoundError: {error}",
+            )
         except (APIConnectionError, APIError) as error:
             if attempts >= MAX_ATTEMPTS:
                 return _CallResult(

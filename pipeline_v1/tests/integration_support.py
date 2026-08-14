@@ -16,7 +16,8 @@ a mocked one and never the whole pipeline:
 - color (COL-*, SIZE-*): the committed crop + `forced_characters` -> real
   FLUX.2 Klein 9B colorization on the Spark server -> real
   `openai/gpt-5.6-luna` validation of the output via one generic strict
-  structured-output palette verdict (`analyse`/`good_color`; the size-policy
+  structured-output palette verdict (`analyse`/`good_color`, with the
+  reference atlas of the forced characters as context; the size-policy
   case has no VLM verification).
 - layout (LAY-*, crop-stability): real YOLO26n panel detection. The
   crop-stability tripwire re-extracts the committed pages and asserts the

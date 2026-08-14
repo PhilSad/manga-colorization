@@ -10,8 +10,9 @@ a mocked one and never the whole pipeline:
   `google/gemma-4-31b-it`, one parametrized test per detection mode —
   `panel` (crop only), `panel-page` (full page context + crop), `panel-page-cast`
   (same, with the chapter cast shortlist), `panel-page-prev2` (panel-page plus
-  the two preceding pages as story-context images), and `page` (one page-level
-  mapping call per case). Assertions are identical across modes.
+  the two preceding pages as story-context images), `panel-page-prev2-cast`
+  (prev2 with the chapter cast shortlist), and `page` (one page-level mapping
+  call per case). Assertions are identical across modes.
 - color (COL-*, SIZE-*): the committed crop + `forced_characters` -> real
   FLUX.2 Klein 9B colorization on the Spark server -> real
   `openai/gpt-5.6-luna` validation of the output (size-policy case has no
@@ -183,10 +184,18 @@ def extract_page_crops(page: Path, work_dir: Path) -> list[dict]:
 
 def build_panel_detector(api_key: str, model: str = DETECTION_MODEL):
     """Real OpenRouter character detector prepared for all detection modes
-    (page, panel, panel-page, panel-page-prev2 prompts all built)."""
+    (page, panel, panel-page, panel-page-prev2 prompts all built).
+
+    `chapter_casts_file` is wired so the cast modes (`panel-page-cast`,
+    `panel-page-prev2` with a cast key) can render their chapter shortlist
+    (`cast_shortlist_for` would otherwise crash on `Path(None)`)."""
     from characters import OpenRouterCharacterDetector
 
-    detector = OpenRouterCharacterDetector(model=model, api_key=api_key)
+    detector = OpenRouterCharacterDetector(
+        model=model,
+        api_key=api_key,
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
     detector.prepare(
         REFS_DIR,
         prompt_file=PAGE_PROMPT_FILE,
@@ -231,8 +240,8 @@ def palette_instruction_for(names: list[str]) -> str:
 
 
 def assert_matches(record: Any, case: dict) -> None:
-    """The shared detection assertions, identical across the five mode
-    tests: character set equality, unknown-presence flag, and expected
+    """The shared detection assertions, identical across the mode tests:
+    character set equality, unknown-presence flag, and expected
     unknown characters (OOV). `record` is the per-panel CharacterRecord."""
     expected = set(case["expected"]["characters"])
     expected_unknown_present = case["expected"]["unknown_present"]

@@ -1,11 +1,13 @@
 """Real-network character-detection integration tests (DET-001..010, OOV-001).
 
-One parametrized test function per detection mode, each run over the full
+One parametrized test function per detection mode (plus the
+`panel-page-prev2-cast` variant), each run over the full
 case set with **committed inputs** from `tests/data/` — no panel detection in
 the tests themselves (the layout-stage crop-stability tripwire guards that).
 All five modes go through the unified `OpenRouterCharacterDetector.detect(
 mode, ...)` entry point, which dispatches to the mode's strategy
-(`characters.DETECTION_STRATEGIES`):
+(`characters.DETECTION_STRATEGIES`); the prev2-cast variant is the prev2
+mode with the cast shortlist passed explicitly, mirroring `panel-page-cast`:
 
 - `panel` — one call per committed crop (V1 prompt; also the fallback path).
 - `panel-page` — the numbered committed page + the committed crop (the
@@ -17,7 +19,9 @@ mode, ...)` entry point, which dispatches to the mode's strategy
   story-context images (`materialize_prev2_panels_dir` lays out two preceding
   page dirs; their `page_path` reuses the case's own committed page, so the
   two-image code path is exercised with committed inputs only and no
-  wrong-story characters leak into the context).
+  wrong-story characters leak into the context). `panel-page-prev2-cast`
+  (same mode) additionally renders the chapter-cast shortlist in the prompt,
+  exactly like `panel-page-cast`.
 - `page` — one page-level mapping call per case; the case's panel entry is
   kept (missing/uncertain/unknown entries trigger the built-in per-panel
   fallback).
@@ -131,6 +135,30 @@ def test_detection_panel_page_prev2(integration_run, detector, case_id, tmp_path
     )
     record = page_record.panels[case["input"]["panel"]]
     record_detection(integration_run, "panel-page-prev2", case_id, record, case)
+    assert_matches(record, case)
+
+
+@pytest.mark.parametrize("case_id", DETECTION_CASES)
+def test_detection_panel_page_prev2_cast(integration_run, detector, case_id,
+                                         tmp_path):
+    """panel-page-prev2 with the chapter-cast shortlist: same mode as
+    `test_detection_panel_page_prev2` plus the cast rendered in the prompt
+    (Flamme is excluded from ch. 5's cast, so DET-006..010 must not guess
+    her). The cast key comes from the fixture, not from pipeline data."""
+    case = case_by_id(FIXTURE, case_id)
+    alias = case["input"]["source_page"]
+    page_record = detector.detect(
+        "panel-page-prev2",
+        committed_page(alias),
+        materialize_prev2_panels_dir(alias, tmp_path),
+        [case["input"]["panel"]],
+        REFS_DIR,
+        cast_key=FIXTURE["cast_keys"][alias],
+    )
+    record = page_record.panels[case["input"]["panel"]]
+    record_detection(
+        integration_run, "panel-page-prev2-cast", case_id, record, case
+    )
     assert_matches(record, case)
 
 

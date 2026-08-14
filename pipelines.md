@@ -489,20 +489,20 @@ committed page (committed inputs only, no fabricated pages — the
 0/1-image degrade shapes are covered by the offline unit tests in
 `test_characters.py`). Pass = exact character set + `unknown_present`.
 
-| Case | expected | panel-page·gemma (4-rep) | prev2·gemma | prev2·luna |
-|---|---|---|---|---|
-| DET-001 | Frieren, Himmel | 4/4 | ✓ `{Frieren, Himmel}` | ✗ `{Frieren, Stark}` |
-| DET-002 | Frieren, Himmel, Heiter, Eisen | 4/4 | ✓ all four | ✓ all four |
-| DET-003 | Heiter | 4/4 | ✓ | ✓ |
-| DET-004 | Frieren, Heiter | 4/4 | ✓ | ✓ |
-| OOV-001 | — (unknown) | 0/4 | ✗ `{Denken}` | ✗ `{Heiter}` |
-| DET-005 | — | 4/4 | ✓ ∅ | ✓ ∅ |
-| DET-006 | Frieren | 4/4 | ✓ | ✓ |
-| DET-007 | Frieren | 3/4 | ✓ | ✓ |
-| DET-008 | Frieren, Fern | 3/4 | ✗ `{Frieren, Flamme}` | ✗ unparseable |
-| DET-009 | Frieren, Fern | 4/4 | ✓ | ✓ |
-| DET-010 | Frieren | 3/4 | ✓ | ✓ |
-| **Pass** | | **38/44** | **9/11** | **8/11** |
+| Case | expected | panel-page·gemma (4-rep) | prev2·gemma | prev2·luna | prev2-cast·gemma | prev2-cast·luna |
+|---|---|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | 4/4 | ✓ `{Frieren, Himmel}` | ✗ `{Frieren, Stark}` | ✓ | ✓ |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | 4/4 | ✓ all four | ✓ all four | ✓ | ✓ |
+| DET-003 | Heiter | 4/4 | ✓ | ✓ | ✓ | ✓ |
+| DET-004 | Frieren, Heiter | 4/4 | ✓ | ✓ | ✓ | ✓ |
+| OOV-001 | — (unknown) | 0/4 | ✗ `{Denken}` | ✗ `{Heiter}` | ✗ `{Wirbel}` | ✗ `{Himmel}` |
+| DET-005 | — | 4/4 | ✓ ∅ | ✓ ∅ | ✓ ∅ | ✓ ∅ |
+| DET-006 | Frieren | 4/4 | ✓ | ✓ | ✓ | ✓ |
+| DET-007 | Frieren | 3/4 | ✓ | ✓ | ✓ | ✓ |
+| DET-008 | Frieren, Fern | 3/4 | ✗ `{Frieren, Flamme}` | ✗ unparseable | ✓ `{Fern, Frieren}` | ✓ `{Fern, Frieren}` |
+| DET-009 | Frieren, Fern | 4/4 | ✓ | ✓ | ✓ | ✓ |
+| DET-010 | Frieren | 3/4 | ✓ | ✓ | ✓ | ✓ |
+| **Pass** | | **38/44** | **9/11** | **8/11** | **10/11** | **10/11** |
 
 Findings:
 
@@ -510,12 +510,29 @@ Findings:
   both models pass the flashback-era hero party (DET-002) and the p130
   look-alike page (DET-005..007, DET-009, DET-010), the cases panel-only
   mode fails; luna additionally misses DET-001 (Stark for Himmel).
+- **prev2-cast (same mode, chapter shortlist rendered in the prompt) closes
+  both remaining misses — 10/11 for both models** (sessions
+  [20260814-204127](pipeline_v1/tests/output/20260814-204127/) luna,
+  [20260814-204320](pipeline_v1/tests/output/20260814-204320/) gemma):
+  luna's DET-001 (Stark) and both models' DET-008 (Flamme) pass because
+  ch. 1/ch. 5 shortlists exclude Stark-era/out-of-cast guesses — same
+  mechanism as the panel-page-cast follow-up above. The only remaining
+  failure is **OOV-001**: Clematis is forced to Wirbel (gemma) / Himmel
+  (luna) instead of reported unknown — the cast channels the guess into the
+  shortlist's closest member, leaving the unknown-identity contract
+  untouched.
+- **Suite fix**: the cast tests crashed on `Path(None)` until
+  `build_panel_detector` wired `chapter_casts_file` — the mode tests
+  pass a cast key explicitly, so the file (never the auto-derivation) is
+  required to render the shortlist; this also unblocks the pre-existing
+  `panel-page-cast` integration test, whose live verdicts were still
+  pending.
 - **The two shared failures are the tracked ones**: OOV-001 (Clematis forced
   to Denken/Heiter, never reported unknown) and DET-008 (gemma answers
   Fern→Flamme; luna's prev2 answer fails the strict JSON format and its
   cropped-panel fallback comes back unparseable too). Same-page context
-  images cannot rule out out-of-cast look-alikes — only `panel-page-cast`'s
-  chapter shortlist excludes Flamme.
+  images cannot rule out out-of-cast look-alikes — only the chapter
+  shortlist (panel-page-cast / prev2-cast) excludes Flamme.
 - **prev2 calls are the suite's most expensive per call** (~2× panel-page's
   token count for the two extra page images): luna ≈$0.0016–0.0019/call,
   gemma ≈$0.00014–0.00024/call.

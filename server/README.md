@@ -212,6 +212,33 @@ running server: produced a 1216×1824 RGB PNG in ~13 s.
 
 Response: raw image bytes in the requested format.
 
+## Concurrency (since 2026-08-14)
+
+The service loads `FLUX2_NUM_PIPES` (default 2) independent pipeline instances
+and hands one out per in-flight request from a pool; BentoML `traffic
+concurrency == FLUX2_NUM_PIPES`, so concurrent requests never share a pipe
+(thread safety: each pipe owns its own mutable scheduler/adapter state, which
+is why the per-request `lora_scale` override is safe). Two bf16 pipes are
+~67 GB resident — within the GB10's 120 GB unified memory; set
+`FLUX2_NUM_PIPES=1` for the old single-pipe footprint.
+
+Additional route `POST /edit2` (concurrency-2 batch): one request carries two
+edit jobs — file parts `images1`/`images2`, text fields `prompt1`/`prompt2`,
+`seed1`/`seed2`, and the shared `width`/`height`/`num_inference_steps`/
+`guidance_scale`/`lora_scale`/`output_format`. Response: JSON
+`{"images": [base64, base64], "job_latency_s": [s, s]}`. The two jobs run
+concurrently, each on its own pipe. Note: `/edit2` holds **both** pipes for
+its duration, so a concurrent `/edit` waits (safe with traffic concurrency ==
+pipe count; don't fire parallel `/edit2` clients with 2 pipes).
+
+Benchmark (2026-08-14, 4 steps, real panels): concurrency 2 improves
+throughput ~1.06× on small panels and ~0.98× (slightly worse) at the 2 MP
+cap — the single GB10 is saturated by one request (GPU busy 83–95%), so
+duplicated-pipe concurrency mostly contends rather than overlaps. Full data,
+methods tested (incl. why true diffusers batching is infeasible) and
+reproducibility notes in `docs/color_concurency.md`; client tooling in
+`server/benchmark_concurrency.py`.
+
 ## Verified on 2026-08-08 (end-to-end run on the DGX Spark)
 
 - Docker image built successfully on the server (arm64, 9.45 GB; weights not

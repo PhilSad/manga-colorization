@@ -340,14 +340,16 @@ Findings:
   DET-002 modal `{Frieren, Heiter, Himmel}` — misses a hero-party member).
 - **OOV-001 stays unsolved in every mode/model**: Clematis is forced to
   Denken/Wirbel/Heiter and never reported unknown.
-- **Default adopted**: the pipeline now defaults to `panel-page` with
+- **Default adopted**: the pipeline defaulted to `panel-page` with
   `google/gemma-4-31b-it` — panel-page at ~$0.0001/
-  case-rep and ~5 s per panel is worth ~5× a page call, and the new
+  case-rep and ~5 s per panel is worth ~5× a page call, and the
   `panel-page-cast` mode additionally auto-restricts each page's prompt to
   its chapter cast (via `chapter_page_map.json`), which excludes look-alikes
   outside the chapter (e.g. Flamme is not in ch. 5's cast and could not be
   guessed on p130). luna remains the fallback candidate (34/44) if gemma
-  regresses.
+  regresses. The default has since moved to **`panel-page-prev2-cast`**
+  (panel-page + the two preceding pages as story context + the per-chapter
+  cast shortlist).
 
 **panel-page-cast follow-up** (2026-08-09, gemma only, 4 reps, records in
 `pipeline_v1/tests/output/20260809-222825/`): the new auto-cast mode scores

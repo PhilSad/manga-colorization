@@ -81,12 +81,13 @@ def build_backends(config):
     )
     if not config.vlm_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")
-    if config.detection_mode == "panel-page" and not config.vlm_panel_page_prompt_file.is_file():
+    if config.detection_mode in ("panel-page", "panel-page-cast") \
+            and not config.vlm_panel_page_prompt_file.is_file():
         raise SystemExit(
             f"panel-page prompt file not found: {config.vlm_panel_page_prompt_file}"
         )
     if (
-        config.detection_mode == "panel-page-prev2"
+        config.detection_mode in ("panel-page-prev2", "panel-page-prev2-cast")
         and not config.vlm_panel_page_prev2_prompt_file.is_file()
     ):
         raise SystemExit(

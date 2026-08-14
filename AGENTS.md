@@ -172,7 +172,7 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
    the full page as context, that plus an **automatically derived per-chapter
    cast shortlist**, the full-page variant that also sends the two preceding
    pages as story context, and the prev2 variant with the per-chapter cast
-   shortlist. `panel-page` is the default. `panel-page-cast` and
+   shortlist. `panel-page-prev2-cast` is the default. `panel-page-cast` and
    `panel-page-prev2-cast` derive the shortlist from the page's chapter via
    `frieren_wiki_dataset/chapter_page_map.json` —
    fixing mislabeled v09 tags; `--cast-key` overrides the derivation, so

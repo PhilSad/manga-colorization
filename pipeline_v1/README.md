@@ -17,8 +17,10 @@ Pipeline stages (per page):
    banding; crops `panel_0001.png …` + `panels.json` (boxes + order) +
    `overlay.png` debug image → `1_panels/<page>/`
 3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`.
-   The default `panel-page` mode makes one call per panel and sends the full
-   numbered page as context plus the target panel; missing/invalid/`uncertain`
+   The default `panel-page-prev2-cast` mode makes one call per panel, sends the
+   full numbered page as context plus the target panel and the two preceding
+   pages as story context, and restricts the prompt to the page's chapter
+   cast shortlist; missing/invalid/`uncertain`
    results get a cropped-panel fallback. `--detection-mode panel` keeps the V1
    panel-only behaviour; `--detection-mode page` makes one call per page;
    `--detection-mode panel-page` (V1.2) keeps one call per panel

@@ -15,7 +15,7 @@ unified `detect(mode, ...)` entry point:
   uses); the model returns a strict per-panel mapping. Missing, invalid, or
   explicitly `uncertain` panel entries trigger a cropped-panel fallback call
   (the V1 per-panel prompt).
-- `panel-page` (V1.2, default): one paid call per panel that sends the full
+- `panel-page` (V1.2): one paid call per panel that sends the full
   page (numbered, target panel highlighted) as global context *plus* the
   cropped panel, with the same cropped-panel fallback as page mode.
 - `panel-page-prev2`: panel-page that also sends the two preceding pages in
@@ -23,7 +23,7 @@ unified `detect(mode, ...)` entry point:
   pages are skipped), so the model can use recent story events to disambiguate.
 - `panel-page-cast`: panel-page with an automatically derived per-chapter
   cast shortlist (explicit `cast_key` -> `--cast-key` -> `cast_key_for_page`).
-- `panel-page-prev2-cast`: panel-page-prev2 with an automatically derived
+- `panel-page-prev2-cast` (default): panel-page-prev2 with an automatically derived
   per-chapter cast shortlist (same resolution order as `panel-page-cast`).
 
 Parsing, validation, retry policy, and per-call cost accounting (`usage.cost`

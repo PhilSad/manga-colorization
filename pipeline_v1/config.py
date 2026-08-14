@@ -74,7 +74,7 @@ class PipelineConfig:
     # panel-page sending the two preceding pages as extra story context
     # (panel-page-prev2); or that variant with the per-chapter cast
     # shortlist (panel-page-prev2-cast).
-    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast | panel-page-prev2 | panel-page-prev2-cast
+    detection_mode: str = "panel-page-prev2-cast"  # page | panel | panel-page | panel-page-cast | panel-page-prev2 | panel-page-prev2-cast
     vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
     vlm_panel_page_prev2_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PREV2_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
@@ -280,7 +280,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--detection-mode",
                         choices=("page", "panel", "panel-page", "panel-page-cast",
                                  "panel-page-prev2", "panel-page-prev2-cast"),
-                        default="panel-page",
+                        default="panel-page-prev2-cast",
                         help="page: one paid call per page with per-panel fallbacks "
                              "(V1.1); panel: V1 behaviour, one call per panel; "
                              "panel-page: one call per panel sending the full page as "

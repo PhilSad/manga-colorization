@@ -7,7 +7,7 @@ one strategy per mode (see `characters.DETECTION_STRATEGIES`):
 - `page` (V1.1, task 0003): one paid call per page mapping numbered panels to
   canonical characters, with cropped-panel fallbacks for missing/invalid/
   uncertain results.
-- `panel-page` (V1.2, default): one call per panel — the full page as context
+- `panel-page` (V1.2): one call per panel — the full page as context
   plus the target panel, with the same cropped-panel fallback as page mode.
 - `panel-page-prev2`: panel-page that also sends the two preceding pages in
   reading order as extra story context (fewer when they do not exist; blank

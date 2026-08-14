@@ -4,7 +4,7 @@
 Parses the pipeline configuration, builds the backends (real YOLO detector,
 OpenRouter character detector, FLUX colorizer — or mocks with --mock), and runs
 the orchestrator. Each run creates a fresh timestamped directory under
-`--output-root` with the four numbered intermediate directories and a manifest.
+`--output-root` with the five numbered intermediate directories and a manifest.
 
 Usage:
     .venv/bin/python pipeline_v1/run.py --help

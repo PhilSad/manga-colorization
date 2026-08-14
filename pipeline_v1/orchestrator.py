@@ -1,4 +1,4 @@
-"""Pipeline orchestrator: runs the four stages in order with fresh
+"""Pipeline orchestrator: runs the five stages in order with fresh
 timestamped run directories, aggregating everything into the manifest.
 
 Step order and run directories:
@@ -6,6 +6,7 @@ Step order and run directories:
   characters  -> 2_characters/
   colorize    -> 3_colorized/
   stitch      -> 4_stitched/
+  debug       -> 5_debug/     (bbox + characters annotation of the stitched pages)
 
 `--steps` filters which steps run; `--from-step` skips earlier steps;
 `--resume <dir>` pre-copies a previous run's step outputs so only the missing
@@ -113,6 +114,7 @@ class PipelineRunner:
                 "panels_colorized": 0,
                 "panels_bw_fallback": 0,
                 "pages_stitched": 0,
+                "pages_annotated": 0,
                 "wall_time_s": 0.0,
             },
         }
@@ -208,6 +210,8 @@ class PipelineRunner:
         if step == "stitch":
             return any(p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
                        for p in directory.iterdir())
+        if step == "debug":
+            return (directory / "summary.json").is_file()
         return False
 
     # -- step dispatch ------------------------------------------------------
@@ -250,6 +254,13 @@ class PipelineRunner:
             self.manifest_totals_update(ctx, {
                 "pages_stitched": len(record["outputs"]),
                 "panels_bw_fallback": record.get("panels_bw_fallback", 0),
+            })
+        elif step == "debug":
+            from steps.debug import run_debug_step
+
+            record = run_debug_step(ctx, self.config)
+            self.manifest_totals_update(ctx, {
+                "pages_annotated": record["pages_annotated"],
             })
         else:
             raise ValueError(f"unknown step {step!r}")

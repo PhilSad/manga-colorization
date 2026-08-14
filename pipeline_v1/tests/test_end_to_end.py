@@ -1,4 +1,4 @@
-"""End-to-end tests: the full pipeline (all four stages) with mock backends on
+"""End-to-end tests: the full pipeline (all five stages) with mock backends on
 a synthetic manga page, fully offline.
 
 The real YOLO detector / OpenRouter API / Spark FLUX server are exercised only
@@ -87,15 +87,16 @@ def test_pipeline_end_to_end(pipeline_inputs, mock_backends):
     config = make_config(tmp_path, refs)
     ctx = PipelineRunner(config, mock_backends).run()
 
-    # 1. Manifest completed with the four stages.
+    # 1. Manifest completed with the five stages.
     assert ctx.manifest["status"] == "completed"
     assert list(ctx.manifest["steps"].keys()) == [
-        "panels", "characters", "colorize", "stitch",
+        "panels", "characters", "colorize", "stitch", "debug",
     ]
     assert ctx.manifest["configuration"]["mock"] is True
 
     # 2. Numbered intermediate directories.
-    for name in ("1_panels", "2_characters", "3_colorized", "4_stitched"):
+    for name in ("1_panels", "2_characters", "3_colorized", "4_stitched",
+                 "5_debug"):
         assert (ctx.run_dir / name).is_dir()
 
     # 3. Panels extracted in Japanese reading order with geometry saved.
@@ -143,13 +144,29 @@ def test_pipeline_end_to_end(pipeline_inputs, mock_backends):
         assert image.getpixel((250, 130)) == (255, 255, 255)   # gutter
         assert image.getpixel((250, 410)) == (255, 255, 255)   # gutter
 
-    # 7. Totals.
+    # 7. Debug annotation: same page size as the stitched one; one record per
+    #    panel with the detected characters, from the run's 5_debug/.
+    debug_dir = ctx.run_dir / "5_debug"
+    debug_page = debug_dir / f"{page_name}.png"
+    with Image.open(debug_page) as image:
+        assert image.size == (500, 700)
+    debug_summary = read_json(debug_dir / "summary.json")
+    assert debug_summary["pages_annotated"] == 1
+    by_panel = {
+        p["panel"]: p for p in debug_summary["records"][0]["panels"]
+    }
+    assert by_panel["panel_0001.png"]["characters"] == ["Frieren", "Fern"]
+    assert by_panel["panel_0003.png"]["characters"] == []
+    assert all(not p["bw_fallback"] for p in by_panel.values())
+
+    # 8. Totals.
     totals = ctx.manifest["totals"]
     assert totals["character_calls"] == 5
     assert totals["flux_calls"] == 5
     assert totals["successful_flux_calls"] == 5
     assert totals["panels_colorized"] == 5
     assert totals["pages_stitched"] == 1
+    assert totals["pages_annotated"] == 1
     assert totals["openrouter_cost_usd"] == pytest.approx(0.0005, abs=1e-9)
 
 

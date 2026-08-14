@@ -3,8 +3,9 @@
 Panel-wise manga colorization pipeline: for each manga page, detect its panels,
 extract them in Japanese reading order, detect which reference characters appear in
 each panel, colorize each panel with FLUX.2 Klein 9B base + manga-colorization LoRA
-using an atlas filtered to the detected characters, and stitch the colorized panels
-back onto the original page.
+using an atlas filtered to the detected characters, stitch the colorized panels
+back onto the original page, and finally annotate a debug copy of each stitched
+page with its panel boxes and detected characters.
 
 ## Module map
 
@@ -31,6 +32,7 @@ pipeline_v1/
 ├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + palette + resume reuse)
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
+├── steps/debug.py        # stage 6 -> 5_debug/ (bbox + character annotation; shared with scripts/annotate_stitch.py)
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
 ├── evaluation/v1_1_cases.json  # fixed failure set (task 0001), run by the integration suite
@@ -41,6 +43,7 @@ pipeline_v1/
 │   ├── 2_characters/     # per-panel detection JSONs (source: page|fallback|forced) + summary
 │   ├── 3_colorized/      # per-panel colorized outputs
 │   ├── 4_stitched/       # final pages
+│   ├── 5_debug/          # stitched pages + bbox + characters per panel (stage 6)
 │   └── manifest.json
 └── tests/                # unit tests + offline end-to-end suite
 ```
@@ -61,6 +64,9 @@ page (input_dir)
        -> 3_colorized/<page>/panel_000N.png
   -> [stitching.py]
        -> 4_stitched/<page>.png               (panels colorized, rest B&W)
+  -> [steps/debug.py]  per page (pure image processing)
+       -> 5_debug/<page>.png                  (bbox + characters per panel)
+       -> 5_debug/summary.json
 ```
 
 ## Key decisions
@@ -91,8 +97,12 @@ page (input_dir)
   `panel-page-prev2` additionally sends the two preceding non-blank pages in
   reading order as story context, found via the sibling page dirs in
   `1_panels/` (`panels.json` `page_path`); fewer are sent at the start of a
-  book, degrading to plain `panel-page` shape. The per-panel call/fallback
-  loop is shared between the two modes.
+  book, degrading to plain `panel-page` shape. `panel-page-cast` and
+  `panel-page-prev2-cast` resolve the per-chapter cast key the same way
+  (explicit `cast_key` -> `--cast-key` -> `cast_key_for_page`) and render
+  the shortlist into their prompt via `panel_page_*_prompt_for(key)`, so
+  per-page casts stay thread-safe. The per-panel call/fallback loop is
+  shared between the two modes.
 - **Targeted reruns (V1.1)**: `--only-panel PAGE:PANEL` restricts processing;
   `--force-characters` injects ground-truth identities without paid calls;
   `--resume RUN --from-step STEP` copies only the outputs before STEP.

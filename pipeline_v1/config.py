@@ -18,12 +18,13 @@ REPO_ROOT = PIPELINE_DIR.parent
 
 # Pipeline stages in execution order; the run directory for each stage is
 # prefixed with its 1-based index (1_panels/, 2_characters/, ...).
-STEP_ORDER: tuple[str, ...] = ("panels", "characters", "colorize", "stitch")
+STEP_ORDER: tuple[str, ...] = ("panels", "characters", "colorize", "stitch", "debug")
 STEP_DIRS: dict[str, str] = {
     "panels": "1_panels",
     "characters": "2_characters",
     "colorize": "3_colorized",
     "stitch": "4_stitched",
+    "debug": "5_debug",
 }
 
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -69,15 +70,17 @@ class PipelineConfig:
     # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
     # V1 per-panel behaviour; per-panel calls that send the full page as
     # context plus the target panel (panel-page); panel-page with an
-    # automatically derived per-chapter cast shortlist (panel-page-cast); or
+    # automatically derived per-chapter cast shortlist (panel-page-cast);
     # panel-page sending the two preceding pages as extra story context
-    # (panel-page-prev2).
-    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast | panel-page-prev2
+    # (panel-page-prev2); or that variant with the per-chapter cast
+    # shortlist (panel-page-prev2-cast).
+    detection_mode: str = "panel-page"  # page | panel | panel-page | panel-page-cast | panel-page-prev2 | panel-page-prev2-cast
     vlm_panel_page_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE
     vlm_panel_page_prev2_prompt_file: Path = DEFAULT_VLM_PANEL_PAGE_PREV2_PROMPT_FILE
     cast_key: str | None = None   # chapter_casts.json shortlist key (optional)
     chapter_casts_file: Path = DEFAULT_CHAPTER_CASTS_FILE
-    # page -> chapter map for panel-page-cast (auto shortlist derivation)
+    # page -> chapter map for panel-page-cast / panel-page-prev2-cast (auto
+    # shortlist derivation)
     chapter_page_map_file: Path = DEFAULT_CHAPTER_PAGE_MAP_FILE
 
     # Stage 4 — colorization (self-hosted FLUX.2 Klein 9B + LoRA)
@@ -115,6 +118,12 @@ class PipelineConfig:
     # failed FLUX call) is stitched from the original black & white crop
     # instead of failing the whole step; each fallback is logged and recorded.
     stitch_bw_fallback: bool = False
+
+    # Stage 5 (debug annotation): rendering knobs for 5_debug/. The step is
+    # pure image processing (no backends); the standalone offline tool
+    # scripts/annotate_stitch.py shares this implementation.
+    debug_font_size: int = 42      # label font size in px
+    debug_bbox_width: int = 5      # bounding-box stroke width in px
 
     # V1.1 (task 0001): targeted reruns.
     only_panels: tuple[str, ...] = ()  # "PAGE:PANEL" selectors (repeatable)
@@ -164,6 +173,8 @@ class PipelineConfig:
             "resume": str(self.resume) if self.resume else None,
             "from_step": self.from_step,
             "stitch_bw_fallback": self.stitch_bw_fallback,
+            "debug_font_size": self.debug_font_size,
+            "debug_bbox_width": self.debug_bbox_width,
             "only_panels": list(self.only_panels),
             "forced_characters": self.forced_characters,
         }
@@ -210,11 +221,12 @@ def _validate(config: PipelineConfig) -> None:
             f"--from-step must be one of {STEP_ORDER}, got {config.from_step!r}"
         )
     if config.detection_mode not in (
-        "page", "panel", "panel-page", "panel-page-cast", "panel-page-prev2"
+        "page", "panel", "panel-page", "panel-page-cast",
+        "panel-page-prev2", "panel-page-prev2-cast"
     ):
         raise ValueError(
             "--detection-mode must be 'page', 'panel', 'panel-page', "
-            "'panel-page-cast' or 'panel-page-prev2'"
+            "'panel-page-cast', 'panel-page-prev2' or 'panel-page-prev2-cast'"
         )
     if config.blank_ink_threshold < 0 or config.blank_ink_threshold >= 1:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
@@ -239,8 +251,9 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             "Panel-wise manga colorization: detect panels (YOLO26n), extract them "
             "in Japanese reading order, detect characters per panel (OpenRouter "
             "gemma-4-31b-it), colorize each panel with FLUX.2 Klein 9B base + LoRA "
-            "(atlas filtered to the detected characters), and stitch the colorized "
-            "panels back onto the original page."
+            "(atlas filtered to the detected characters), stitch the colorized "
+            "panels back onto the original page, and annotate a debug copy of "
+            "each stitched page (5_debug/)."
         ),
     )
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR,
@@ -266,7 +279,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                              "'panel-page-prev2' calls).")
     parser.add_argument("--detection-mode",
                         choices=("page", "panel", "panel-page", "panel-page-cast",
-                                 "panel-page-prev2"),
+                                 "panel-page-prev2", "panel-page-prev2-cast"),
                         default="panel-page",
                         help="page: one paid call per page with per-panel fallbacks "
                              "(V1.1); panel: V1 behaviour, one call per panel; "
@@ -277,14 +290,18 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                              "chapter via chapter_page_map.json, --cast-key wins); "
                              "panel-page-prev2: panel-page that also sends the two "
                              "preceding pages in reading order as story context "
-                             "(fewer when they do not exist).")
+                             "(fewer when they do not exist); panel-page-prev2-cast: "
+                             "panel-page-prev2 with the automatically derived "
+                             "per-chapter cast shortlist (same resolution as "
+                             "panel-page-cast).")
     parser.add_argument("--cast-key", default=None,
                         help="chapter_casts.json shortlist key (e.g. c001); with "
-                             "panel-page-cast it overrides the automatic per-page "
-                             "derivation.")
+                             "panel-page-cast / panel-page-prev2-cast it overrides "
+                             "the automatic per-page derivation.")
     parser.add_argument("--chapter-page-map", type=Path,
                         default=DEFAULT_CHAPTER_PAGE_MAP_FILE,
-                        help="page->chapter map for panel-page-cast auto cast "
+                        help="page->chapter map for panel-page-cast / "
+                             "panel-page-prev2-cast auto cast "
                              "(default: frieren_wiki_dataset/chapter_page_map.json).")
     parser.add_argument("--colorizer-prompt-file", type=Path,
                         default=DEFAULT_COLORIZER_PROMPT_FILE)
@@ -325,7 +342,11 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--limit", type=int,
                         help="Process only the first N pages after skip.")
     parser.add_argument("--steps", default=None,
-                        help="Comma-separated subset of panels,characters,colorize,stitch.")
+                        help="Comma-separated subset of panels,characters,colorize,stitch,debug.")
+    parser.add_argument("--debug-font-size", type=int, default=42,
+                        help="5_debug label font size in px (default 42).")
+    parser.add_argument("--debug-bbox-width", type=int, default=5,
+                        help="5_debug bounding-box stroke width in px (default 5).")
     parser.add_argument("--from-step", choices=STEP_ORDER,
                         help="Start at this step (skip earlier ones).")
     parser.add_argument("--resume", type=Path,
@@ -391,6 +412,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             resume=args.resume,
             from_step=args.from_step,
             stitch_bw_fallback=args.stitch_bw_fallback,
+            debug_font_size=args.debug_font_size,
+            debug_bbox_width=args.debug_bbox_width,
             only_panels=tuple(args.only_panel),
             forced_characters=forced_characters,
         )

@@ -165,11 +165,14 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`, one
    paid call per page mapping numbered panels to canonical characters; missing/
    invalid/`uncertain` panels get a cropped-panel fallback. `--detection-mode
-   page|panel|panel-page|panel-page-cast` selects page-level (V1.1),
-   one-call-per-panel (V1), one-call-per-panel with the full page as context,
-   or the same with an **automatically derived per-chapter cast shortlist**.
-   `panel-page` is the default. `panel-page-cast` derives that shortlist from
-   the page's chapter via `frieren_wiki_dataset/chapter_page_map.json` —
+   page|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
+   selects page-level (V1.1), one-call-per-panel (V1), one-call-per-panel with
+   the full page as context, that plus an **automatically derived per-chapter
+   cast shortlist**, the full-page variant that also sends the two preceding
+   pages as story context, and the prev2 variant with the per-chapter cast
+   shortlist. `panel-page` is the default. `panel-page-cast` and
+   `panel-page-prev2-cast` derive the shortlist from the page's chapter via
+   `frieren_wiki_dataset/chapter_page_map.json` —
    fixing mislabeled v09 tags; `--cast-key` overrides the derivation, so
    look-alike characters outside the chapter cast cannot be guessed (e.g.
    Flamme on p130 of ch. 5). An optional cached chapter cast shortlist
@@ -184,11 +187,15 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 5. **Stitch** — each colorized panel resized back to its original box and
    pasted onto the page; everything outside the panels stays black & white →
    `4_stitched/<page>.png`.
+6. **Debug annotation** — pure image processing (no backends): per stitched
+   page, draw the detected panel boxes + a label per panel with the
+   characters detected for it; B&W-fallback panels get an orange box and a
+   `[B&W fallback]` tag → `5_debug/<page>.png` + `summary.json`.
 
 - Entry point: `pipeline_v1/run.py`; full usage in `pipeline_v1/README.md`,
   module map and design decisions in `pipeline_v1/ARCHITECTURE.md`.
 - Run conventions: same as methods — each invocation creates a fresh
-  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the four
+  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the five
   numbered intermediate directories and an incremental `manifest.json`
   (command, config, prompt/profile hashes, per-step records, measured costs).
   `output/` and `models/` are gitignored.
@@ -203,15 +210,19 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
   failed FLUX call — is stitched from its original B&W crop instead of failing
   the stitch step; each fallback is logged to stderr and recorded per page and
-  in `totals.panels_bw_fallback`).
-- Debug annotation: `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`
-  renders a debug copy of a completed run's `4_stitched/` pages with a colored
-  bounding box per panel and a label with the panel name + the characters
-  detected for it (from `2_characters/<page>/<panel>.json`). Panels stitched
-  from their original B&W crop (`--stitch-bw-fallback`) get an orange box and
-  a `[B&W fallback]` tag, read from the run's `manifest.json`. Writes
-  `<run-dir>/5_debug/` + `summary.json`; options `--output-dir`, `--page SUBSTR`
-  (repeatable filter), `--font-size`, `--bbox-width`. Offline, needs no
+  in `totals.panels_bw_fallback`), `--debug-font-size` / `--debug-bbox-width`
+  (5_debug rendering knobs).
+- Debug annotation: the pipeline's final `debug` step (see step 6 above)
+  writes `5_debug/` automatically at the end of every run. Its offline
+  companion, `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`,
+  re-annotates any completed run with the same `steps.debug.run_debug_step`
+  implementation (no pipeline rerun): a colored bounding box per panel and a
+  label with the panel name + the characters detected for it (from
+  `2_characters/<page>/<panel>.json`); panels stitched from their original
+  B&W crop (`--stitch-bw-fallback`) get an orange box and a `[B&W fallback]`
+  tag, read from the run's `manifest.json`. Writes `<run-dir>/5_debug/` +
+  `summary.json`; options `--output-dir`, `--page SUBSTR` (repeatable
+  filter), `--font-size`, `--bbox-width`. Offline, needs no
   backends/network, and never modifies the run's own outputs.
 - Requirements: `OPENROUTER_API_KEY` in `.env` (paid detection) and the Spark
   FLUX server running (`curl http://spark:3000/healthz`). Offline demo without
@@ -231,7 +242,7 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   same-second dir-name collision that plain `mkdir(exist_ok=True)` would hide
   is avoided — see the `integration_run` fixture in `tests/conftest.py`)
   no mocks: real OpenRouter gemma panel detection (DET/OOV — one test per
-  detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`/`panel-page-prev2`), real FLUX on
+  detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`/`panel-page-prev2`/`panel-page-prev2-cast`), real FLUX on
   Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY), plus a
   full-pipeline end-to-end test (`test_end_to_end_integration.py`, E2E-P130)
   running all four stages with real backends on one real page (volume-1

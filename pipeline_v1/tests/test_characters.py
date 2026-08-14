@@ -1461,3 +1461,164 @@ def test_characters_step_panel_page_cast_mode(tmp_path):
         ctx.step_dir("characters") / "0134-004" / "panel_page_calls.json"
     )
     assert provenance["cast_key"] == "c134"
+
+
+# panel-page-prev2-cast: prev2 story context + automatic per-chapter cast
+
+
+def test_detect_panels_with_page_prev2_cast_auto_derives(tmp_path):
+    """panel-page-prev2-cast without an explicit key auto-derives the cast
+    from the page (0134-004 -> c134), set_cast switches the prompts, the
+    call renders the shortlist and keeps the prev2 context images, and the
+    record carries the effective key + prev2 source."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _multi_page_fixture(
+        tmp_path, ["0134-002", "0134-003", "0134-004"]
+    )
+
+    def p1():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([p1]),
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+        panel_page_prev2_prompt_file=PANEL_PAGE_PREV2_PROMPT_FILE,
+    )
+    record = detector.detect(
+        "panel-page-prev2-cast", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.cast_key == "c134"
+    assert detector.cast_key == "c134"               # set_cast applied
+    assert record.panels["panel_0001"].characters == ["Frieren"]
+    assert record.panels["panel_0001"].source == "panel-page-prev2"
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    text = content[0]["text"]
+    assert "limited to: Stark, Frieren, Fern" in text   # c134 shortlist
+    assert [part["type"] for part in content] == [
+        "text", "image_url", "image_url", "image_url", "image_url",
+    ]
+
+
+def test_detect_panels_with_page_prev2_cast_explicit_key(tmp_path):
+    """panel-page-prev2-cast with an explicit cast_key honours it over any
+    derivation (page would derive c134; the key forces c001)."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _multi_page_fixture(
+        tmp_path, ["0134-002", "0134-003", "0134-004"]
+    )
+
+    def p1():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([p1]),
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+        panel_page_prev2_prompt_file=PANEL_PAGE_PREV2_PROMPT_FILE,
+    )
+    record = detector.detect(
+        "panel-page-prev2-cast", page_path, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+        cast_key="c001",
+    )
+    assert record.cast_key == "c001"
+    assert detector.cast_key == "c001"
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert "limited to: Himmel, Frieren, Eisen, Heiter" in content[0]["text"]
+
+
+def test_detect_panels_with_page_prev2_cast_no_cast_full_roster(tmp_path):
+    """panel-page-prev2-cast on a page with no derivable cast falls back to
+    the full roster (no shortlist sentence) and keeps working."""
+    from characters import OpenRouterCharacterDetector
+
+    page_path, page_dir = _page_fixture(tmp_path)   # 0134-004 -> c134
+    # rename the page so nothing derives a cast (keep the panels geometry)
+    renamed = tmp_path / "cover.jpg"
+    page_path.rename(renamed)
+    geometry = json.loads((page_dir / "panels.json").read_text(encoding="utf-8"))
+    geometry["page"] = "cover.jpg"
+    geometry["page_path"] = str(renamed)
+    (page_dir / "panels.json").write_text(json.dumps(geometry), encoding="utf-8")
+
+    def p1():
+        return FakeResponse(
+            '{"characters": ["Frieren"], "uncertain": false}',
+            usage=FakeUsage(cost=0.00015),
+        )
+
+    detector = OpenRouterCharacterDetector(
+        model="google/gemma-4-31b-it", api_key="dummy",
+        client=FakeClient([p1]),
+        chapter_casts_file=CHAPTER_CASTS_FILE,
+    )
+    detector.prepare(
+        make_refs(tmp_path),
+        prompt_file=PROMPT_FILE,
+        panel_prompt_file=PANEL_PROMPT_FILE,
+        panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+        panel_page_prev2_prompt_file=PANEL_PAGE_PREV2_PROMPT_FILE,
+    )
+    record = detector.detect(
+        "panel-page-prev2-cast", renamed, page_dir,
+        ["panel_0001"], make_refs(tmp_path),
+    )
+    assert record.cast_key is None
+    assert detector.cast_key is None                  # set_cast not called
+    content = detector.client.chat.completions.calls[0]["messages"][0]["content"]
+    assert "limited to:" not in content[0]["text"]
+
+
+def test_characters_step_panel_page_prev2_cast_mode(tmp_path):
+    """panel-page-prev2-cast step: per-page auto cast derived from the page
+    (0134-004 -> c134) is recorded in set_cast + forwarded to the
+    panel+page+prev2 call + written into the prev2 provenance."""
+    from mock_backends import MockPageCharacterDetector
+    from run_context import RunContext, read_json
+    from steps.characters import run_characters_step
+
+    config = make_step_fixture(tmp_path)
+    config.detection_mode = "panel-page-prev2-cast"
+    ctx = RunContext.create(tmp_path / "output", {"status": "running"})
+    panels_root = ctx.step_dir("panels") / "0134-004"
+    panels_root.mkdir(parents=True)
+    for path in (tmp_path / "1_panels" / "0134-004").glob("*.png"):
+        (panels_root / path.name).write_bytes(path.read_bytes())
+    (panels_root / "panels.json").write_text(json.dumps({
+        "page_path": str(tmp_path / "0134-004.png"), "detections": [],
+    }), encoding="utf-8")
+
+    detector = MockPageCharacterDetector({
+        "0134-004": {"panel_0001": (["Frieren"], False)},
+    })
+    result = run_characters_step(ctx, config, detector)
+
+    assert result["totals"]["page_calls"] == 2
+    assert detector.current_cast == "c134"            # set_cast per page
+    assert detector.cast_keys[-1] == "c134"           # forwarded to the call
+    provenance = read_json(
+        ctx.step_dir("characters") / "0134-004" / "panel_page_prev2_calls.json"
+    )
+    assert provenance["cast_key"] == "c134"

@@ -35,6 +35,8 @@ def test_parse_args_defaults():
     assert config.sleep_s == 1.0
     assert config.only_panels == ()
     assert config.forced_characters == {}
+    assert config.debug_font_size == 42
+    assert config.debug_bbox_width == 5
 
 
 def test_parse_args_overrides():
@@ -151,6 +153,7 @@ def test_step_dir_names():
     assert config.step_dir("characters") == "2_characters"
     assert config.step_dir("colorize") == "3_colorized"
     assert config.step_dir("stitch") == "4_stitched"
+    assert config.step_dir("debug") == "5_debug"
     with pytest.raises(ValueError):
         config.step_dir("bogus")
 

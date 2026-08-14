@@ -23,6 +23,8 @@ unified `detect(mode, ...)` entry point:
   pages are skipped), so the model can use recent story events to disambiguate.
 - `panel-page-cast`: panel-page with an automatically derived per-chapter
   cast shortlist (explicit `cast_key` -> `--cast-key` -> `cast_key_for_page`).
+- `panel-page-prev2-cast`: panel-page-prev2 with an automatically derived
+  per-chapter cast shortlist (same resolution order as `panel-page-cast`).
 
 Parsing, validation, retry policy, and per-call cost accounting (`usage.cost`
 from OpenRouter) are shared with the standalone research method
@@ -1373,10 +1375,57 @@ class PanelPageCastStrategy(PanelPageStrategy):
         )
 
 
+class PanelPagePrev2CastStrategy(PanelPagePrev2Strategy):
+    """mode="panel-page-prev2-cast": panel-page-prev2 with the per-chapter
+    cast shortlist. The effective cast key is the explicit `cast_key`
+    argument, else the detector's fixed `--cast-key`, else derived per page
+    via `cast_key_for_page` (chapter_page_map.json -> filename tag -> `NNN-`
+    prefix). `set_cast` switches the detector's prompts so cropped-panel
+    fallbacks stay in-cast; pages without a cast fall back to the full
+    roster."""
+
+    mode = "panel-page-prev2-cast"
+    label = "panel+page+prev2+cast"
+
+    def detect(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+        *,
+        cast_key: str | None = None,
+    ) -> PageCharacterRecord:
+        detector = self.detector
+        key = cast_key
+        if key is None:
+            key = detector.cast_key
+        if key is None and detector.chapter_casts_file is not None:
+            key = cast_key_for_page(
+                page,
+                detector.chapter_casts_file,
+                detector.chapter_page_map_file,
+            )
+        if key is not None:
+            detector.set_cast(key)
+        else:
+            print(
+                f"  characters: {page.stem}: no chapter cast derivable for "
+                "panel-page-prev2-cast (full roster used); pass --cast-key or "
+                "use a page name/volume the map can resolve",
+                file=sys.stderr,
+                flush=True,
+            )
+        return super().detect(
+            page, panels_dir, expected_panels, refs_dir, cast_key=key
+        )
+
+
 DETECTION_STRATEGIES: dict[str, type[DetectionStrategy]] = {
     "panel": PanelStrategy,
     "page": PageStrategy,
     "panel-page": PanelPageStrategy,
     "panel-page-prev2": PanelPagePrev2Strategy,
     "panel-page-cast": PanelPageCastStrategy,
+    "panel-page-prev2-cast": PanelPagePrev2CastStrategy,
 }

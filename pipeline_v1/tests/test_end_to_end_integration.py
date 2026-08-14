@@ -6,9 +6,9 @@ Deliberately NOT stage-isolated: this runs the FULL four-stage pipeline on one
 real page with the same real backends `run.py` builds (`run.build_backends`)
 — real YOLO26n panel detection + reading-order extraction, real OpenRouter
 `google/gemma-4-31b-it` character detection in the `panel-page-prev2-cast`
-variant (`DETECTION_MODE` = `panel-page-prev2` with the chapter-cast
-shortlist rendered into the prompt via an explicit `CAST_KEY`, mirroring the
-stage-isolated `test_detection_panel_page_prev2_cast`), real FLUX.2 Klein 9B
+variant (`DETECTION_MODE` = `panel-page-prev2-cast`, the chapter-cast
+shortlist rendered via an explicit `CAST_KEY`, mirroring the stage-isolated
+`test_detection_panel_page_prev2_cast`), real FLUX.2 Klein 9B
 + LoRA colorization on the Spark server, and
 stitching — and asserts the wiring end to end:
 
@@ -77,9 +77,9 @@ EXPECTED_PANELS = 6
 CAST_KEY = FIXTURE["cast_keys"][PAGE_ALIAS]  # "c005" — single source of truth
 # panel-page-prev2-cast: the prev2 mode with the chapter-cast shortlist
 # rendered into the prompt (explicit CAST_KEY, like the stage-isolated
-# test_detection_panel_page_prev2_cast). The prev2 strategy's provenance file
-# records the effective key, asserted below.
-DETECTION_MODE = "panel-page-prev2"   # the detection mode under test
+# test_detection_panel_page_prev2_cast). The prev2-cast strategy's
+# provenance file records the effective key, asserted below.
+DETECTION_MODE = "panel-page-prev2-cast"   # the detection mode under test
 PROVENANCE_FILE = "panel_page_prev2_calls.json"
 # The run input is copied under its real volume filename (the fixture alias's
 # basename) so the run looks like a real volume run ('- c005 -' tag and all).

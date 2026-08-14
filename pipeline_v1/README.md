@@ -27,9 +27,10 @@ Pipeline stages (per page):
    additionally sends the two preceding pages in reading order as story
    context (fewer when they do not exist; blank pages are skipped), so the
    model can use recent story events to disambiguate identity — expect
-   ~2–3× the panel-page prompt tokens per call. An optional cached
-   chapter cast shortlist (`--cast-key`)
-   focuses the prompt; identity hints come from the shared character
+   ~2–3× the panel-page prompt tokens per call. `panel-page-cast` and
+   `panel-page-prev2-cast` focus the prompt with an automatically derived
+   per-chapter cast shortlist (from `chapter_page_map.json`, `--cast-key`
+   wins); identity hints come from the shared character
    profiles (task 0002) → `2_characters/<page>/<panel>.json`
 4. **Colorize panel by panel** — self-hosted **step-distilled** FLUX.2 Klein 9B
    + thedeoxen manga-colorization-by-reference LoRA (`mngclranm`, **4 steps**)
@@ -41,9 +42,14 @@ Pipeline stages (per page):
 5. **Stitch** — each colorized panel is resized back to its original box and
    pasted onto the page; everything outside the panels stays black & white →
    `4_stitched/<page>.png`
+6. **Debug annotation** — a pure-image copy of each stitched page with the
+   detected panel bounding boxes (from `1_panels/`) and a label per panel
+   with the characters detected for it (from `2_characters/`); panels
+   stitched from their original B&W crop (`--stitch-bw-fallback`) get an
+   orange box and a `[B&W fallback]` tag → `5_debug/<page>.png`
 
 Each invocation creates a fresh `output/YYYYMMDD-HHMMSS/` run directory (never
-overwritten) with the four numbered intermediate directories and an incremental
+overwritten) with the five numbered intermediate directories and an incremental
 `manifest.json` (command, configuration, prompt/profile hashes, per-step
 records, measured costs).
 
@@ -91,12 +97,14 @@ Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 outputs; with `--from-step` only the earlier step outputs are copied, task
 0001), `--atlas-columns N`, `--num-inference-steps` (4 for the
 step-distilled model; 20–50 if the server runs the undistilled base),
-`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast|panel-page-prev2`
+`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
 (panel-page = one call per panel with the full page as context,
 `prompt_panel_page.txt`; panel-page-cast = same with an automatically derived
 per-chapter cast shortlist from `chapter_page_map.json`, `--cast-key` wins;
 panel-page-prev2 = panel-page that also sends the two preceding pages in
-reading order as story context, `prompt_panel_page_prev2.txt`),
+reading order as story context, `prompt_panel_page_prev2.txt`;
+panel-page-prev2-cast = the prev2 variant with the automatically derived
+per-chapter cast shortlist, same resolution as panel-page-cast),
 `--cast-key c001` (chapter cast shortlist), `--no-full-page-fallback`,
 `--max-megapixels 2.0` (FLUX request cap),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),
@@ -109,7 +117,9 @@ the `--sleep` throttle are disabled when N > 1),
 FLUX call that errored — is stitched from its original black & white crop
 instead of failing the stitch step; each fallback is logged to stderr and
 recorded in the step record as `panels_bw_fallback` and in the manifest
-`totals.panels_bw_fallback`).
+`totals.panels_bw_fallback`),
+`--debug-font-size` / `--debug-bbox-width` (5_debug label font size and
+bounding-box stroke width).
 
 ## Output layout
 
@@ -119,17 +129,23 @@ output/<YYYYMMDD-HHMMSS>/
 ├── 2_characters/<page>/    one JSON per panel (characters, cost, latency)
 ├── 3_colorized/<page>/     colorized panels + per-panel atlas
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
+├── 5_debug/<page>.png      stitched page + bbox + character label per panel
 └── manifest.json
 ```
 
 ## Debug annotation of a run
 
-`scripts/annotate_stitch.py` renders a debug copy of a completed run's
-`4_stitched/` pages with a colored bounding box per panel and a label with the
+The final pipeline stage (`debug` → `5_debug/`) renders a debug copy of each
+`4_stitched/` page with a colored bounding box per panel and a label with the
 panel name + the characters detected for it (from `2_characters/`); panels
 that were stitched from their original B&W crop (`--stitch-bw-fallback`) get
-an orange box and a `[B&W fallback]` tag (read from the run's `manifest.json`).
-Output goes to `<run-dir>/5_debug/` with a per-page `summary.json`:
+an orange box and a `[B&W fallback]` tag (from the stitch step record in the
+run's `manifest.json`). It runs automatically at the end of every run and
+writes a per-page `summary.json`.
+
+`scripts/annotate_stitch.py` is the standalone, offline companion of that
+stage: it re-annotates any *completed* run (same `steps.debug.run_debug_step`
+implementation) with custom options, without re-running the pipeline:
 
 ```bash
 .venv/bin/python pipeline_v1/scripts/annotate_stitch.py \

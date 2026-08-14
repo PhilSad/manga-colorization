@@ -142,13 +142,14 @@ class MockPageCharacterDetector:
 
     def strategy_for(self, mode: str):
         """Page-context mock supports "page", "panel-page",
-        "panel-page-prev2" and "panel-page-cast" (panel mode uses
-        MockCharacterDetector)."""
+        "panel-page-prev2", "panel-page-cast", "panel-page-prev2-cast"
+        (panel mode uses MockCharacterDetector)."""
         strategies = {
             "page": _MockPageStrategy,
             "panel-page": _MockPanelPageStrategy,
             "panel-page-prev2": _MockPanelPagePrev2Strategy,
             "panel-page-cast": _MockPanelPageCastStrategy,
+            "panel-page-prev2-cast": _MockPanelPagePrev2CastStrategy,
         }
         strategy_cls = strategies.get(mode)
         if strategy_cls is None:
@@ -381,6 +382,39 @@ class _MockPanelPageCastStrategy(_MockPanelPageStrategy):
             )
         record = self.detector.detect_panels_with_page(
             page, panels_dir, expected_panels, refs_dir, cast_key=key
+        )
+        record.cast_key = key
+        return record
+
+
+class _MockPanelPagePrev2CastStrategy(_MockPanelPagePrev2Strategy):
+    """mode="panel-page-prev2-cast": derive the chapter cast like the real
+    strategy (explicit key -> detector's fixed cast -> cast_key_for_page),
+    switch the mock's prompts, and delegate with the prev2 source."""
+
+    mode = "panel-page-prev2-cast"
+    label = "panel+page+prev2+cast"
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        from characters import cast_key_for_page
+
+        key = cast_key or self.detector.cast_key
+        if key is None:
+            key = cast_key_for_page(
+                page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
+            )
+        if key is not None:
+            self.detector.set_cast(key)
+        else:
+            print(
+                f"  characters: {page.name}: no chapter cast derivable for "
+                "panel-page-prev2-cast (full roster used)",
+                file=sys.stderr,
+                flush=True,
+            )
+        record = self.detector.detect_panels_with_page(
+            page, panels_dir, expected_panels, refs_dir,
+            cast_key=key, source="panel-page-prev2",
         )
         record.cast_key = key
         return record

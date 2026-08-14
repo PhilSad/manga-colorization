@@ -227,7 +227,7 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 - Evaluation: the fixed failure set (`evaluation/v1_1_cases.json`) is run by
   the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration` —
   no mocks: real OpenRouter gemma panel detection (DET/OOV — one test per
-  detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`), real FLUX on
+  detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`/`panel-page-prev2`), real FLUX on
   Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY), plus a
   full-pipeline end-to-end test (`test_end_to_end_integration.py`, E2E-P130)
   running all four stages with real backends on one real page (volume-1

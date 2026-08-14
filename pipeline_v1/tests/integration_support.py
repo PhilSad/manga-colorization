@@ -9,8 +9,9 @@ a mocked one and never the whole pipeline:
 - detection (DET-*, OOV-*): the committed inputs -> real OpenRouter
   `google/gemma-4-31b-it`, one parametrized test per detection mode —
   `panel` (crop only), `panel-page` (full page context + crop), `panel-page-cast`
-  (same, with the chapter cast shortlist), and `page` (one page-level mapping
-  call per case). Assertions are identical across modes.
+  (same, with the chapter cast shortlist), `panel-page-prev2` (panel-page plus
+  the two preceding pages as story-context images), and `page` (one page-level
+  mapping call per case). Assertions are identical across modes.
 - color (COL-*, SIZE-*): the committed crop + `forced_characters` -> real
   FLUX.2 Klein 9B colorization on the Spark server -> real
   `openai/gpt-5.6-luna` validation of the output (size-policy case has no
@@ -27,6 +28,7 @@ timestamped run dir created by the `integration_run` session fixture
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -47,9 +49,12 @@ CHAPTER_CASTS_FILE = PIPELINE_DIR / "chapter_casts.json"
 PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
 PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
+PANEL_PAGE_PREV2_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page_prev2.txt"
 
 # Real models used by the suite (override via env).
-DETECTION_MODEL = "openai/gpt-5.6-luna" #"google/gemma-4-31b-it"
+DETECTION_MODEL = os.environ.get(
+    "INTEGRATION_DETECTION_MODEL", "openai/gpt-5.6-luna"
+)
 VERIFY_MODEL = "openai/gpt-5.6-luna"
 
 # FLUX settings for the step-distilled Spark server (matches the pipeline).
@@ -125,6 +130,35 @@ def materialize_panels_dir(alias: str, work_dir: Path) -> Path:
     return dst
 
 
+def materialize_prev2_panels_dir(alias: str, work_dir: Path) -> Path:
+    """The committed panel set for `alias`, laid out so `panel-page-prev2`
+    detection finds two preceding page dirs (`_previous_page_images` reads
+    `panels_dir.parent` siblings, oldest first, each with a `panels.json`
+    whose `page_path` exists and is non-blank).
+
+    Both preceding dirs point their `page_path` at the case's own committed
+    page image: the test stays fully committed-input (no fabricated pages),
+    the two extra story-context images are sent deterministically on every
+    call, and no wrong-story characters leak into the context. The degraded
+    0/1-context-image shapes are covered by the offline unit tests in
+    `test_characters.py`.
+
+    Returns the current page's panels dir (same as `materialize_panels_dir`)."""
+    panels_dir = materialize_panels_dir(alias, work_dir)
+    page = committed_page(alias)
+    # Dir names must sort strictly before the alias dir; the `00-`/`01-`
+    # prefix guarantees that for every alias and keeps prev2 (older) first.
+    for index, label in enumerate(("prev2", "prev1")):
+        sibling = work_dir / f"0{index}-{alias}-{label}"
+        sibling.mkdir(parents=True, exist_ok=True)
+        write_json(sibling / "panels.json", {
+            "page_path": str(page),
+            "blank_page": False,
+            "detections": [{"box": [0, 0, 10, 10], "crop": "panel_0001.png"}],
+        })
+    return panels_dir
+
+
 def extract_page_crops(page: Path, work_dir: Path) -> list[dict]:
     """Real reading-order extraction of a committed page: YOLO26n detection
     + `panel_ordering.reading_order` + `extraction.save_panels`, the same
@@ -149,7 +183,7 @@ def extract_page_crops(page: Path, work_dir: Path) -> list[dict]:
 
 def build_panel_detector(api_key: str, model: str = DETECTION_MODEL):
     """Real OpenRouter character detector prepared for all detection modes
-    (page, panel, panel-page prompts all built)."""
+    (page, panel, panel-page, panel-page-prev2 prompts all built)."""
     from characters import OpenRouterCharacterDetector
 
     detector = OpenRouterCharacterDetector(model=model, api_key=api_key)
@@ -158,6 +192,7 @@ def build_panel_detector(api_key: str, model: str = DETECTION_MODEL):
         prompt_file=PAGE_PROMPT_FILE,
         panel_prompt_file=PANEL_PROMPT_FILE,
         panel_page_prompt_file=PANEL_PAGE_PROMPT_FILE,
+        panel_page_prev2_prompt_file=PANEL_PAGE_PREV2_PROMPT_FILE,
     )
     return detector
 
@@ -196,7 +231,7 @@ def palette_instruction_for(names: list[str]) -> str:
 
 
 def assert_matches(record: Any, case: dict) -> None:
-    """The shared detection assertions, identical across the four mode
+    """The shared detection assertions, identical across the five mode
     tests: character set equality, unknown-presence flag, and expected
     unknown characters (OOV). `record` is the per-panel CharacterRecord."""
     expected = set(case["expected"]["characters"])

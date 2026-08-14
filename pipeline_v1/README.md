@@ -170,14 +170,16 @@ recorded per call.
   call the real function directly — no panel detection inside the
   detection/color tests:
 
-  - `test_integration_detection.py` (DET-001..010, OOV-001): four
+  - `test_integration_detection.py` (DET-001..010, OOV-001): five
     parametrized tests, one per detection mode (`panel`, `panel-page`,
-    `panel-page-cast`, `page`), each over all 11 cases -> real OpenRouter
-    `google/gemma-4-31b-it` -> assert the fixture's character set. The
-    page-context modes use the committed full page + its complete panel
-    set; `panel-page-cast` adds the chapter-cast shortlist
-    (`fixture["cast_keys"]`). Known-failing cases fail loudly and stay
-    tracked; per-mode live verdicts are in pipelines.md.
+    `panel-page-cast`, `panel-page-prev2`, `page`), each over all 11 cases
+    -> real OpenRouter `google/gemma-4-31b-it` -> assert the fixture's
+    character set. The page-context modes use the committed full page + its
+    complete panel set; `panel-page-cast` adds the chapter-cast shortlist
+    (`fixture["cast_keys"]`); `panel-page-prev2` adds two preceding-page
+    context images that reuse the case's own committed page (committed
+    inputs only, no fabricated pages). Known-failing cases fail loudly and
+    stay tracked; per-mode live verdicts are in pipelines.md.
   - `test_integration_color.py` (COL-001..004, SIZE-001): one parametrized
     test over all five cases: committed crop + `forced_characters` -> real
     FLUX.2 Klein 9B on Spark -> real `openai/gpt-5.6-luna` validation
@@ -190,7 +192,8 @@ recorded per call.
     byte-for-byte, so the eval cases' panel references cannot silently go
     stale.
   - `test_end_to_end_integration.py` (E2E-P130): the FULL pipeline — real
-    YOLO + real OpenRouter `panel-page` detection + real FLUX on Spark +
+    YOLO + real OpenRouter `panel-page-prev2` detection (the mode under
+    test, per the test's `DETECTION_MODE` constant) + real FLUX on Spark +
     stitching — on one real page (volume-1 p130, the DET-005..010 page).
     Deliberately NOT stage-isolated: runs the same real backends `run.py`
     builds and asserts the wiring end to end (panel crops reproduce the

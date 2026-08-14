@@ -465,15 +465,60 @@ complete per-page panel sets for the detection pages), real gemma-4-31b-it
 detection, real FLUX on Spark + real gpt-5.6-luna validation, real YOLO;
 one timestamped run per session in `pipeline_v1/tests/output/`.
 
-**Suite restructured 2026-08-10:** the detection stage now runs **all four
-detection modes** (`page`, `panel`, `panel-page`, `panel-page-cast`) as four
-parametrized tests over the same 11 DET/OOV cases, consuming the committed
-per-page inputs — the tests call the real detector functions directly and no
-longer run panel detection themselves. A crop-stability tripwire in the
-layout stage re-extracts the committed pages and asserts the crops still
-match byte-for-byte, so the eval cases' panel references cannot silently go
-stale. Per-mode live verdicts are pending the next `pytest -m integration`
-run; the findings below are the pre-restructure baselines.
+**Suite restructured 2026-08-10:** the detection stage now runs **all five
+detection modes** (`page`, `panel`, `panel-page`, `panel-page-cast`,
+`panel-page-prev2`) as five parametrized tests over the same 11 DET/OOV
+cases, consuming the committed per-page inputs — the tests call the real
+detector functions directly and no longer run panel detection themselves. A
+crop-stability tripwire in the layout stage re-extracts the committed pages
+and asserts the crops still match byte-for-byte, so the eval cases' panel
+references cannot silently go stale. `panel-page-prev2` (added 2026-08-14)
+sends the two preceding pages as extra story-context images; its first live
+verdicts are below. Per-mode verdicts for the other four modes come from the
+4-rep sweeps above; the findings further down are the pre-restructure
+baselines.
+
+**panel-page-prev2 live run** (2026-08-14, 1 rep per case, temperature 0.0,
+model chosen via `INTEGRATION_DETECTION_MODEL`; records:
+[20260814-202749](pipeline_v1/tests/output/20260814-202749/) luna,
+[20260814-203045](pipeline_v1/tests/output/20260814-203045/) gemma; total
+OpenRouter cost $0.0149 + $0.0020): each call carries the numbered annotated
+current page, the crop, and two preceding-page context images. The suite
+lays out two preceding page dirs whose `page_path` reuses the case's own
+committed page (committed inputs only, no fabricated pages — the
+0/1-image degrade shapes are covered by the offline unit tests in
+`test_characters.py`). Pass = exact character set + `unknown_present`.
+
+| Case | expected | panel-page·gemma (4-rep) | prev2·gemma | prev2·luna |
+|---|---|---|---|---|
+| DET-001 | Frieren, Himmel | 4/4 | ✓ `{Frieren, Himmel}` | ✗ `{Frieren, Stark}` |
+| DET-002 | Frieren, Himmel, Heiter, Eisen | 4/4 | ✓ all four | ✓ all four |
+| DET-003 | Heiter | 4/4 | ✓ | ✓ |
+| DET-004 | Frieren, Heiter | 4/4 | ✓ | ✓ |
+| OOV-001 | — (unknown) | 0/4 | ✗ `{Denken}` | ✗ `{Heiter}` |
+| DET-005 | — | 4/4 | ✓ ∅ | ✓ ∅ |
+| DET-006 | Frieren | 4/4 | ✓ | ✓ |
+| DET-007 | Frieren | 3/4 | ✓ | ✓ |
+| DET-008 | Frieren, Fern | 3/4 | ✗ `{Frieren, Flamme}` | ✗ unparseable |
+| DET-009 | Frieren, Fern | 4/4 | ✓ | ✓ |
+| DET-010 | Frieren | 3/4 | ✓ | ✓ |
+| **Pass** | | **38/44** | **9/11** | **8/11** |
+
+Findings:
+
+- **prev2 holds panel-page's level at one rep**: gemma 9/11, luna 8/11 —
+  both models pass the flashback-era hero party (DET-002) and the p130
+  look-alike page (DET-005..007, DET-009, DET-010), the cases panel-only
+  mode fails; luna additionally misses DET-001 (Stark for Himmel).
+- **The two shared failures are the tracked ones**: OOV-001 (Clematis forced
+  to Denken/Heiter, never reported unknown) and DET-008 (gemma answers
+  Fern→Flamme; luna's prev2 answer fails the strict JSON format and its
+  cropped-panel fallback comes back unparseable too). Same-page context
+  images cannot rule out out-of-cast look-alikes — only `panel-page-cast`'s
+  chapter shortlist excludes Flamme.
+- **prev2 calls are the suite's most expensive per call** (~2× panel-page's
+  token count for the two extra page images): luna ≈$0.0016–0.0019/call,
+  gemma ≈$0.00014–0.00024/call.
 
 Findings (measured `usage.cost` ≈ $0.0022/session, pre-restructure):
 

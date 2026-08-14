@@ -3,7 +3,7 @@
 One parametrized test function per detection mode, each run over the full
 case set with **committed inputs** from `tests/data/` — no panel detection in
 the tests themselves (the layout-stage crop-stability tripwire guards that).
-All four modes go through the unified `OpenRouterCharacterDetector.detect(
+All five modes go through the unified `OpenRouterCharacterDetector.detect(
 mode, ...)` entry point, which dispatches to the mode's strategy
 (`characters.DETECTION_STRATEGIES`):
 
@@ -13,6 +13,11 @@ mode, ...)` entry point, which dispatches to the mode's strategy
 - `panel-page-cast` — panel-page with the chapter-cast shortlist
   (`fixture["cast_keys"][alias]`, passed explicitly so the fixture stays the
   single source of truth).
+- `panel-page-prev2` — panel-page plus the two preceding pages as extra
+  story-context images (`materialize_prev2_panels_dir` lays out two preceding
+  page dirs; their `page_path` reuses the case's own committed page, so the
+  two-image code path is exercised with committed inputs only and no
+  wrong-story characters leak into the context).
 - `page` — one page-level mapping call per case; the case's panel entry is
   kept (missing/uncertain/unknown entries trigger the built-in per-panel
   fallback).
@@ -36,6 +41,7 @@ from integration_support import (
     committed_page,
     load_fixture,
     materialize_panels_dir,
+    materialize_prev2_panels_dir,
     record_detection,
 )
 
@@ -106,6 +112,25 @@ def test_detection_panel_page_cast(integration_run, detector, case_id, tmp_path)
     )
     record = page_record.panels[case["input"]["panel"]]
     record_detection(integration_run, "panel-page-cast", case_id, record, case)
+    assert_matches(record, case)
+
+
+@pytest.mark.parametrize("case_id", DETECTION_CASES)
+def test_detection_panel_page_prev2(integration_run, detector, case_id, tmp_path):
+    """panel-page-prev2 mode: like panel-page, plus the two preceding pages
+    as story-context images (same committed page, see the helper's docstring).
+    Same fixture expectations as the other modes."""
+    case = case_by_id(FIXTURE, case_id)
+    alias = case["input"]["source_page"]
+    page_record = detector.detect(
+        "panel-page-prev2",
+        committed_page(alias),
+        materialize_prev2_panels_dir(alias, tmp_path),
+        [case["input"]["panel"]],
+        REFS_DIR,
+    )
+    record = page_record.panels[case["input"]["panel"]]
+    record_detection(integration_run, "panel-page-prev2", case_id, record, case)
     assert_matches(record, case)
 
 

@@ -577,14 +577,26 @@ def call_vlm(
     content: list[dict[str, Any]],
     max_tokens: int = 1024,
     temperature: float = 0.0,
+    response_format: dict | None = None,
 ) -> "_CallResult":
     """One OpenAI-compatible chat completion with retry/backoff and
     `usage.cost` accounting (OpenRouter). Shared by character detection
-    (characters.py) and color verification (verify_color.py)."""
+    (characters.py) and color verification (verify_color.py).
+
+    `response_format` is optional. When omitted (detection), the legacy
+    `{"type": "json_object"}` mode is used, with a retry-without fallback
+    for endpoints that reject it. When a full response_format object is
+    passed (verify_color.py's strict json_schema structured output), it is
+    sent verbatim plus `provider.require_parameters: true`, so the request
+    only routes to endpoints that support it; a rejection is recorded as an
+    error and never silently downgraded to loose JSON."""
     from openai import APIError, APIConnectionError, BadRequestError, RateLimitError
 
     messages = [{"role": "user", "content": content}]
-    response_format: str | None = "json_object"
+    structured = response_format is not None
+    current_format: dict | None = (
+        response_format if structured else {"type": "json_object"}
+    )
     attempts = 0
     while True:
         attempts += 1
@@ -594,26 +606,29 @@ def call_vlm(
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
-        if response_format:
-            kwargs["response_format"] = {"type": response_format}
+        if current_format is not None:
+            kwargs["response_format"] = current_format
+        if structured:
+            kwargs["extra_body"] = {"provider": {"require_parameters": True}}
         started = time.monotonic()
         try:
             response = client.chat.completions.create(**kwargs)
         except BadRequestError as error:
             message = str(error)
-            unsupported_format = response_format == "json_object" and (
-                "response_format" in message
-                or "json_object" in message
-                or "json" in message.lower()
-            )
-            if unsupported_format and attempts <= 2:
-                print(
-                    "    response_format=json_object unsupported, retrying without it",
-                    flush=True,
+            if not structured:
+                unsupported_format = current_format == {"type": "json_object"} and (
+                    "response_format" in message
+                    or "json_object" in message
+                    or "json" in message.lower()
                 )
-                response_format = None
-                attempts = 0
-                continue
+                if unsupported_format and attempts <= 2:
+                    print(
+                        "    response_format=json_object unsupported, retrying without it",
+                        flush=True,
+                    )
+                    current_format = None
+                    attempts = 0
+                    continue
             return _CallResult(
                 text="", usage={}, cost_usd=None, cost_source="unavailable",
                 latency_s=time.monotonic() - started, model_returned=None,

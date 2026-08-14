@@ -5,14 +5,22 @@ Stage-isolated by design: the input is the committed **pre-cropped panel**
 (`tests/data/panels/<case_id>.png`) plus the fixture's `forced_characters`
 — there is no detection step and no page. The panel is colorized with the
 **real** FLUX.2 Klein 9B (step-distilled + LoRA) on the Spark server, then
-validated per case kind:
+validated with one generic structured-output verdict: a real
+`openai/gpt-5.6-luna` call (strict `json_schema` response_format with
+`provider.require_parameters: true`) judges whether every character in the
+colorized panel has its canonical Frieren palette, answering
+`analyse: str` + `good_color: bool`. No fixture expectations
+(required/forbidden colors, left-to-right order) are rendered into the
+prompt — the fixture keeps them as human-readable documentation only.
+This replaces the previous two verifiers (palette adherence for
+COL-001..003, left-to-right geography for COL-004); the
+palette-adherence vs palette-geography distinction now lives only in the
+fixture's per-case `failure` tag.
 
-- COL-001..003 (palette adherence): a real `openai/gpt-5.6-luna` palette
-  verdict — required colors present / forbidden absent.
-- COL-004 (palette geography): a real left-to-right verifier — the
-  hair-color assignment (green Heiter / blue Himmel / white-pink Frieren /
-  yellow Eisen) must be spatially true. Known V1.2 failure: the test asserts
-  it and currently FAILS until the geographic-atlas fix lands.
+- COL-001..004: one generic palette verdict; a `good_color: false` verdict
+  fails the test loudly. COL-004 is the known V1.2 geography failure
+  (uniform blue wash, run 20260809-091129): the test asserts it and
+  currently FAILS until the geographic-atlas fix lands.
 - SIZE-001 (size policy): no VLM verification — the live colorize request on
   the oversized spread crop must be capped to 1600x1248 (<= 2.0 MP,
   multiples of 16).
@@ -27,16 +35,14 @@ import pytest
 
 from integration_support import (
     REFS_DIR,
-    VERIFY_MODEL,
     build_colorizer,
-    build_verify_verifier,
+    build_color_verifier,
     case_by_id,
     crop_path,
     load_fixture,
     palette_instruction_for,
     record_color,
 )
-from verify_color import PaletteVerifier
 
 pytestmark = pytest.mark.integration
 
@@ -74,8 +80,8 @@ def _colorize(integration_run, case_id, spark_endpoint, case):
 
 @pytest.mark.parametrize("case_id", COLOR_CASES)
 def test_color_case(integration_run, openrouter_key, spark_endpoint, case_id):
-    """Colorize the committed crop and verify it per case kind (palette
-    adherence, palette geography, or size-cap policy)."""
+    """Colorize the committed crop and verify it per case kind (generic
+    canonical-palette verdict, or size-cap policy)."""
     case = case_by_id(FIXTURE, case_id)
     expected = case["expected"]
     crop = crop_path(case_id)
@@ -88,28 +94,24 @@ def test_color_case(integration_run, openrouter_key, spark_endpoint, case_id):
     )
 
     verdict = None
-    if "left_to_right" in expected:
-        # COL-004: the left-to-right hair-color assignment must be true.
-        verifier = build_verify_verifier(openrouter_key)
-        verdict = verifier.verify(colorized, crop, expected["left_to_right"])
-        assert verdict.status == "verified", (
-            "COL-004: left-to-right hair colors are NOT true — "
-            f"{verdict.notes}; per-position: {verdict.per_position}. "
-            "Known V1.2 failure (ideas.md problem 1): the atlas is not yet "
+    if "left_to_right" in expected or "required_colors" in expected:
+        # COL-001..004: one generic canonical-palette verdict (strict
+        # structured output). COL-004 is the known V1.2 geography failure
+        # (uniform blue wash) and is expected to fail loudly until the
+        # geographic-atlas fix lands.
+        verifier = build_color_verifier(openrouter_key)
+        verdict = verifier.verify(colorized, crop)
+        known = (
+            " Known V1.2 failure (ideas.md problem 1): the atlas is not yet "
             "built in left-to-right reading order with geographic identity info."
-        )
-    elif "required_colors" in expected:
-        # COL-001..003: required colors present, forbidden absent.
-        verifier = PaletteVerifier(model=VERIFY_MODEL, api_key=openrouter_key)
-        verdict = verifier.verify(
-            colorized, crop,
-            required_colors=expected["required_colors"],
-            forbidden_colors=expected["forbidden_colors"],
+            if case_id == "COL-004"
+            else ""
         )
         assert verdict.status == "verified", (
-            f"{case_id}: palette not adhered to — missing required: "
-            f"{verdict.missing_required}, forbidden present: "
-            f"{verdict.present_forbidden}; notes: {verdict.notes}"
+            f"{case_id}: color palette judged NOT canonical — "
+            f"{verdict.analyse}; status={verdict.status}"
+            f"{('; error: ' + verdict.error) if verdict.error else ''}"
+            f"{known}"
         )
     else:
         # SIZE-001: the oversized spread crop must be requested at the cap.

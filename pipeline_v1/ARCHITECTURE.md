@@ -36,7 +36,7 @@ pipeline_v1/
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
 ├── evaluation/v1_1_cases.json  # fixed failure set (task 0001), run by the integration suite
-├── verify_color.py       # real gpt-5.6-luna validators (L2R + palette adherence) used by the integration suite
+├── verify_color.py       # real gpt-5.6-luna generic color verifier (strict structured output: analyse/good_color), integration suite
 ├── tests/                # offline unit tests + real-network integration suite (-m integration)
 ├── output/<ts>/          # per-run artifacts (gitignored)
 │   ├── 1_panels/         # crops + panels.json (boxes + reading order + provenance) + overlay

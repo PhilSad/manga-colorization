@@ -463,7 +463,8 @@ The evaluation of `evaluation/v1_1_cases.json` now runs as stage-isolated
 real-network pytest (`-m integration`): committed inputs in
 `pipeline_v1/tests/data/` (pre-cropped panels, plus committed pages and
 complete per-page panel sets for the detection pages), real gemma-4-31b-it
-detection, real FLUX on Spark + real gpt-5.6-luna validation, real YOLO;
+detection, real FLUX on Spark + real gpt-5.6-luna color validation (one
+generic strict structured-output verdict, see below), real YOLO;
 one timestamped run per session in `pipeline_v1/tests/output/`.
 
 **Suite restructured 2026-08-10:** the detection stage now runs **all five
@@ -478,6 +479,17 @@ sends the two preceding pages as extra story-context images; its first live
 verdicts are below. Per-mode verdicts for the other four modes come from the
 4-rep sweeps above; the findings further down are the pre-restructure
 baselines.
+
+**Color verdict restructured 2026-08-14:** the color stage no longer has two
+verifiers (palette adherence for COL-001..003, left-to-right geography for
+COL-004). Every COL case is now judged by one generic `openai/gpt-5.6-luna`
+prompt — "are all the characters' color palettes correct?" — answered as a
+strict structured output (`analyse: str`, `good_color: bool`) via OpenRouter's
+`json_schema` response_format with `provider.require_parameters: true`; no
+fixture expectations are rendered into the prompt (they remain in
+`v1_1_cases.json` as documentation). The historical color verdicts below were
+produced with the previous two-verifier scheme and are not directly
+comparable.
 
 **panel-page-prev2 live run** (2026-08-14, 1 rep per case, temperature 0.0,
 model chosen via `INTEGRATION_DETECTION_MODEL`; records:

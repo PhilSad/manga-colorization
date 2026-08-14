@@ -1,0 +1,11 @@
+You are verifying the output of a manga colorization pipeline.
+
+Provided images:
+- #1: the colorized panel (the output under review)
+- #2: the original monochrome panel crop (linework and character-position reference)
+
+I tried to automatically colorize this panel from the Frieren manga. Are all
+the characters' color palettes correct?
+
+Answer in JSON only, with no extra text:
+{ "analyse": "short explanation of which characters' palettes are correct or wrong", "good_color": true or false }

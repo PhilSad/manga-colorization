@@ -15,8 +15,9 @@ a mocked one and never the whole pipeline:
   call per case). Assertions are identical across modes.
 - color (COL-*, SIZE-*): the committed crop + `forced_characters` -> real
   FLUX.2 Klein 9B colorization on the Spark server -> real
-  `openai/gpt-5.6-luna` validation of the output (size-policy case has no
-  VLM verification).
+  `openai/gpt-5.6-luna` validation of the output via one generic strict
+  structured-output palette verdict (`analyse`/`good_color`; the size-policy
+  case has no VLM verification).
 - layout (LAY-*, crop-stability): real YOLO26n panel detection. The
   crop-stability tripwire re-extracts the committed pages and asserts the
   crops match the committed per-page sets byte-for-byte.
@@ -221,11 +222,12 @@ def build_colorizer(endpoint: str):
     )
 
 
-def build_verify_verifier(api_key: str):
-    """Real L2R verifier for COL-004 (openai/gpt-5.6-luna)."""
-    from verify_color import LeftToRightVerifier
+def build_color_verifier(api_key: str):
+    """Real generic color verifier for COL-001..004 (openai/gpt-5.6-luna,
+    strict json_schema structured output: analyse/good_color)."""
+    from verify_color import ColorVerifier
 
-    return LeftToRightVerifier(model=VERIFY_MODEL, api_key=api_key)
+    return ColorVerifier(model=VERIFY_MODEL, api_key=api_key)
 
 
 def palette_instruction_for(names: list[str]) -> str:
@@ -304,7 +306,8 @@ def record_color(
     if verdict is not None:
         fields.update({
             "verdict_status": verdict.status,
-            "verify_notes": verdict.notes,
+            "good_color": verdict.good_color,
+            "analyse": verdict.analyse,
             "cost_usd": verdict.cost_usd,
             "cost_source": verdict.cost_source,
         })

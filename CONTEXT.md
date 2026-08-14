@@ -30,3 +30,10 @@ no implementation details.
   palette-geography, zero-panel-fallback, blank-page-skip,
   oversized-input-capping, …), reused across the eval set, the integration
   suite, and the comparison docs.
+- **Color verdict**: the structured output (`analyse: str`, `good_color: bool`)
+  returned by the OpenRouter vision-language model (`openai/gpt-5.6-luna`,
+  strict json_schema) for the COL-* eval cases — one generic judgment of
+  whether every character in the colorized panel has its canonical Frieren
+  palette, with no fixture expectations rendered into the prompt. It does not
+  itself distinguish palette *adherence* from palette *geography*; that
+  distinction lives at the case level in the fixture's `failure` tag.

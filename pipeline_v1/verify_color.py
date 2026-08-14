@@ -1,23 +1,25 @@
-"""Left-to-right palette verification for the COL-* evaluation cases.
+"""Generic canonical-palette verification for the COL-* evaluation cases.
 
-The evaluator's color cases are human-review only; COL-004 (palette
-geography, V1.2 problem 1) is instead resolved by asking an OpenRouter
-vision-language model — `openai/gpt-5.6-luna` — whether the generated
-colorized panel matches the fixture's expected left-to-right hair-color
-order (green Heiter / blue Himmel / white-pink Frieren / yellow Eisen).
-The verifier sends the colorized panel (image #1) plus the original
-monochrome crop (image #2) and expects a strict JSON verdict.
+One verifier for all color cases: asks an OpenRouter vision-language model —
+`openai/gpt-5.6-luna` — whether every character in the colorized panel has
+its canonical Frieren palette. The prompt is deliberately generic: no
+fixture expectations (required/forbidden colors, left-to-right order) are
+rendered into it; the model judges from its own knowledge of the manga. The
+verdict is a **real structured output** — `response_format` type
+`json_schema` (strict) with the fields `analyse: str` and
+`good_color: bool`, routed with `provider.require_parameters: true` so the
+request only reaches endpoints that natively support structured outputs and
+never silently degrades to loose JSON.
 
 Shared with the character detector: the OpenAI-compatible call machinery
 with retry/backoff and `usage.cost` accounting lives in
-`characters.call_vlm`; the prompt template is `verify_l2r_prompt.txt`.
+`characters.call_vlm`; the prompt template is `verify_color_prompt.txt`.
 """
 
 from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,8 +28,7 @@ from characters import _extract_json_object, _iso_now, call_vlm
 API_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_VERIFY_MODEL = "openai/gpt-5.6-luna"
 
-VERIFY_PROMPT_FILE = Path(__file__).resolve().parent / "verify_l2r_prompt.txt"
-PALETTE_PROMPT_FILE = Path(__file__).resolve().parent / "verify_palette_prompt.txt"
+VERIFY_PROMPT_FILE = Path(__file__).resolve().parent / "verify_color_prompt.txt"
 
 # Status values: verified | mismatch | unparseable | error
 VERIFIED = "verified"
@@ -35,90 +36,65 @@ MISMATCH = "mismatch"
 UNPARSEABLE = "unparseable"
 ERROR = "error"
 
+# Strict json_schema structured output (OpenRouter structured-outputs mode).
+COLOR_VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "analyse": {
+            "type": "string",
+            "description": (
+                "Explain which characters' palettes are correct or wrong."
+            ),
+        },
+        "good_color": {
+            "type": "boolean",
+            "description": (
+                "True if every character in the panel has its canonical "
+                "Frieren color palette."
+            ),
+        },
+    },
+    "required": ["analyse", "good_color"],
+    "additionalProperties": False,
+}
 
-# ---------------------------------------------------------------------------
-# Prompt rendering
-
-def build_l2r_prompt(template: str, left_to_right: list[dict]) -> str:
-    """Render `{left_to_right}` with the fixture's ordered expectation, e.g.
-    `- 1. Heiter: light green hair`."""
-    lines = [
-        "- {}. {}: {} hair".format(
-            index, entry.get("character", "?"), entry.get("hair", "?")
-        )
-        for index, entry in enumerate(left_to_right, start=1)
-    ]
-    return template.replace("{left_to_right}", "\n".join(lines))
-
-
-def default_l2r_prompt(left_to_right: list[dict]) -> str:
-    return build_l2r_prompt(VERIFY_PROMPT_FILE.read_text(encoding="utf-8"),
-                            left_to_right)
+RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "color_verdict",
+        "strict": True,
+        "schema": COLOR_VERDICT_SCHEMA,
+    },
+}
 
 
 # ---------------------------------------------------------------------------
 # Answer parsing
 
-def parse_l2r_verdict(text: str) -> dict | None:
-    """Parse `{"left_to_right_matches": bool, "per_position": [...], "notes"}`.
+def parse_color_verdict(text: str) -> dict | None:
+    """Parse `{"analyse": str, "good_color": bool}`.
 
-    Returns None for unparseable/malformed answers. `left_to_right_matches`
-    accepts a bool or the strings "true"/"false" (case-insensitive);
-    `per_position` entries are kept as-is when valid.
+    Returns None for unparseable/malformed answers. `good_color` accepts a
+    bool or the strings "true"/"false" (case-insensitive); `analyse` is
+    defaulted to "" when missing. With the strict json_schema request the
+    content is guaranteed-valid JSON, so this parser is a safety net only.
     """
     if not text:
         return None
     data = _extract_json_object(text.strip())
-    if not isinstance(data, dict) or "left_to_right_matches" not in data:
+    if not isinstance(data, dict):
         return None
-    raw = data["left_to_right_matches"]
+    raw = data.get("good_color")
     if isinstance(raw, bool):
-        matches = raw
+        good_color = raw
     elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
-        matches = raw.strip().lower() == "true"
+        good_color = raw.strip().lower() == "true"
     else:
         return None
-    per_position = data.get("per_position")
-    if not isinstance(per_position, list):
-        per_position = []
-    cleaned: list[dict] = []
-    for entry in per_position:
-        if isinstance(entry, dict):
-            cleaned.append(entry)
+    analyse = data.get("analyse")
     return {
-        "left_to_right_matches": matches,
-        "per_position": cleaned,
-        "notes": str(data.get("notes", "") or ""),
-    }
-
-
-def parse_palette_verdict(text: str) -> dict | None:
-    """Parse `{"adheres": bool, "missing_required": [...],
-    "present_forbidden": [...], "notes"}` for COL-001..003 (palette
-    adherence). Returns None for unparseable/malformed answers."""
-    if not text:
-        return None
-    data = _extract_json_object(text.strip())
-    if not isinstance(data, dict) or "adheres" not in data:
-        return None
-    raw = data["adheres"]
-    if isinstance(raw, bool):
-        adheres = raw
-    elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
-        adheres = raw.strip().lower() == "true"
-    else:
-        return None
-
-    def _as_str_list(value) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(item) for item in value if str(item).strip()]
-
-    return {
-        "adheres": adheres,
-        "missing_required": _as_str_list(data.get("missing_required")),
-        "present_forbidden": _as_str_list(data.get("present_forbidden")),
-        "notes": str(data.get("notes", "") or ""),
+        "analyse": str(analyse or ""),
+        "good_color": good_color,
     }
 
 
@@ -126,13 +102,12 @@ def parse_palette_verdict(text: str) -> dict | None:
 # Verifier client
 
 @dataclass
-class L2RVerifyRecord:
-    """Result of one left-to-right verification call for one color case."""
+class ColorVerifyRecord:
+    """Result of one color verification call for one COL-* case."""
 
     status: str                       # verified | mismatch | unparseable | error
-    left_to_right_matches: bool | None
-    per_position: list[dict]
-    notes: str
+    good_color: bool | None
+    analyse: str
     response_text: str
     usage: dict[str, int]
     cost_usd: float | None
@@ -146,9 +121,8 @@ class L2RVerifyRecord:
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
-            "left_to_right_matches": self.left_to_right_matches,
-            "per_position": self.per_position,
-            "notes": self.notes,
+            "good_color": self.good_color,
+            "analyse": self.analyse,
             "response_text": self.response_text,
             "usage": self.usage,
             "cost_usd": self.cost_usd,
@@ -161,9 +135,9 @@ class L2RVerifyRecord:
         }
 
 
-class LeftToRightVerifier:
-    """OpenRouter VLM that checks the left-to-right hair-color assignment of
-    a colorized panel against an ordered expectation list."""
+class ColorVerifier:
+    """OpenRouter VLM that checks a colorized panel with one generic prompt
+    and a strict structured-output verdict (`analyse`, `good_color`)."""
 
     def __init__(
         self,
@@ -192,174 +166,43 @@ class LeftToRightVerifier:
         self,
         colorized: Path,
         input_crop: Path | None,
-        left_to_right: list[dict],
-    ) -> L2RVerifyRecord:
-        """Ask the VLM whether the left-to-right hair colors of the colorized
-        panel match `left_to_right` (ordered `{character, hair}` entries).
+    ) -> ColorVerifyRecord:
+        """Ask the VLM whether every character in the colorized panel has its
+        canonical Frieren palette.
 
         Sends the colorized panel as the primary image plus the monochrome
-        crop as context when available. One paid OpenRouter call.
+        crop as context when available. One paid OpenRouter call with strict
+        json_schema structured output (`analyse`/`good_color`).
         """
         template = self.prompt_template or VERIFY_PROMPT_FILE.read_text(
             encoding="utf-8"
         )
-        prompt = build_l2r_prompt(template, left_to_right)
-        content = _content_with_images(prompt, (colorized, input_crop))
+        content = _content_with_images(template, (colorized, input_crop))
 
         result = call_vlm(
             self.client, self.model, content,
             max_tokens=self.max_tokens, temperature=self.temperature,
+            response_format=RESPONSE_FORMAT,
         )
-        parsed = parse_l2r_verdict(result.text) if result.error is None else None
+        parsed = parse_color_verdict(result.text) if result.error is None else None
 
         if result.error is not None:
             status = ERROR
-            matches = None
-            per_position: list[dict] = []
-            notes = ""
+            good_color = None
+            analyse = ""
         elif parsed is None:
             status = UNPARSEABLE
-            matches = None
-            per_position = []
-            notes = ""
+            good_color = None
+            analyse = ""
         else:
-            matches = parsed["left_to_right_matches"]
-            per_position = parsed["per_position"]
-            notes = parsed["notes"]
-            status = VERIFIED if matches else MISMATCH
+            good_color = parsed["good_color"]
+            analyse = parsed["analyse"]
+            status = VERIFIED if good_color else MISMATCH
 
-        return L2RVerifyRecord(
+        return ColorVerifyRecord(
             status=status,
-            left_to_right_matches=matches,
-            per_position=per_position,
-            notes=notes,
-            response_text=result.text,
-            usage=result.usage,
-            cost_usd=result.cost_usd,
-            cost_source=result.cost_source,
-            latency_s=result.latency_s,
-            model_returned=result.model_returned,
-            attempts=result.attempts,
-            error=result.error,
-            finished_at=_iso_now(),
-        )
-
-
-@dataclass
-class PaletteVerifyRecord:
-    """Result of one palette-adherence verification call (COL-001..003)."""
-
-    status: str                       # verified | mismatch | unparseable | error
-    adheres: bool | None
-    missing_required: list[str]
-    present_forbidden: list[str]
-    notes: str
-    response_text: str
-    usage: dict[str, int]
-    cost_usd: float | None
-    cost_source: str
-    latency_s: float
-    model_returned: str | None
-    attempts: int
-    error: str | None = None
-    finished_at: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "status": self.status,
-            "adheres": self.adheres,
-            "missing_required": self.missing_required,
-            "present_forbidden": self.present_forbidden,
-            "notes": self.notes,
-            "response_text": self.response_text,
-            "usage": self.usage,
-            "cost_usd": self.cost_usd,
-            "cost_source": self.cost_source,
-            "latency_s": round(self.latency_s, 3),
-            "model_returned": self.model_returned,
-            "attempts": self.attempts,
-            "error": self.error,
-            "finished_at": self.finished_at,
-        }
-
-
-class PaletteVerifier:
-    """OpenRouter VLM that checks a colorized panel against a fixture's
-    required/forbidden palette (COL-001..003 palette adherence)."""
-
-    def __init__(
-        self,
-        model: str = DEFAULT_VERIFY_MODEL,
-        api_key: str = "",
-        api_base: str = API_BASE,
-        client: Any = None,  # injected OpenAI-compatible client (tests)
-        max_tokens: int = 1024,
-        temperature: float = 0.0,
-        prompt_template: str | None = None,
-    ) -> None:
-        self.model = model
-        self.api_key = api_key
-        self.api_base = api_base
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        if client is not None:
-            self.client = client
-        else:
-            from openai import OpenAI
-
-            self.client = OpenAI(api_key=api_key, base_url=api_base)
-        self.prompt_template = prompt_template
-
-    def verify(
-        self,
-        colorized: Path,
-        input_crop: Path | None,
-        required_colors: list[str],
-        forbidden_colors: list[str],
-    ) -> PaletteVerifyRecord:
-        """Ask the VLM whether the colorized panel adheres to the required
-        palette and avoids the forbidden colors. One paid OpenRouter call."""
-        template = self.prompt_template or PALETTE_PROMPT_FILE.read_text(
-            encoding="utf-8"
-        )
-        prompt = (
-            template
-            .replace("{required}", "\n".join(f"- {c}" for c in required_colors))
-            .replace("{forbidden}", "\n".join(f"- {c}" for c in forbidden_colors))
-        )
-        content = _content_with_images(prompt, (colorized, input_crop))
-
-        result = call_vlm(
-            self.client, self.model, content,
-            max_tokens=self.max_tokens, temperature=self.temperature,
-        )
-        parsed = parse_palette_verdict(result.text) if result.error is None else None
-
-        if result.error is not None:
-            status = ERROR
-            adheres = None
-            missing: list[str] = []
-            forbidden: list[str] = []
-            notes = ""
-        elif parsed is None:
-            status = UNPARSEABLE
-            adheres = None
-            missing = []
-            forbidden = []
-            notes = ""
-        else:
-            adheres = parsed["adheres"]
-            missing = parsed["missing_required"]
-            forbidden = parsed["present_forbidden"]
-            notes = parsed["notes"]
-            status = VERIFIED if adheres else MISMATCH
-
-        return PaletteVerifyRecord(
-            status=status,
-            adheres=adheres,
-            missing_required=missing,
-            present_forbidden=forbidden,
-            notes=notes,
+            good_color=good_color,
+            analyse=analyse,
             response_text=result.text,
             usage=result.usage,
             cost_usd=result.cost_usd,

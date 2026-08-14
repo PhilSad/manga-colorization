@@ -34,16 +34,22 @@ OUTPUT_ROOT = PIPELINE_DIR / "tests" / "output"
 
 
 @pytest.fixture(scope="session")
-def integration_run():
+def integration_run(request):
     """One timestamped output dir per `pytest -m integration` session
-    (`tests/output/YYYYMMDD-HHMMSS/`) with an incremental manifest.json, the
-    same convention as pipeline runs. Yields a small namespace:
-    `run_dir`, `manifest` (the manifest dict), `record(case_id, **fields)`
-    which appends a per-case record and refreshes the cost totals.
+    (`tests/output/YYYYMMDD-HHMMSS[-gwN]/`) with an incremental
+    manifest.json, the same convention as pipeline runs. Under pytest-xdist
+    (`-n 8`) each worker is its own pytest session, so the run dir carries
+    the xdist worker id (e.g. `20260810-120000-gw3`) to keep parallel
+    workers that start in the same second from colliding on one dir (and
+    one manifest). Yields a small namespace: `run_dir`, `manifest` (the
+    manifest dict), `record(case_id, **fields)` which appends a per-case
+    record and refreshes the cost totals.
     """
     from integration_support import iso_now, write_json
 
-    run_dir = OUTPUT_ROOT / datetime.now().strftime("%Y%m%d-%H%M%S")
+    worker_id = getattr(request.config, "workerinput", {}).get("workerid")
+    suffix = f"-{worker_id}" if worker_id else ""
+    run_dir = OUTPUT_ROOT / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}{suffix}"
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "kind": "integration-test-run",

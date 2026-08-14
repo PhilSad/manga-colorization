@@ -225,7 +225,11 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   `totals.openrouter_cost_usd`); colorization $0 per call (self-hosted FLUX on
   Spark, electricity only).
 - Evaluation: the fixed failure set (`evaluation/v1_1_cases.json`) is run by
-  the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration` —
+  the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration -n 8` —
+  (pytest-xdist, 8 parallel workers; each worker is its own pytest session and
+  writes its own timestamped `tests/output/YYYYMMDD-HHMMSS-gwN/` dir, so the
+  same-second dir-name collision that plain `mkdir(exist_ok=True)` would hide
+  is avoided — see the `integration_run` fixture in `tests/conftest.py`)
   no mocks: real OpenRouter gemma panel detection (DET/OOV — one test per
   detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`/`panel-page-prev2`), real FLUX on
   Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY), plus a
@@ -234,8 +238,8 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   p130). Inputs
   are committed under `tests/data/` (per-case crops, plus full committed
   pages and per-page panel sets for the detection pages; regenerate with
-  `tests/prepare_integration_data.py`); each session writes a timestamped
-  `tests/output/YYYYMMDD-HHMMSS/` dir with per-case records and measured
+  `tests/prepare_integration_data.py`); each worker session writes a timestamped
+  `tests/output/YYYYMMDD-HHMMSS[-gwN]/` dir with per-case records and measured
   `usage.cost`. Known-failing cases fail loudly (tracked, not xfailed).
   Quality write-ups, run tables, and remaining known failures live in
   `pipelines.md`; debug views are in `docs/pipeline_v1/`.

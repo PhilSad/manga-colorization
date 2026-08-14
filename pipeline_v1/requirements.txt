@@ -5,6 +5,7 @@ python-dotenv>=1.0
 openai>=1.40
 tqdm>=4.66
 pytest>=8.0
+pytest-xdist>=3.6  # parallelize the real-network integration suite: `pytest -m integration -n 8`
 # Panel detection (YOLO26n via ultralytics). Imported lazily by detection.py so
 # the rest of the pipeline and the offline test suite never require torch.
 # Python 3.14 wheels required; if unavailable, see detection.py / README for

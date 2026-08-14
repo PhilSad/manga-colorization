@@ -42,6 +42,11 @@ services:
       FLUX2_LORA_PATH: /models/flux2-klein-lora/manga_colorization.safetensors
       FLUX2_LORA_SCALE: "1.0"
       FLUX2_STEPS: "4"
+      # torch.compile the transformer (+VAE) on first inference: 0 off, 1
+      # transformer (default; ~1.3-1.4x single-request speedup), 2
+      # transformer+vae (+~4% at 2 MP, slower first call). See service.py and
+      # docs/color_concurency.md (single-request speedup experiment).
+      FLUX2_COMPILE: "${FLUX2_COMPILE:-1}"
       # Persist Triton JIT-compiled kernels across container restarts
       # (first inference recompiles ~1 min if this volume is missing).
       TRITON_CACHE_DIR: /triton-cache

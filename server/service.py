@@ -52,15 +52,17 @@ Notes:
   warns and disables classifier-free guidance), and used normally by the base.
 - The diffusers FLUX.2 pipeline has no safety checker (fal's optional one
   falsely blocked page 18 in the cloud run).
-- Concurrency: the service loads `FLUX2_NUM_PIPES` (default 2) independent
-  pipeline instances and hands one out per in-flight request from a pool
-  (traffic concurrency == FLUX2_NUM_PIPES, so requests never share a pipe).
-  `/edit2` takes two pipes for its two concurrent jobs. Each pipe owns its
-  own mutable scheduler/adapter state — the reason the LoRA scale override in
-  `_run_edit` is thread-safe. Two bf16 instances are ~67 GB resident (the
-  second pipe reuses the shared text-encoder/VAE tensors), well within the
-  GB10's 120 GB unified memory; set FLUX2_NUM_PIPES=1 to keep the old
-  single-pipe footprint.
+- Concurrency: the service loads `FLUX2_NUM_PIPES` (default 1 — the original
+  single-pipe, concurrency-1 behavior) pipeline instances and hands one out
+  per in-flight request from a pool (traffic concurrency == FLUX2_NUM_PIPES,
+  so requests never share a pipe). `/edit2` (two concurrent jobs on two
+  pipes) requires FLUX2_NUM_PIPES=2 — the opt-in concurrency-2 mode
+  benchmarked in docs/color_concurency.md. Each pipe owns its own mutable
+  scheduler/adapter state — the reason the LoRA scale override in `_run_edit`
+  is thread-safe. Optional `torch.compile` for the single-request path:
+  FLUX2_COMPILE=1 compiles the transformer, =2 also the VAE
+  (lazy, first call pays ~1-3 min of inductor compilation; dynamic shapes by
+  default so per-panel-size recompiles are avoided).
 """
 
 from __future__ import annotations
@@ -93,11 +95,23 @@ DEFAULT_STEPS = int(os.environ.get("FLUX2_STEPS", "4"))
 # The undistilled base model (used by the LoRA) wants ~4-5; the step-distilled
 # model ignores guidance entirely, so this default is safe for both.
 DEFAULT_GUIDANCE_SCALE = float(os.environ.get("FLUX2_GUIDANCE_SCALE", "4.0"))
-# Number of independent pipeline instances; /edit2 runs one job per instance
-# (concurrency-2 benchmark: 2). Each is ~48 GB resident (bf16), so 2 fit in
-# the GB10's 120 GB unified memory; set FLUX2_NUM_PIPES=1 for the old
-# single-pipe footprint.
-_NUM_PIPES = int(os.environ.get("FLUX2_NUM_PIPES", "2"))
+# Number of independent pipeline instances handed out to in-flight requests
+# (traffic concurrency == this value). Default 1 = the original single-pipe,
+# concurrency-1 server. Set FLUX2_NUM_PIPES=2 to re-enable the concurrency-2
+# mode (/edit2) benchmarked in docs/color_concurency.md; two bf16 instances
+# are ~67 GB resident, within the GB10's 120 GB unified memory.
+_NUM_PIPES = int(os.environ.get("FLUX2_NUM_PIPES", "1"))
+
+# Optional torch.compile for the single-request path (concurrency 1):
+#   FLUX2_COMPILE=1  compile the transformer
+#   FLUX2_COMPILE=2  compile the transformer and the VAE encode/decode
+# Compilation happens lazily on the first inference call (~1-3 min for the
+# transformer, cached by the Triton/inductor cache dirs), so the first
+# request after enabling is slow. Dynamic shapes avoid recompiling per panel
+# size; set FLUX2_COMPILE_DYNAMIC=0 to use static reduce-overhead graphs
+# (each new panel size then triggers a recompile).
+FLUX2_COMPILE = int(os.environ.get("FLUX2_COMPILE", "0"))
+FLUX2_COMPILE_DYNAMIC = os.environ.get("FLUX2_COMPILE_DYNAMIC", "1") != "0"
 
 _OUTPUT_FORMATS = {"png": "PNG", "jpeg": "JPEG", "webp": "WEBP"}
 
@@ -148,6 +162,24 @@ class Flux2Klein:
             # 0.39 auto-converts these keys to the Flux2 transformer layout.
             pipe.load_lora_weights(LORA_PATH, adapter_name=_ADAPTER_NAME)
             pipe.set_adapters([_ADAPTER_NAME], adapter_weights=[LORA_SCALE])
+        if FLUX2_COMPILE:
+            compile_kwargs = {"dynamic": FLUX2_COMPILE_DYNAMIC}
+            if not FLUX2_COMPILE_DYNAMIC:
+                compile_kwargs["mode"] = "reduce-overhead"
+            # Compile the forward *method*, not the module: replacing
+            # pipe.transformer wholesale hides the LoRA adapter registry
+            # (set_adapters -> get_list_adapters finds nothing -> 500).
+            logger.info(
+                "torch.compile transformer.forward (dynamic=%s)",
+                FLUX2_COMPILE_DYNAMIC,
+            )
+            pipe.transformer.forward = torch.compile(
+                pipe.transformer.forward, **compile_kwargs
+            )
+            if FLUX2_COMPILE >= 2:
+                logger.info("torch.compile vae encode/decode")
+                pipe.vae.encode = torch.compile(pipe.vae.encode, **compile_kwargs)
+                pipe.vae.decode = torch.compile(pipe.vae.decode, **compile_kwargs)
         return pipe
 
     @bentoml.api

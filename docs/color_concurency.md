@@ -9,9 +9,12 @@ The self-hosted FLUX.2 Klein server (`server/service.py`, BentoML) originally
 processed **one request at a time** (`traffic={"concurrency": 1}`): the client
 side (`pipeline_v1` colorize step) is strictly sequential, and a client-side
 concurrency sweep showed flat throughput — extra connections only queued.
-This experiment adds server-side concurrency (new `/edit2` route + a pipe
-pool) and benchmarks whether concurrency 2 actually improves throughput on
-the DGX Spark's single GB10 GPU.
+This experiment first adds server-side concurrency (a `/edit2` batch route +
+a pipe pool) and benchmarks whether concurrency 2 improves throughput on the
+DGX Spark's single GB10 GPU; it then reverts the default to concurrency 1 and
+benchmarks `torch.compile` as the single-request speed lever. **Bottom line:
+concurrency 2 is ~1.06× (small panels) / 0.98× (2 MP); `torch.compile` at
+concurrency 1 is 1.26–1.40× — the bigger lever.**
 
 ## Environment
 
@@ -121,24 +124,56 @@ only gain is filling the ~5–17% of CPU-side gaps (HTTP parse, PIL
 encode/decode, prompt encode), which is worth ~6% at small panel sizes and
 vanishes (even turns negative) at 2 MP.
 
+## Revert to concurrency 1 + `torch.compile` (single-request speed)
+
+Because concurrency 2 is not a real lever on this hardware, the server's
+default went back to concurrency 1 (`FLUX2_NUM_PIPES` default 1; traffic
+concurrency == pipe count). The remaining lever is making each request
+faster with `torch.compile` (new in this service, `FLUX2_COMPILE` env):
+
+- `FLUX2_COMPILE=1` compiles the transformer's `forward` — as a **method**,
+  not the module, because replacing `pipe.transformer` wholesale hides the
+  LoRA adapter registry (`set_adapters` → `get_list_adapters` finds nothing
+  → HTTP 500).
+- `FLUX2_COMPILE=2` additionally compiles the VAE encode/decode.
+- `FLUX2_COMPILE_DYNAMIC=1` (default) uses dynamic shapes: different panel
+  sizes reuse the compiled kernels instead of recompiling (static mode,
+  `=0` + `reduce-overhead`, recompiles per new size — opt-in only).
+- Compilation is lazy on the first inference (cold: ~73 s transformer,
+  ~115 s with VAE); the Triton/inductor cache survives container recreates
+  (observed 8.8 s first call after a recreate).
+
+Results at concurrency 1, 4 steps (same payloads as above):
+
+| workload | no compile | `=1` transformer | `=2` +VAE |
+|---|---|---|---|
+| small panels | 8.39 s / 0.119 req/s | 6.03 s / 0.166 (**1.39×**) | 6.00 s / 0.167 (**1.40×**) |
+| 2 MP cap | 25.02 s / 0.040 | 19.81 s / 0.050 (**1.26×**) | 19.04 s / 0.053 (**1.31×**) |
+
+`FLUX2_COMPILE=1` is the recommended deployment (default in
+docker-compose.yml): VAE compilation adds only ~4% at 2 MP for +40 s of
+first-call compile time. Different image sizes work without recompiles
+(run 1 over 5 distinct panel sizes: 6.01 s mean vs 6.03 s steady state).
+
 ## Conclusions
 
-1. **Concurrency 2 measurably improves small-panel throughput (~6%), and
-   slightly hurts at 2 MP.** It is not a 2× lever on this hardware — the
-   GPU, not request serialization, is the bottleneck.
-2. The pipe-pool + traffic-concurrency-2 server is safe (each request owns a
-   pipe) and is the version deployed (`FLUX2_NUM_PIPES`, default 2;
-   `FLUX2_NUM_PIPES=1` restores the old single-pipe footprint).
-3. If the goal is a *real* throughput multiple, the levers are not
-   duplicated-pipe concurrency but: fewer/lighter steps or model (out of
-   scope), CUDA graphs / torch.compile to shrink per-job GPU time (untested),
-   or multi-GPU. On one GB10, ~0.115 panels/s (small) / ~0.039 panels/s
-   (2 MP) at 4 steps is the practical single-GPU ceiling.
+1. **Concurrency 2** measurably improves small-panel throughput (~6%) and
+   slightly hurts at 2 MP — the GPU, not request serialization, is the
+   bottleneck on this GB10. The default is back to concurrency 1.
+2. **`torch.compile` at concurrency 1 is the real win**: 1.26–1.40× per
+   request (transformer-only, dynamic shapes), enabled by default
+   (`FLUX2_COMPILE=1`), with a one-time cold-call compile cost.
+3. The pipe-pool code remains for the opt-in concurrency-2 mode
+   (`FLUX2_NUM_PIPES=2` enables `/edit2`), and is thread-safe (each request
+   owns a pipe).
 
 ## Failure cases / caveats
 
 - First call after container restart pays model load + Triton compile
-  (27 s measured once); all steady-state numbers exclude warmup.
+  (27 s measured once); all steady-state numbers exclude warmup. With
+  `FLUX2_COMPILE` on, the cold first call additionally pays inductor
+  compilation (~73 s transformer, ~115 s +VAE); the cache survives container
+  recreates.
 - `/edit2` takes **both** pipes for its duration: a concurrent `/edit`
   request waits (no deadlock — traffic concurrency == pipe count), so don't
   mix parallel `/edit2` clients with `FLUX2_NUM_PIPES=2`.
@@ -146,6 +181,9 @@ vanishes (even turns negative) at 2 MP.
   utilization sampling is ~1 Hz via ssh and noisy at short windows.
 - nvidia-smi util on GB10 is a coarse SM-busy proxy; the conclusion rests on
   the consistent wall-time measurements across 5 runs, not on util alone.
+- torch.compile: compile the transformer's `forward` method, not the module
+  (module replacement hides the LoRA adapter registry and breaks
+  `set_adapters` with HTTP 500).
 
 ## Cost / reproducibility
 

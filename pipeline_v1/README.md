@@ -194,8 +194,9 @@ recorded per call.
     byte-for-byte, so the eval cases' panel references cannot silently go
     stale.
   - `test_end_to_end_integration.py` (E2E-P130): the FULL pipeline — real
-    YOLO + real OpenRouter `panel-page-prev2` detection (the mode under
-    test, per the test's `DETECTION_MODE` constant) + real FLUX on Spark +
+    YOLO + real OpenRouter `panel-page-prev2-cast` detection (prev2 with the
+    chapter-cast shortlist; the cast key comes from the fixture, per the
+    test's `DETECTION_MODE`/`CAST_KEY` constants) + real FLUX on Spark +
     stitching — on one real page (volume-1 p130, the DET-005..010 page).
     Deliberately NOT stage-isolated: runs the same real backends `run.py`
     builds and asserts the wiring end to end (panel crops reproduce the

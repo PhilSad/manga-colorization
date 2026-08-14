@@ -5,9 +5,11 @@ evaluation cases are built on.
 Deliberately NOT stage-isolated: this runs the FULL four-stage pipeline on one
 real page with the same real backends `run.py` builds (`run.build_backends`)
 — real YOLO26n panel detection + reading-order extraction, real OpenRouter
-`google/gemma-4-31b-it` character detection (`DETECTION_MODE`, currently
-`panel-page-prev2`), real FLUX.2 Klein 9B + LoRA colorization on the Spark
-server, and
+`google/gemma-4-31b-it` character detection in the `panel-page-prev2-cast`
+variant (`DETECTION_MODE` = `panel-page-prev2` with the chapter-cast
+shortlist rendered into the prompt via an explicit `CAST_KEY`, mirroring the
+stage-isolated `test_detection_panel_page_prev2_cast`), real FLUX.2 Klein 9B
++ LoRA colorization on the Spark server, and
 stitching — and asserts the wiring end to end:
 
 - the panel extraction reproduces the committed fixture set byte-for-byte
@@ -23,8 +25,10 @@ stitching — and asserts the wiring end to end:
 Input: the committed `tests/data/pages/P130.png` — a byte-identical copy of
 the gitignored volume page (see `prepare_integration_data.py` provenance) —
 copied into the run under its real volume filename (fixture alias basename,
-"... - c005 (v01) - p130 ...png") so `panel-page-cast` auto-derivation
-resolves the chapter, so the test needs no extracted-volume data.
+"... - c005 (v01) - p130 ...png") so the run looks like a real volume run;
+the chapter-cast shortlist comes from the fixture's `cast_keys` map (passed
+explicitly, like the stage-isolated prev2-cast test), so the test needs no
+extracted-volume data.
 
 Prerequisites (skipped with a printed reason when missing, like the rest of
 the integration suite): Spark FLUX server up (`curl http://spark:3000/healthz`)
@@ -71,10 +75,14 @@ FIXTURE = load_fixture()
 PAGE_ALIAS = "P130"
 EXPECTED_PANELS = 6
 CAST_KEY = FIXTURE["cast_keys"][PAGE_ALIAS]  # "c005" — single source of truth
+# panel-page-prev2-cast: the prev2 mode with the chapter-cast shortlist
+# rendered into the prompt (explicit CAST_KEY, like the stage-isolated
+# test_detection_panel_page_prev2_cast). The prev2 strategy's provenance file
+# records the effective key, asserted below.
 DETECTION_MODE = "panel-page-prev2"   # the detection mode under test
+PROVENANCE_FILE = "panel_page_prev2_calls.json"
 # The run input is copied under its real volume filename (the fixture alias's
-# basename) so panel-page-cast's auto-derivation (`cast_key_for_page` reads
-# the '- c005 -' chapter tag) resolves the chapter like a real volume run.
+# basename) so the run looks like a real volume run ('- c005 -' tag and all).
 INPUT_FILENAME = Path(FIXTURE["aliases"][PAGE_ALIAS]).name
 
 
@@ -93,8 +101,8 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
 
     # Input dir containing only this page, copied under its real volume
     # filename (INPUT_FILENAME): the run stays self-contained (page_path
-    # inside the run dir) while the name lets panel-page-cast derive the
-    # chapter cast from the '- c005 -' tag.
+    # inside the run dir) and looks like a real volume run; the cast key is
+    # explicit (CAST_KEY), not derived from the filename.
     e2e_root = integration_run.run_dir / "e2e"
     input_dir = e2e_root / "input"
     input_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +117,7 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         vlm_model=DETECTION_MODEL,
         sleep_s=0.0,
         detection_mode=DETECTION_MODE,
+        cast_key=CAST_KEY,
         flux_steps=FLUX_STEPS,
         guidance_scale=FLUX_GUIDANCE,
         lora_scale=FLUX_LORA_SCALE,
@@ -156,15 +165,15 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
         detected[stem] = doc["characters"]
         assert doc["status"] != "error", f"{stem}: {doc.get('error')}"
 
-    # The cast shortlist must actually be applied in panel-page-cast mode: the
-    # run input's real filename is what the pipeline derives the chapter from
-    # (a silent full-roster fallback would defeat the page's purpose).
-    if DETECTION_MODE == "panel-page-cast":
-        provenance = _read_json(chars_dir / "panel_page_calls.json")
-        assert provenance["cast_key"] == CAST_KEY, (
-            f"panel-page-cast run recorded cast {provenance['cast_key']!r}, "
-            f"expected {CAST_KEY!r}"
-        )
+    # The cast shortlist must actually be applied in the prev2-cast variant:
+    # the provenance records the effective cast key (a silent full-roster
+    # fallback would defeat the page's purpose — DET-006..010 must not guess
+    # Flamme, who is excluded from ch. 5's cast).
+    provenance = _read_json(chars_dir / PROVENANCE_FILE)
+    assert provenance["cast_key"] == CAST_KEY, (
+        f"panel-page-prev2-cast run recorded cast "
+        f"{provenance['cast_key']!r}, expected {CAST_KEY!r}"
+    )
 
     # 4. Colorize: one output per panel, each differing from its B&W crop; a
     #    filtered atlas is sent exactly for the panels with characters.

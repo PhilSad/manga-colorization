@@ -81,6 +81,7 @@ Before considering a method complete, verify that its run entry point creates a 
 - Use paths relative to the repository or the script location so runs work from any current working directory.
 - Avoid modifying files under `data/`; write generated artifacts only under the method's timestamped output directory. The exception is the volume tooling in `script/`: `extract_pages.py` populates `data/page_per_volume/` from `data/volumes/`, and `merge_to_cbz.py` writes a new `.cbz` when a colorized folder is packed back. These scripts never alter the original `.cbz` files in `data/volumes/`.
 - Update the relevant method `README.md` when behavior, setup, quality, or cost assumptions change.
+- Log long-running commands: whenever you run a command expected to take a while (method/pipeline runs, tests, downloads, data processing, model inference), run it through `tee` so the output is both shown and saved to the local `.output/` folder as a timestamped `.out` file (e.g. `.output/20260808-143015.out`). Create the folder with `mkdir -p .output` if needed. Note that `cmd | tee file` returns `tee`'s exit status — when the command's own exit code matters, capture it with `${PIPESTATUS[0]}` (or `set -o pipefail`). `.output/` is gitignored; these logs are transient provenance, not artifacts to commit.
 
 # Spark inference server
 

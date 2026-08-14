@@ -245,7 +245,7 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   detection mode: `page`/`panel`/`panel-page`/`panel-page-cast`/`panel-page-prev2`/`panel-page-prev2-cast`), real FLUX on
   Spark + real gpt-5.6-luna validation (COL/SIZE), real YOLO (LAY), plus a
   full-pipeline end-to-end test (`test_end_to_end_integration.py`, E2E-P130)
-  running all four stages with real backends on one real page (volume-1
+  running all five stages with real backends on one real page (volume-1
   p130). Inputs
   are committed under `tests/data/` (per-case crops, plus full committed
   pages and per-page panel sets for the detection pages; regenerate with

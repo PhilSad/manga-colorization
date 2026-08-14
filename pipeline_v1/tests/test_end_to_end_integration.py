@@ -128,8 +128,9 @@ def test_pipeline_end_to_end_on_p130(integration_run, openrouter_key,
 
     assert ctx.manifest["status"] == "completed"
 
-    # 1. The four numbered intermediate directories.
-    for name in ("1_panels", "2_characters", "3_colorized", "4_stitched"):
+    # 1. The five numbered intermediate directories.
+    for name in ("1_panels", "2_characters", "3_colorized", "4_stitched",
+                 "5_debug"):
         assert (ctx.run_dir / name).is_dir(), f"missing {name}/"
 
     # Run page stem is the real volume filename (the input copy), not the

@@ -75,6 +75,7 @@ Before considering a method complete, verify that its run entry point creates a 
 
 ## General implementation conventions
 
+- When searching the repository with `grep`/`rg`, exclude the `.venv/` directory by default (e.g. `rg -n pattern . --glob '!.venv/**'` or `grep -rn pattern --exclude-dir=.venv .`) so results aren't drowned in vendored dependencies. Only search inside `.venv/` when deliberately looking for something in it, and make such searches targeted (specific paths, not whole-repo scans).
 - Prefer small, composable scripts with a clear entry point and documented dependencies.
 - Keep method-specific dependencies and configuration inside that method's directory where practical.
 - Never hard-code API keys or other secrets; load them from environment variables or an ignored local configuration file.

@@ -163,6 +163,34 @@ fix prompt, measured costs). The retry added one extra gpt-image-2 call:
 6 calls $0.30056 total ($0.0501 avg/page) vs $0.24958 for the
 no-verify baseline.
 
+**Measured live run, no-VLM cast mode** (`output/20260815-174713`,
+full-page gpt-image-2, vol 2 p000–p024, `--atlas-source cast --limit 25
+--verify-attempts 3`): first 25 pages of volume 2 (c008 p000–p021 + c009
+p022–p024) colorized **without any character detection** — the characters
+step is a no-op, the atlas is built from the auto-derived chapter cast
+(c008: Eisen/Frieren/Fern/Heiter/Himmel; c009: Frieren/Fern/Heiter/Himmel),
+so OpenRouter cost is **$0.00** (only `OPENAI_API_KEY` needed). Results:
+
+- **gpt-image-2**: 38 calls (25 pages + **13 auto-retries**),
+  **$2.00484 total ≈ $0.0528/call, $0.0802/page** (a bit above the 672×1008
+  projection because several pages — the cover and spreads — are larger).
+- **Luna verification**: 38 calls (25 first + 13 re-verifies),
+  **$0.03811 total ≈ $0.00100/call**, matching the earlier measurement.
+- **Outcomes**: 24/25 verified; 1 verifier error (p007 — Luna returned an
+  unparseable response, loop stopped without burning a retry, page kept its
+  attempt-1 output); 11 pages needed a retry (9 at 2 attempts, 2 at 3
+  attempts; the 3-attempt pages p010 and p015 exhausted the retry budget on
+  Eisen's beard before passing).
+- **Dominant recurring catch**: 10 of 13 retries were **Eisen's beard** —
+  gpt-image-2 repeatedly colors it silver/gray/white, Luna consistently
+  flags it and the fix prompt ("beard golden blond/ochre, keep gray armor +
+  red cloak") resolves it on the next attempt; 2 retries were Frieren's hair
+  (lavender → silver-white); 1 combined. This is a strong signal that the
+  canonical palette in `character_profiles.json`/atlas for Eisen's beard
+  should be updated (the atlas apparently over-weights the gray armor).
+- **Total run cost: ≈ $2.043** (zero VLM detection, 39 min wall time,
+  25/25 pages colorized + stitched + debug annotated).
+
 ---
 
 ## V1.1 — fixed evaluation set, explicit palettes, page-level detection

@@ -1,0 +1,60 @@
+{
+  "command": "research-v2/convert_refs_to_manga.py",
+  "timestamp": "2026-08-15T02:23:16",
+  "prompt": "Convert this colored anime character illustration into clean black and white manga line art in the style of the reference manga page. Keep the character's identity, pose, hair style, facial features, clothing and expression exactly the same. Use crisp black ink lines on a pure white background with no colors and no gray shading.",
+  "config": {
+    "endpoint": "http://spark:3000",
+    "style_ref": "/home/phil/code/perso/manga_colorization/research-v2/data/panels/Frieren - Beyond Journey's End - c001 (v01) - p007 [VIZ Media] [Digital] [1r0n]/panel_0002.png",
+    "num_inference_steps": 4,
+    "guidance_scale": 4.0,
+    "lora_scale": 0,
+    "seed": null,
+    "output_format": "png"
+  },
+  "backend": {
+    "model": "FLUX.2 Klein 9B (step-distilled) via Spark BentoML /edit",
+    "cost": "self-hosted on Spark, $0 per call (electricity only)"
+  },
+  "records": [
+    {
+      "status": "ok",
+      "latency_s": 4.7,
+      "size": [
+        286,
+        677
+      ],
+      "name": "Himmel",
+      "output": "research-v2/data/refs_manga/himmel_reference.png"
+    },
+    {
+      "status": "ok",
+      "latency_s": 7.4,
+      "size": [
+        386,
+        1051
+      ],
+      "name": "Frieren",
+      "output": "research-v2/data/refs_manga/frieren_reference.png"
+    },
+    {
+      "status": "ok",
+      "latency_s": 7.3,
+      "size": [
+        543,
+        735
+      ],
+      "name": "Eisen",
+      "output": "research-v2/data/refs_manga/eisen_reference.png"
+    },
+    {
+      "status": "ok",
+      "latency_s": 4.7,
+      "size": [
+        249,
+        674
+      ],
+      "name": "Heiter",
+      "output": "research-v2/data/refs_manga/heiter_reference.png"
+    }
+  ]
+}

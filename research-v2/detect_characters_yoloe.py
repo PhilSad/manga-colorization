@@ -37,6 +37,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 CASTS_JSON = Path(__file__).resolve().parents[1] / "pipeline_v1" / "chapter_casts.json"
 DEFAULT_REFS_DIR = Path(__file__).resolve().parents[1] / "data" / "refs"
+# B&W manga versions of the references (convert_refs_to_manga.py) — used when
+# present, because YOLOE fails across the color -> B&W domain gap.
+MANGA_REFS_DIR = Path(__file__).resolve().parent / "data" / "refs_manga"
 DEFAULT_INPUT_DIR = Path(__file__).resolve().parent / "data" / "panels"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parent / "output"
 MODELS_DIR = Path(__file__).resolve().parent / "models"
@@ -54,25 +57,29 @@ PANEL_BOX_COLOR = (220, 60, 30)  # red-ish: detections
 REF_BOX_COLOR = (40, 120, 220)   # blue: reference prompts (never annotated)
 
 
-def load_cast(cast_key: str) -> list[str]:
+def _refs_dir_default() -> Path:
+    """Prefer the manga-converted refs when available."""
+    return MANGA_REFS_DIR if MANGA_REFS_DIR.is_dir() else DEFAULT_REFS_DIR
+
+
+def load_cast(cast_key: str, refs_dir: Path | None = None) -> list[str]:
     """Cast members for `cast_key` that have a reference image."""
+    refs_dir = refs_dir or _refs_dir_default()
     casts = json.loads(CASTS_JSON.read_text())
     members = casts["casts"][cast_key]["characters"]
-    available = {
-        p.name.removesuffix("_reference.webp"): p
-        for p in DEFAULT_REFS_DIR.glob("*_reference.webp")
-    }
+    available = {p.stem.removesuffix("_reference"): p for p in refs_dir.iterdir()}
     missing = [m for m in members if m.lower() not in available]
     if missing:
         raise SystemExit(f"cast {cast_key}: no reference image for {missing}")
     return [m for m in members if m.lower() in available]
 
 
-def build_ref_sheet(cast: list[str], ref_size: int) -> tuple[Image.Image, list[list[int]]]:
+def build_ref_sheet(cast: list[str], ref_size: int, refs_dir: Path) -> tuple[Image.Image, list[list[int]]]:
     """Composite the cast references side by side; returns (sheet, bboxes)."""
     refs = []
     for name in cast:
-        im = Image.open(DEFAULT_REFS_DIR / f"{name.lower()}_reference.webp").convert("RGB")
+        path = next(refs_dir.glob(f"{name.lower()}_reference.*"))
+        im = Image.open(path).convert("RGB")
         im.thumbnail((ref_size, ref_size))
         refs.append(im)
     width = sum(r.width for r in refs) + (len(refs) + 1) * PAD
@@ -158,6 +165,8 @@ def parse_args() -> argparse.Namespace:
                         help="YOLOE checkpoint name (downloaded to research-v2/models/)")
     parser.add_argument("--cast-key", default=DEFAULT_CAST_KEY,
                         help="chapter cast to prompt with (default: c001)")
+    parser.add_argument("--refs-dir", type=Path, default=None,
+                        help=f"reference images (default: {_refs_dir_default()})")
     parser.add_argument("--ref-size", type=int, default=DEFAULT_REF_SIZE,
                         help="max reference thumbnail size (px)")
     parser.add_argument("--imgsz", type=int, default=DEFAULT_IMGSZ,
@@ -171,7 +180,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    cast = load_cast(args.cast_key)
+    refs_dir = args.refs_dir or _refs_dir_default()
+    cast = load_cast(args.cast_key, refs_dir)
 
     images = sorted(
         path for path in args.input_dir.rglob("*")
@@ -186,7 +196,7 @@ def main() -> None:
 
     model = YOLOE(str(model_path))
 
-    ref_sheet, ref_bboxes = build_ref_sheet(cast, args.ref_size)
+    ref_sheet, ref_bboxes = build_ref_sheet(cast, args.ref_size, refs_dir)
     run_dir = args.output_root / datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     ref_sheet.save(run_dir / "ref_sheet.png")
@@ -255,6 +265,7 @@ def main() -> None:
             "model": args.model,
             "cast_key": args.cast_key,
             "cast": cast,
+            "refs_dir": str(refs_dir),
             "ref_size": args.ref_size,
             "imgsz": args.imgsz,
             "conf": args.conf,

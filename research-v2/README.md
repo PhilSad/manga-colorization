@@ -17,6 +17,11 @@ formal method or pipeline).
   `deepghs/manga109_yolo`.
 - `detect_characters_yoloe.py`: cast-aware character detection with ultralytics
   YOLOE, prompted with the chapter-cast reference images.
+- `convert_refs_to_manga.py`: converts the color reference portraits into B&W
+  manga line art via the Spark FLUX.2 Klein edit server (inputs for YOLOE).
+- `data/refs_manga/`: the converted references (`manifest.json` records the
+  prompt/seed/cost) — used automatically by `detect_characters_yoloe.py` when
+  present.
 - `models/`: downloaded model weights (gitignored).
 
 ## split_panels.py
@@ -110,15 +115,19 @@ Flags: `--input-dir`, `--output-root`, `--model`, `--cast-key`, `--ref-size`,
 
 ### Quality assessment — experimental, NOT usable for cast identification
 
-On the 21 c001 panels (run 20260815-021726, conf ≥ 0.1): **7 detections**, all
-low-confidence and mostly spurious:
+On the 21 c001 panels, **7 detections** at conf ≥ 0.1 in both reference
+variants, all low-confidence and mostly spurious:
 
-| example | label | conf | box |
+| reference variant | best conf | mean conf | example hits |
 |---|---|---|---|
-| p008/panel_0003 | Himmel | 0.44 | [1,2,140,291] (flush to left edge) |
-| p008/panel_0003 | Himmel | 0.37 | [1,1,410,330] |
-| p009/panel_0003 | Eisen | 0.24 | [1,1,394,225] |
-| p010/panel_0003 | Himmel | 0.13 | [2,0,314,212] |
+| color refs (run 20260815-021726) | 0.439 | ~0.235 | p008/panel_0003 Himmel (edge-hugging box) |
+| manga-converted refs (run 20260815-022342) | 0.194 | ~0.137 | p008/panel_0004 Eisen, Heiter |
+
+`convert_refs_to_manga.py` re-rendered each cast portrait into B&W line art
+(FLUX.2 Klein edit, Spark, sat ≈3–6, 85–91% white — see `data/refs_manga/`),
+then `detect_characters_yoloe.py --refs-dir data/refs_manga` re-ran the
+prompts. The manga references did **not** improve detection — confidence
+*dropped* (best 0.439 → 0.194).
 
 Observed problems (measured, not speculation):
 - **Identity is unstable**: in a config sweep on p008/panel_0002 the same
@@ -126,10 +135,12 @@ Observed problems (measured, not speculation):
   size / ref size / imgsz; per-panel labels contradict each other.
 - **Boxes hug panel edges** (x=1–2, spanning full height) — the model fires on
   panel borders rather than character bodies.
-- **Low confidence on genuine hits** (≤ 0.26 even for the strongest box); the
-  references themselves are re-detected at ~0.78, so the prompt mechanism
-  works but does not transfer across the **color-reference → B&W-manga** domain
-  gap (color is the main identity cue for this cast; the panel has none).
+- **Low confidence on genuine hits**; the references themselves are re-detected
+  at ~0.78, so the prompt mechanism works but does not transfer to manga
+  character line art, whether the reference is colored or itself line art.
+  YOLOE's SAVPE is a one-shot "find more like this exact object" matcher; it
+  does not bridge pose/style/scale variation between a portrait reference and
+  a panel character.
 - Sparse recall: only 7/21 panels get any detection (manga109_yolo found 34
   body boxes; pipeline_v1's VLM identifies the cast correctly).
 

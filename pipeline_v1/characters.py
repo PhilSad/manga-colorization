@@ -373,7 +373,7 @@ class OpenRouterCharacterDetector:
         chapter_casts_file: Path | None = None,
         chapter_page_map_file: Path | None = None,
         cast_key: str | None = None,
-        workers: int = 1,
+        worker_detection: int = 1,
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -396,7 +396,7 @@ class OpenRouterCharacterDetector:
             Path(chapter_page_map_file) if chapter_page_map_file else None
         )
         self.cast_key = cast_key
-        self.workers = workers
+        self.worker_detection = worker_detection
         self._strategies: dict = {}  # memoized DetectionStrategy per mode
         self.canonical: list[str] = []
         self.profiles: dict = {}
@@ -1119,7 +1119,7 @@ def _detect_panels_with_page_context(
     for panel_key in tqdm(
         expected_panels,
         desc=progress_desc,
-        unit="panel", leave=False, disable=detector.workers > 1,
+        unit="panel", leave=False, disable=detector.worker_detection > 1,
     ):
         panel = _find_panel_file(panels_dir, panel_key)
         if panel is None:

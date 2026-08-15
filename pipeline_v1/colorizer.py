@@ -66,6 +66,13 @@ class ColorizeRecord:
     max_megapixels: float | None = None
     upscaled: bool = False          # input was below the server min axis and
                                     # had to be upscaled client-side
+    # Paid-backend provenance (all None for the self-hosted FLUX path, in
+    # which case to_dict omits them): the backend model id (e.g. gpt-image-2),
+    # the quality setting, the API's usage details, and the estimated USD cost.
+    model: str | None = None
+    quality: str | None = None
+    usage: dict | None = None
+    est_cost_usd: float | None = None
 
     def to_dict(self, panel: Path, atlas: Path | None) -> dict:
         doc = {
@@ -86,6 +93,14 @@ class ColorizeRecord:
             "seed": self.seed,
             "error": self.error,
         }
+        for key, value in (
+            ("model", self.model),
+            ("quality", self.quality),
+            ("usage", self.usage),
+            ("est_cost_usd", self.est_cost_usd),
+        ):
+            if value is not None:
+                doc[key] = value
         if self.output is not None:
             doc["output"] = file_record(self.output)
         return doc

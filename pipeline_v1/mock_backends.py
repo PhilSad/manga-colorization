@@ -88,10 +88,31 @@ class MockCharacterDetector:
 
 
 class MockColorizer:
-    """Tints the panel with a fixed color; records every call."""
+    """Tints the panel with a fixed color; records every call.
 
-    def __init__(self, color: tuple[int, int, int] = (205, 92, 92)) -> None:
-        self.color = color
+    `backend` is a provenance marker ("flux" | "gpt-image-2") so tests and
+    manifests can assert which backend was selected (run.py passes
+    "gpt-image-2" for `--full-page`). Gpt mode uses a distinct tint so
+    full-page mock outputs are visually distinguishable from panel-mode mocks.
+    """
+
+    _BACKEND_TINTS = {
+        "flux": (205, 92, 92),        # indian red (default)
+        "gpt-image-2": (92, 155, 205),  # steel blue
+    }
+
+    def __init__(
+        self,
+        color: tuple[int, int, int] | None = None,
+        backend: str = "flux",
+    ) -> None:
+        if backend not in self._BACKEND_TINTS:
+            raise ValueError(
+                f"unknown mock backend {backend!r} (expected one of "
+                f"{sorted(self._BACKEND_TINTS)})"
+            )
+        self.backend = backend
+        self.color = color or self._BACKEND_TINTS[backend]
         self.calls: list[tuple[Path, Path | None, Path, str]] = []
 
     def colorize(
@@ -119,6 +140,7 @@ class MockColorizer:
             scale=1.0,
             cap_applied=False,
             max_megapixels=None,
+            model=f"{self.backend} (mock)",
         )
 
 

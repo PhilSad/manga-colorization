@@ -76,6 +76,43 @@ def run_stitch_step(
                 "their original black & white crops (--stitch-bw-fallback)"
             )
 
+        if config.full_page:
+            # Full-page passthrough: the single colorized panel already covers
+            # the whole page, so copy it straight to the stitched output (no
+            # inset, no re-paste). Missing colorized output falls back to the
+            # original page with --stitch-bw-fallback.
+            bw_fallback: list[str] = []
+            crop_name = geometry["detections"][0]["crop"] \
+                if geometry["detections"] else "panel_0001"
+            colorized_path = _find_colorized(colorized_page_dir, crop_name, extension)
+            if colorized_path is None:
+                if not config.stitch_bw_fallback:
+                    raise ValueError(f"missing colorized panel for {crop_name}")
+                colorized_path = page_dir / crop_name
+                if not colorized_path.is_file():
+                    raise ValueError(
+                        f"missing colorized panel for {crop_name} (and no "
+                        f"original crop at {colorized_path} to fall back to)"
+                    )
+                bw_fallback = [crop_name]
+                _warn(
+                    f"missing colorized panel for {page}/{crop_name}; copying "
+                    "the original black & white page (--stitch-bw-fallback)"
+                )
+            output_path = stitched_dir / f"{page}{extension}"
+            with Image.open(colorized_path) as colorized_image:
+                colorized_image.convert("RGB").save(output_path)
+            totals_bw_fallback += len(bw_fallback)
+            outputs.append({
+                "page": page,
+                "input": geometry["page"],
+                "output": file_record(output_path),
+                "panels_stitched": 0 if bw_fallback else 1,
+                "panels_skipped_black_white": [],
+                "panels_bw_fallback": bw_fallback,
+            })
+            continue
+
         source_page = Path(geometry["page_path"])
         with Image.open(source_page) as page_image:
             page_image = page_image.convert("RGB")

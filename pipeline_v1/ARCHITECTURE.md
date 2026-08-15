@@ -28,7 +28,9 @@ pipeline_v1/
 ├── steps/characters.py   # stage 3 -> 2_characters/ (page calls + fallbacks + forced identities)
 ├── atlas.py              # labelled atlas filtered to detected characters only
 ├── colorizer.py          # Colorizer protocol + FluxColorizer (multipart POST /edit; palette + size cap)
+├── gpt_colorizer.py      # GptImage2Colorizer: OpenAI images.edit (minimal size, medium quality, usage/cost)
 ├── colorizer_prompt.txt  # colorize-only prompt with mngclranm trigger + {character_profiles}
+├── gpt_image_prompt.txt  # gpt-image-2 atlas prompt (size + palette placeholders, no hardcoded names)
 ├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + palette + resume reuse)
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
@@ -69,6 +71,14 @@ page (input_dir)
        -> 5_debug/summary.json
 ```
 
+**Full-page mode** (`--full-page`, gpt-image-2) replaces the panel path per
+stage but keeps the same dirs: `panels` writes one synthetic full-page box
+(`provenance: full-page-mode`) without calling YOLO; `characters` is a no-op
+for `--atlas-source cast` or runs page-level detection for `detected`;
+`colorize` calls `gpt_colorizer.GptImage2Colorizer` once per page;
+`stitch` copies `3_colorized/<page>/panel_0001.png` to `4_stitched/<page>.png`
+(passthrough).
+
 ## Key decisions
 
 - **Library ports, not subprocesses**: the pipeline reuses the logic (prompt,
@@ -79,6 +89,14 @@ page (input_dir)
 - **Backends behind protocols** (`PanelDetector`, `CharacterDetector`,
   `Colorizer`): real implementations import heavy/paid dependencies lazily, so
   the whole test suite runs offline with mock backends.
+- **Full-page mode (gpt-image-2)**: `--full-page` swaps the backend and the
+  per-page granularity, not the skeleton — each page becomes one synthetic
+  `panel_0001`, so totals/resume/debug stay uniform. `--atlas-source cast`
+  skips the characters step (zero VLM calls); `--atlas-source detected` forces
+  `detection_mode="page"`. Output size comes from `config.minimal_gpt_image_size`
+  (exact ratio, multiples of 16, area/edge/ratio caps; unsolvable sizes raise).
+  Parallel colorization (`--worker-colorization N`) threads pages through the
+  shared `GptImage2Colorizer` (OpenAI SDK client is thread-safe).
 - **Size policy (user-confirmed)**: each panel is colorized at the resolution
   closest to its original size with both axes multiples of 16
   (`nearest_multiple_of`), then resized back to the exact panel box when

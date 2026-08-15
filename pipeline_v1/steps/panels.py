@@ -63,33 +63,50 @@ def run_panels_step(
     ):
         with Image.open(page_path) as page:
             page = page.convert("RGB")
-            detections = detector.detect(page_path)
-            order = reading_order(detections)
-            ordered = [detections[i] for i in order]
             page_dir = pages_dir / page_path.stem
             page_dir.mkdir(parents=True, exist_ok=True)
-            provenance = "yolo"
-            fallback = False
-            blank_page = False
-            skip_reason = None
 
-            if not ordered:
+            if config.full_page:
+                # Full-page mode: no detector — one synthetic panel per page
+                # covering the whole page (provenance full-page-mode). The
+                # blank-page ink check still applies (blank pages are
+                # skipped); inset is 0 so the crop is the entire page.
                 ink = ink_ratio(page)
                 blank_page = ink < config.blank_ink_threshold
-                if blank_page:
-                    skip_reason = "blank-page"
-                elif config.full_page_fallback:
-                    ordered = [
-                        PanelBox(0, 0, page.width, page.height, 1.0)
-                    ]
-                    provenance = "full-page-fallback"
-                    fallback = True
+                skip_reason = "blank-page" if blank_page else None
+                ordered = (
+                    [] if blank_page
+                    else [PanelBox(0, 0, page.width, page.height, 1.0)]
+                )
+                order: list[int] = []
+                provenance = "full-page-mode"
+                fallback = False
+            else:
+                detections = detector.detect(page_path)
+                order = reading_order(detections)
+                ordered = [detections[i] for i in order]
+                provenance = "yolo"
+                fallback = False
+                blank_page = False
+                skip_reason = None
+                if not ordered:
+                    ink = ink_ratio(page)
+                    blank_page = ink < config.blank_ink_threshold
+                    if blank_page:
+                        skip_reason = "blank-page"
+                    elif config.full_page_fallback:
+                        ordered = [
+                            PanelBox(0, 0, page.width, page.height, 1.0)
+                        ]
+                        provenance = "full-page-fallback"
+                        fallback = True
 
             records = []
             if ordered:
                 records = save_panels(
                     page, ordered, page_dir,
-                    inset=config.panel_inset, extension=_extension(config),
+                    inset=0 if config.full_page else config.panel_inset,
+                    extension=_extension(config),
                 )
                 draw_overlay(page, ordered, page_dir / "overlay.png",
                              inset=config.panel_inset)

@@ -29,7 +29,14 @@ from config import REPO_ROOT, parse_args  # noqa: E402
 
 def build_backends(config):
     """Real backends (or mocks when --mock). Raises SystemExit on missing
-    configuration (API key, endpoint, prompt files)."""
+    configuration (API key, endpoint, prompt files).
+
+    `--full-page` selects the gpt-image-2 backend: no YOLO detector (each page
+    gets one synthetic panel), and the character detector is only built for
+    `--atlas-source detected` (one VLM call per page). `--atlas-source cast`
+    needs no OpenRouter key at all — the characters step is a no-op and the
+    colorize step derives the atlas names from the chapter cast.
+    """
     if config.mock:
         from mock_backends import (
             MockCharacterDetector,
@@ -49,8 +56,13 @@ def build_backends(config):
         return Backends(
             detector=MockPanelDetector(),
             character_detector=character_detector,
-            colorizer=MockColorizer(),
+            colorizer=MockColorizer(
+                backend="gpt-image-2" if config.full_page else "flux"
+            ),
         )
+
+    if config.full_page:
+        return _build_full_page_backends(config)
 
     if not config.endpoint:
         raise SystemExit("--endpoint is required (e.g. http://spark:3000)")
@@ -77,7 +89,7 @@ def build_backends(config):
         chapter_casts_file=config.chapter_casts_file,
         chapter_page_map_file=config.chapter_page_map_file,
         cast_key=config.cast_key,
-        workers=config.workers,
+        worker_detection=config.worker_detection,
     )
     if not config.vlm_prompt_file.is_file():
         raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")
@@ -117,6 +129,87 @@ def build_backends(config):
     )
     return Backends(
         detector=detector,
+        character_detector=character_detector,
+        colorizer=colorizer,
+    )
+
+
+def _build_full_page_backends(config):
+    """Backends for `--full-page` (gpt-image-2 atlas mode).
+
+    - Detector: None — the panels step writes one synthetic full-page panel
+      per page without a detector (blank-page ink check still applies).
+    - Character detector: only for `--atlas-source detected` (one VLM call per
+      page, detection_mode forced to "page" by config validation); `cast` runs
+      with zero VLM calls, so the detector stays None and no OpenRouter key is
+      required.
+    - Colorizer: `GptImage2Colorizer` (OpenAI `images/edit`), keyed by
+      `--openai-api-key-env`.
+    """
+    from orchestrator import Backends
+
+    from config import parse_gpt_size
+    from gpt_colorizer import GptImage2Colorizer
+
+    openai_key = os.getenv(config.openai_api_key_env)
+    if not openai_key:
+        raise SystemExit(
+            f"Missing API key: set {config.openai_api_key_env} or add it to "
+            f"{REPO_ROOT / '.env'}"
+        )
+
+    character_detector = None
+    if config.atlas_source == "detected":
+        from characters import OpenRouterCharacterDetector
+
+        api_key = os.getenv(config.api_key_env)
+        if not api_key:
+            raise SystemExit(
+                f"Missing API key: set {config.api_key_env} or add it to "
+                f"{REPO_ROOT / '.env'}"
+            )
+        character_detector = OpenRouterCharacterDetector(
+            model=config.vlm_model,
+            api_key=api_key,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            profiles_file=config.profiles_file,
+            chapter_casts_file=config.chapter_casts_file,
+            chapter_page_map_file=config.chapter_page_map_file,
+            cast_key=config.cast_key,
+            worker_detection=config.worker_detection,
+        )
+        if not config.vlm_prompt_file.is_file():
+            raise SystemExit(f"prompt file not found: {config.vlm_prompt_file}")
+        character_detector.prepare(
+            config.refs_dir,
+            config.vlm_prompt_file,
+            config.vlm_panel_prompt_file,
+            config.vlm_panel_page_prompt_file,
+            config.vlm_panel_page_prev2_prompt_file,
+        )
+    else:
+        print(
+            "[full-page] --atlas-source cast: characters step is a no-op "
+            "(no OpenRouter key needed)",
+            file=sys.stderr,
+        )
+
+    if not config.gpt_image_prompt_file.is_file():
+        raise SystemExit(
+            f"prompt file not found: {config.gpt_image_prompt_file}"
+        )
+    prompt_template = config.gpt_image_prompt_file.read_text(encoding="utf-8")
+    colorizer = GptImage2Colorizer(
+        prompt_template=prompt_template,
+        model=config.gpt_model,
+        size=parse_gpt_size(config.gpt_size) if config.gpt_size else None,
+        atlas_scale=config.gpt_atlas_scale,
+        api_key_env=config.openai_api_key_env,
+        output_format=config.output_format,
+    )
+    return Backends(
+        detector=None,
         character_detector=character_detector,
         colorizer=colorizer,
     )

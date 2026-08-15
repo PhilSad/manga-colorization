@@ -56,6 +56,24 @@ FLUX_MIN_SIDE = 16
 # the floor must be upscaled client-side or they cannot be colorized at all.
 FLUX_MIN_AXIS = 64
 
+# OpenAI gpt-image-2 (images/edit) size constraints (API docs, verified by
+# research-v2): every edge a multiple of 16, area in [655,360, 8,294,400] px,
+# max edge <= 3840, aspect ratio <= 3:1. Full-page mode colorizes the whole
+# page at the *minimal* size that satisfies the API while preserving the
+# page's exact aspect ratio (see minimal_gpt_image_size).
+GPT_IMAGE_MULTIPLE = 16
+GPT_IMAGE_MIN_PIXELS = 655_360
+GPT_IMAGE_MAX_PIXELS = 8_294_400
+GPT_IMAGE_MAX_EDGE = 3840
+GPT_IMAGE_MAX_RATIO = 3.0
+# Quality is user-confirmed fixed at medium (no --gpt-quality flag);
+# research-v2 measured 672x1008 @ medium ~= $0.0499/page.
+GPT_IMAGE_QUALITY = "medium"
+# Default atlas prompt (generalized from research-v2/data/atlas/prompt.txt).
+DEFAULT_GPT_IMAGE_PROMPT_FILE = PIPELINE_DIR / "gpt_image_prompt.txt"
+DEFAULT_GPT_MODEL = "gpt-image-2"
+DEFAULT_OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+
 
 @dataclass
 class PipelineConfig:
@@ -70,7 +88,7 @@ class PipelineConfig:
     max_tokens: int = 1024
     temperature: float = 0.0
     sleep_s: float = 1.0
-    workers: int = 1               # parallel character-detection threads (1 = sequential)
+    worker_detection: int = 1      # parallel character-detection threads (1 = sequential)
     api_key_env: str = "OPENROUTER_API_KEY"
     # V1.1 (task 0003): one paid call per page with per-panel fallbacks; the
     # V1 per-panel behaviour; per-panel calls that send the full page as
@@ -108,6 +126,23 @@ class PipelineConfig:
     full_page_fallback: bool = True
     blank_ink_threshold: float = 0.005   # ink ratio below this -> blank page
     max_megapixels: float = 2.0          # FLUX request cap (area, MP)
+
+    # Full-page gpt-image-2 atlas mode: no panel extraction, the whole page is
+    # colorized in one call per page with a labelled reference atlas.
+    full_page: bool = False
+    # Where the atlas characters come from in full-page mode: "detected" =
+    # one VLM call per page (detection_mode forced to "page"); "cast" = the
+    # full chapter cast (auto-derived via cast_key_for_page / --cast-key),
+    # zero VLM calls (characters step becomes a no-op).
+    atlas_source: str = "detected"   # detected | cast
+    gpt_model: str = DEFAULT_GPT_MODEL
+    gpt_image_prompt_file: Path = DEFAULT_GPT_IMAGE_PROMPT_FILE
+    gpt_size: str | None = None      # optional "WxH" override (default: minimal)
+    gpt_atlas_scale: float = 1.0     # downscale the atlas before upload
+    openai_api_key_env: str = DEFAULT_OPENAI_API_KEY_ENV
+
+    # Parallel colorization worker threads (1 = sequential, current behavior).
+    worker_colorization: int = 1
 
     # Page selection (repo convention: --skip-first / --limit)
     skip_first: int = 0
@@ -150,7 +185,7 @@ class PipelineConfig:
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "sleep_s": self.sleep_s,
-            "workers": self.workers,
+            "worker_detection": self.worker_detection,
             "api_key_env": self.api_key_env,
             "detection_mode": self.detection_mode,
             "vlm_panel_page_prompt_file": str(self.vlm_panel_page_prompt_file),
@@ -171,6 +206,14 @@ class PipelineConfig:
             "full_page_fallback": self.full_page_fallback,
             "blank_ink_threshold": self.blank_ink_threshold,
             "max_megapixels": self.max_megapixels,
+            "full_page": self.full_page,
+            "atlas_source": self.atlas_source,
+            "gpt_model": self.gpt_model,
+            "gpt_image_prompt_file": str(self.gpt_image_prompt_file),
+            "gpt_size": self.gpt_size,
+            "gpt_atlas_scale": self.gpt_atlas_scale,
+            "openai_api_key_env": self.openai_api_key_env,
+            "worker_colorization": self.worker_colorization,
             "skip_first": self.skip_first,
             "limit": self.limit,
             "steps": list(self.steps),
@@ -205,8 +248,10 @@ def parse_steps(value: str | None) -> tuple[str, ...]:
 def _validate(config: PipelineConfig) -> None:
     if config.skip_first < 0:
         raise ValueError("--skip-first must be non-negative")
-    if config.workers < 1:
-        raise ValueError("--workers must be at least 1")
+    if config.worker_detection < 1:
+        raise ValueError("--worker-detection must be at least 1")
+    if config.worker_colorization < 1:
+        raise ValueError("--worker-colorization must be at least 1")
     if config.limit is not None and config.limit < 1:
         raise ValueError("--limit must be at least 1")
     if config.flux_steps < 1:
@@ -247,6 +292,29 @@ def _validate(config: PipelineConfig) -> None:
         parse_only_panel(key)
         if not names:
             raise ValueError(f"--force-characters {key} has no names")
+
+    # Full-page gpt-image-2 mode: `--atlas-source detected` forces the
+    # page-level detection mode (one VLM call per page); `--atlas-source cast`
+    # is full-page mode only (zero VLM calls).
+    if config.full_page:
+        if config.atlas_source == "detected" and config.detection_mode != "page":
+            print(
+                f"WARNING: --full-page --atlas-source detected forces "
+                f"--detection-mode 'page' (got {config.detection_mode!r})",
+                file=sys.stderr,
+                flush=True,
+            )
+            config.detection_mode = "page"
+    elif config.atlas_source == "cast":
+        raise ValueError("--atlas-source cast requires --full-page")
+    if config.atlas_source not in ("detected", "cast"):
+        raise ValueError(
+            f"--atlas-source must be 'detected' or 'cast', got {config.atlas_source!r}"
+        )
+    if not 0 < config.gpt_atlas_scale <= 1:
+        raise ValueError("--gpt-atlas-scale must be in (0, 1]")
+    if config.gpt_size is not None:
+        parse_gpt_size(config.gpt_size)  # raises ValueError on bad format/size
 
 
 def parse_args(argv: list[str] | None = None) -> PipelineConfig:
@@ -317,10 +385,15 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         help="OpenRouter sampling temperature for detection (0 = mostly deterministic)")
     parser.add_argument("--sleep", type=float, default=1.0,
                         help="Seconds between OpenRouter calls (rate-limit backoff "
-                             "is handled by the client; ignored when --workers > 1).")
-    parser.add_argument("--workers", type=int, default=1,
+                             "is handled by the client; ignored when "
+                             "--worker-detection > 1).")
+    parser.add_argument("--worker-detection", type=int, default=1,
                         help="Parallel character-detection worker threads "
                              "(1 = sequential; pages are processed concurrently).")
+    parser.add_argument("--worker-colorization", type=int, default=1,
+                        help="Parallel colorization worker threads over pages "
+                             "(1 = sequential; each page writes only its own "
+                             "3_colorized/<page>/ dir, so workers never race).")
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--atlas-columns", type=int,
                         help="Atlas grid columns (default: ceil(sqrt(n))).")
@@ -370,6 +443,39 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                              "detection call is made for them (repeatable).")
     parser.add_argument("--mock", action="store_true",
                         help="Use mock backends (no YOLO/OpenRouter/FLUX calls).")
+    parser.add_argument("--full-page", action="store_true",
+                        help="Full-page gpt-image-2 atlas mode: no panel "
+                             "extraction; the whole page is colorized in one call "
+                             "per page (minimal aspect-preserving API size).")
+    parser.add_argument("--atlas-source", choices=("detected", "cast"),
+                        default="detected",
+                        help="Where the atlas characters come from in full-page "
+                             "mode: 'detected' = one VLM call per page (forces "
+                             "--detection-mode page); 'cast' = the full chapter "
+                             "cast (auto-derived via cast_key_for_page / "
+                             "--cast-key), zero VLM calls. 'cast' requires "
+                             "--full-page.")
+    parser.add_argument("--gpt-model", default=DEFAULT_GPT_MODEL,
+                        help="OpenAI image model (default gpt-image-2).")
+    parser.add_argument("--gpt-image-prompt-file", type=Path,
+                        default=DEFAULT_GPT_IMAGE_PROMPT_FILE,
+                        help="Atlas prompt for full-page gpt-image-2 calls "
+                             "(default: pipeline_v1/gpt_image_prompt.txt).")
+    parser.add_argument("--gpt-size", default=None, metavar="WxH",
+                        help="Optional gpt-image-2 output size override for "
+                             "comparison runs; must satisfy the API constraints "
+                             "(edges multiples of 16, area in "
+                             "[655360, 8294400] px, max edge 3840, ratio <= 3:1). "
+                             "Default: minimal size preserving the page's aspect "
+                             "ratio.")
+    parser.add_argument("--gpt-atlas-scale", type=float, default=1.0, metavar="F",
+                        help="Downscale the built atlas by this factor before "
+                             "upload (e.g. 0.5 = half the edge length = 1/4 the "
+                             "pixels; gpt-image-2 bills input image tokens by "
+                             "size).")
+    parser.add_argument("--openai-api-key-env", default=DEFAULT_OPENAI_API_KEY_ENV,
+                        help="Env var holding the OpenAI API key for full-page "
+                             "gpt-image-2 calls (default OPENAI_API_KEY).")
     args = parser.parse_args(argv)
 
     try:
@@ -392,7 +498,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             sleep_s=args.sleep,
-            workers=args.workers,
+            worker_detection=args.worker_detection,
             api_key_env=args.api_key_env,
             detection_mode=args.detection_mode,
             cast_key=args.cast_key,
@@ -410,6 +516,14 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             full_page_fallback=args.full_page_fallback,
             blank_ink_threshold=args.blank_ink_threshold,
             max_megapixels=args.max_megapixels,
+            full_page=args.full_page,
+            atlas_source=args.atlas_source,
+            gpt_model=args.gpt_model,
+            gpt_image_prompt_file=args.gpt_image_prompt_file,
+            gpt_size=args.gpt_size,
+            gpt_atlas_scale=args.gpt_atlas_scale,
+            openai_api_key_env=args.openai_api_key_env,
+            worker_colorization=args.worker_colorization,
             skip_first=args.skip_first,
             limit=args.limit,
             steps=steps,
@@ -490,6 +604,91 @@ def requested_panel_size(width: int, height: int) -> tuple[int, int]:
     closest to the original with both axes multiples of 16 (user-confirmed
     size policy)."""
     return (nearest_multiple_of(width), nearest_multiple_of(height))
+
+
+def minimal_gpt_image_size(width: int, height: int) -> tuple[int, int]:
+    """Smallest gpt-image-2 output size that keeps the page's exact aspect
+    ratio while satisfying the API constraints (edges multiples of 16, area
+    >= GPT_IMAGE_MIN_PIXELS, max edge <= GPT_IMAGE_MAX_EDGE, ratio <= 3:1).
+
+    Exact-ratio, floor-driven algorithm (reproduces both research-v2 measured
+    sizes):
+      1. Reduce the page ratio to lowest terms: g = gcd(w, h), (w', h') = (w/g, h/g).
+      2. Smallest integer multiplier k such that both edges are multiples of
+         16: step = lcm(16/gcd(w',16), 16/gcd(h',16)).
+      3. Area floor: k_min = ceil(sqrt(655_360 / (w' * h'))).
+      4. k = smallest multiple of step >= k_min.
+      5. Return (w' * k, h' * k).
+
+    Raises ValueError when the page ratio is outside [1:3, 3:1] (the API
+    rejects every size at that ratio — fail loudly rather than distort).
+    """
+    if width <= 0 or height <= 0:
+        raise ValueError(f"page size must be positive, got {width}x{height}")
+    ratio = width / height
+    if not (1 / GPT_IMAGE_MAX_RATIO <= ratio <= GPT_IMAGE_MAX_RATIO):
+        raise ValueError(
+            f"page ratio {width}:{height} is outside [1:{int(GPT_IMAGE_MAX_RATIO)}, "
+            f"{int(GPT_IMAGE_MAX_RATIO)}:1]; gpt-image-2 rejects every size at "
+            "that ratio (no size can preserve the exact aspect ratio)"
+        )
+    g = math.gcd(width, height)
+    w_prime, h_prime = width // g, height // g
+    step = _gpt_ratio_step(w_prime, h_prime)
+    k_min = math.ceil(math.sqrt(GPT_IMAGE_MIN_PIXELS / (w_prime * h_prime)))
+    k = math.ceil(k_min / step) * step
+    size = (w_prime * k, h_prime * k)
+    # The API also caps the output (max edge 3840, max pixels 8.29 MP). The
+    # minimal exact-ratio size only scales up with k, so if it already
+    # violates the caps no larger k could satisfy them either — fail loudly
+    # rather than request a size the API rejects (e.g. a 2480x3508 scan whose
+    # reduced 620:877 ratio needs k=16 -> 9920x14032).
+    if max(size) > GPT_IMAGE_MAX_EDGE or size[0] * size[1] > GPT_IMAGE_MAX_PIXELS:
+        raise ValueError(
+            f"page ratio {width}:{height} has no minimal size within the API "
+            f"limits (max edge {GPT_IMAGE_MAX_EDGE}, max "
+            f"{GPT_IMAGE_MAX_PIXELS} px): smallest exact-ratio size would be "
+            f"{size[0]}x{size[1]}"
+        )
+    return size
+
+
+def _gpt_ratio_step(w_prime: int, h_prime: int) -> int:
+    """Smallest multiplier k such that both (w_prime * k) and (h_prime * k)
+    are multiples of 16: lcm(16/gcd(w',16), 16/gcd(h',16))."""
+    step_w = GPT_IMAGE_MULTIPLE // math.gcd(w_prime, GPT_IMAGE_MULTIPLE)
+    step_h = GPT_IMAGE_MULTIPLE // math.gcd(h_prime, GPT_IMAGE_MULTIPLE)
+    return step_w * step_h // math.gcd(step_w, step_h)
+
+
+def parse_gpt_size(value: str) -> tuple[int, int]:
+    """Parse and validate a --gpt-size "WxH" override against the API
+    constraints (multiples of 16, area range, max edge, ratio <= 3:1).
+    Raises ValueError on any violation."""
+    try:
+        w, h = (int(part) for part in value.lower().split("x"))
+    except ValueError:
+        raise ValueError(f"--gpt-size must be 'WxH' (e.g. 672x1008), got {value!r}")
+    if w % GPT_IMAGE_MULTIPLE or h % GPT_IMAGE_MULTIPLE:
+        raise ValueError(
+            f"--gpt-size {w}x{h}: both edges must be multiples of "
+            f"{GPT_IMAGE_MULTIPLE}"
+        )
+    if not (GPT_IMAGE_MIN_PIXELS <= w * h <= GPT_IMAGE_MAX_PIXELS):
+        raise ValueError(
+            f"--gpt-size {w}x{h}: area must be in "
+            f"[{GPT_IMAGE_MIN_PIXELS}, {GPT_IMAGE_MAX_PIXELS}] px"
+        )
+    if max(w, h) > GPT_IMAGE_MAX_EDGE:
+        raise ValueError(
+            f"--gpt-size {w}x{h}: max edge must be <= {GPT_IMAGE_MAX_EDGE}"
+        )
+    if not (1 / GPT_IMAGE_MAX_RATIO <= w / h <= GPT_IMAGE_MAX_RATIO):
+        raise ValueError(
+            f"--gpt-size {w}x{h}: aspect ratio must be <= "
+            f"{int(GPT_IMAGE_MAX_RATIO)}:1"
+        )
+    return (w, h)
 
 
 if __name__ == "__main__":

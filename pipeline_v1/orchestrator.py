@@ -23,7 +23,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from config import STEP_DIRS, STEP_ORDER, PipelineConfig
+from config import GPT_IMAGE_QUALITY, STEP_DIRS, STEP_ORDER, PipelineConfig
 from run_context import RunContext, iso_now, package_versions
 
 PIPELINE_NAME = "panel-wise-flux9b-lora"
@@ -112,6 +112,9 @@ class PipelineRunner:
                 "flux_calls": 0,
                 "successful_flux_calls": 0,
                 "panels_colorized": 0,
+                "gpt_image_calls": 0,
+                "successful_gpt_image_calls": 0,
+                "gpt_image_cost_usd": 0.0,
                 "panels_bw_fallback": 0,
                 "pages_stitched": 0,
                 "pages_annotated": 0,
@@ -129,6 +132,7 @@ class PipelineRunner:
             ("vlm_panel_page_prompt", self.config.vlm_panel_page_prompt_file),
             ("vlm_panel_page_prev2_prompt", self.config.vlm_panel_page_prev2_prompt_file),
             ("colorizer_prompt", self.config.colorizer_prompt_file),
+            ("gpt_image_prompt", self.config.gpt_image_prompt_file),
             ("profiles", self.config.profiles_file),
         ):
             try:
@@ -140,6 +144,41 @@ class PipelineRunner:
     def _pricing_assumptions(self) -> dict:
         if self.config.mock:
             return {"note": "mock backends: no external calls, no cost."}
+        colorization = {
+            "model": ("black-forest-labs/FLUX.2-klein-9B (step-distilled) + "
+                      "thedeoxen manga-colorization-by-reference LoRA"),
+            "hosting": "self-hosted BentoML server on the DGX Spark (see server/)",
+            "steps": 4,
+            "usd_per_call": 0.0,
+            "note": ("No per-call fee (electricity only, ~350-400 W during "
+                      "inference). Step-distilled model: guidance_scale is "
+                      "ignored by diffusers (CFG off). Do not compare with "
+                      "paid API pricing."),
+        }
+        if self.config.full_page:
+            # Full-page gpt-image-2 backend: the FLUX block above is the
+            # panel-mode default; this block records the paid backend that
+            # actually ran (manifest configuration also says full_page=true).
+            colorization = {
+                "model": self.config.gpt_model,
+                "quality": GPT_IMAGE_QUALITY,
+                "hosting": "OpenAI Images API (paid, standard tier)",
+                "size_policy": ("minimal aspect-preserving size satisfying the "
+                                 "API constraints (edges multiples of 16, area "
+                                 "in [655360, 8294400] px, max edge 3840, ratio "
+                                 "<= 3:1); --gpt-size overrides"),
+                "rates_usd_per_1m_tokens": {
+                    "image_input": 8.0,
+                    "text_input": 5.0,
+                    "image_output": 30.0,
+                    "text_output": 30.0,
+                },
+                "note": ("Measured est_cost_usd recorded per call and in "
+                          "totals.gpt_image_cost_usd. research-v2 measured "
+                          "672x1008 @ medium ~= $0.0499/page; the image-input "
+                          "floor is ~$0.019/page (atlas downscaled by "
+                          "--gpt-atlas-scale)."),
+            }
         return {
             "character_detection": {
                 "provider": "OpenRouter",
@@ -148,19 +187,10 @@ class PipelineRunner:
                 "cost_source": "usage.cost per call (USD), measured",
                 "note": ("Per-call cost is recorded in the 2_characters records. "
                           "panel-page-prev2 sends two extra full-page images per "
-                          "call: expect ~2-3x the panel-page prompt tokens."),
+                          "call: expect ~2-3x the panel-page prompt tokens. "
+                          "Full-page --atlas-source cast: zero VLM calls."),
             },
-            "colorization": {
-                "model": ("black-forest-labs/FLUX.2-klein-9B (step-distilled) + "
-                          "thedeoxen manga-colorization-by-reference LoRA"),
-                "hosting": "self-hosted BentoML server on the DGX Spark (see server/)",
-                "steps": 4,
-                "usd_per_call": 0.0,
-                "note": ("No per-call fee (electricity only, ~350-400 W during "
-                          "inference). Step-distilled model: guidance_scale is "
-                          "ignored by diffusers (CFG off). Do not compare with "
-                          "paid API pricing."),
-            },
+            "colorization": colorization,
         }
 
     # -- step selection -----------------------------------------------------
@@ -242,11 +272,23 @@ class PipelineRunner:
 
             record = run_colorize_step(ctx, self.config, self.backends.colorizer)
             totals = record["totals"]
-            self.manifest_totals_update(ctx, {
-                "flux_calls": totals["api_calls"],
-                "successful_flux_calls": totals["successful_calls"],
-                "panels_colorized": totals["successful_calls"],
-            })
+            if self.config.full_page:
+                # gpt-image-2 backend: per-call est_cost_usd (None for failed
+                # calls or missing usage) is summed into gpt_image_cost_usd.
+                cost = sum(
+                    (r.get("est_cost_usd") or 0.0) for r in record["records"]
+                )
+                self.manifest_totals_update(ctx, {
+                    "gpt_image_calls": totals["api_calls"],
+                    "successful_gpt_image_calls": totals["successful_calls"],
+                    "gpt_image_cost_usd": cost,
+                })
+            else:
+                self.manifest_totals_update(ctx, {
+                    "flux_calls": totals["api_calls"],
+                    "successful_flux_calls": totals["successful_calls"],
+                    "panels_colorized": totals["successful_calls"],
+                })
         elif step == "stitch":
             from steps.stitch import run_stitch_step
 

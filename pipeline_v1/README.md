@@ -68,6 +68,9 @@ records, measured costs).
   The compose deployment serves the step-distilled checkpoint with the LoRA
   loaded at 4 steps (`FLUX2_STEPS=4`).
 - `OPENROUTER_API_KEY` must be in the repo `.env` (paid tier).
+- Full-page mode (`--full-page`) uses OpenAI `gpt-image-2` instead: it needs
+  `OPENAI_API_KEY` in `.env` (paid tier) and does **not** need the Spark server
+  or the YOLO weights.
 
 ## Usage
 
@@ -94,6 +97,37 @@ Offline demo (mock backends, no API keys, no server):
 .venv/bin/python pipeline_v1/run.py --mock --limit 1
 ```
 
+### Full-page gpt-image-2 mode
+
+`--full-page` skips panel extraction entirely: the whole page is colorized in
+one OpenAI `gpt-image-2` call with a labelled reference atlas + palette
+instruction, at the smallest output size that keeps the page's aspect ratio
+(see Size policy below). The five pipeline stages still run and write the same
+output layout (one synthetic `panel_0001` per page).
+
+```bash
+# One VLM call per page to pick the atlas characters (default):
+.venv/bin/python pipeline_v1/run.py \
+  --input-dir data/chapter_134 --refs-dir data/refs \
+  --full-page --atlas-source detected --skip-first 3 --limit 5
+
+# Zero VLM calls: full chapter cast for the atlas (no OpenRouter key needed):
+.venv/bin/python pipeline_v1/run.py \
+  --input-dir data/chapter_134 --refs-dir data/refs \
+  --full-page --atlas-source cast --skip-first 3 --limit 5
+```
+
+Full-page flags: `--full-page`, `--atlas-source detected|cast` (cast requires
+`--full-page`; detected forces `--detection-mode page`), `--gpt-model`
+(default `gpt-image-2`), `--gpt-image-prompt-file`, `--gpt-size WxH` (override
+the computed minimal size; must satisfy the API constraints), `--gpt-atlas-scale`
+(downscale the atlas before upload), `--openai-api-key-env`.
+
+Quality is fixed at `medium` (no flag) — the research-v2 measured sweet spot
+(672×1008 @ medium ≈ $0.0499/page). gpt-image-2 calls retry transient errors
+with exponential backoff (up to 3 retries) and then fail loudly
+(`ColorizeRecord(status="error")`).
+
 Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
 `--from-step colorize`, `--resume <previous-run-dir>` (re-uses its step
 outputs; with `--from-step` only the earlier step outputs are copied, task
@@ -112,9 +146,12 @@ per-chapter cast shortlist, same resolution as panel-page-cast),
 `--only-panel P003:panel_0006` (targeted rerun; repeatable),
 `--force-characters P003:panel_0006=Frieren` (ground-truth identities, no
 paid detection call; repeatable),
-`--workers N` (parallel character-detection worker threads: pages are
+`--worker-detection N` (parallel character-detection worker threads: pages are
 processed concurrently, one page per thread; the per-panel progress bars and
 the `--sleep` throttle are disabled when N > 1),
+`--worker-colorization N` (parallel colorization worker threads over pages —
+in full-page mode this parallelizes the paid gpt-image-2 calls directly; the
+per-panel progress bars are replaced by a single page bar when N > 1),
 `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
 FLUX call that errored — is stitched from its original black & white crop
 instead of failing the stitch step; each fallback is logged to stderr and
@@ -165,6 +202,15 @@ colorize poorly (no upscaling). Since V1.1 (task 0004) oversized inputs
 (`> --max-megapixels`, default 2.0 MP) are scaled down proportionally to the
 cap (multiples of 16); the original/requested size, scale, and applied cap are
 recorded per call.
+
+**Full-page mode** uses `config.minimal_gpt_image_size(w, h)` instead: the
+smallest output size that keeps the page's exact aspect ratio while satisfying
+the gpt-image-2 API constraints (edges multiples of 16, area in
+[655,360, 8,294,400] px, max edge 3840, ratio ≤ 3:1). Measured examples:
+1500×2250 (2:3) → **672×1008**; a 3000×2250 spread (4:3) → **960×720**; a
+300 dpi B5 scan (2480×3508) has no exact-ratio size within the caps and is
+rejected loudly (`ValueError`) rather than distorted. `--gpt-size WxH` overrides
+the computed size for comparison runs.
 
 ## V1.1 evaluation (tasks 0001–0004)
 
@@ -250,6 +296,14 @@ recorded per call.
   only, ~350–400 W during inference). Step-distilled 9B + LoRA at 4 steps is
   fast (roughly the fal 4-step endpoint's timing); the undistilled base would
   be ~5× slower. Do not compare with paid API pricing.
+- **Full-page mode** (OpenAI `gpt-image-2`, standard tier): paid per call.
+  Projected from research-v2 measurements: ≈ **$0.0499/page** at the minimal
+  672×1008 size (1029 output tokens; input floor ≈ $0.019/page with the
+  4-character atlas), i.e. ≈ **$9.32 for volume 1** (187 pages) — a
+  projection, not yet measured through the pipeline; the manifest records
+  `totals.gpt_image_calls` / `totals.gpt_image_cost_usd` from each call's
+  parsed usage (image input $8/1M, text input $5/1M, image+text output
+  $30/1M).
 
 ## Testing
 
@@ -262,7 +316,9 @@ Offline (no network, $0): unit tests per stage plus an end-to-end suite
 running the whole pipeline with mock backends on a synthetic manga page,
 including page-level character detection, targeted reruns (`--only-panel` /
 `--resume --from-step`), forced ground-truth identities, full-page fallback,
-blank-page skip, and the megapixel cap. Integration tests are marked
+blank-page skip, and the megapixel cap. `tests/test_full_page.py` covers the
+`--full-page` gpt-image-2 mode end to end with mock backends (detected and
+cast atlas sources, parallel colorization). Integration tests are marked
 `integration` and excluded by default (`addopts = "-m 'not integration'"`).
 
 **Integration suite** — no mocks, real API calls, one timestamped output

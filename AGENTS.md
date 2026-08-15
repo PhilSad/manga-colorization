@@ -208,12 +208,22 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   (4 for the step-distilled model), `--lora-scale`, `--seed`, `--detection-mode`,
   `--cast-key`, `--only-panel PAGE:PANEL` (targeted rerun),
   `--force-characters PAGE:PANEL=Name` (ground-truth identities, no paid
-  call), `--workers N` (parallel page-level detection),
+  call), `--worker-detection N` (parallel page-level detection),
+  `--worker-colorization N` (parallel page-level colorization — parallelizes
+  the paid gpt-image-2 calls directly in full-page mode),
   `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
   failed FLUX call — is stitched from its original B&W crop instead of failing
   the stitch step; each fallback is logged to stderr and recorded per page and
   in `totals.panels_bw_fallback`), `--debug-font-size` / `--debug-bbox-width`
   (5_debug rendering knobs).
+- Full-page mode: `--full-page` skips panel extraction entirely and colorizes
+  the whole page in one OpenAI `gpt-image-2` call (atlas + palette
+  instruction, minimal aspect-preserving size). `--atlas-source {detected,cast}`
+  picks where the atlas characters come from: `detected` (default) forces
+  `--detection-mode page` (one VLM call per page), `cast` skips character
+  detection entirely (zero VLM calls, `OPENROUTER_API_KEY` not needed — only
+  `OPENAI_API_KEY`). `--atlas-source cast` requires `--full-page`. See
+  `pipeline_v1/README.md` §Full-page gpt-image-2 mode.
 - Debug annotation: the pipeline's final `debug` step (see step 6 above)
   writes `5_debug/` automatically at the end of every run. Its offline
   companion, `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`,
@@ -227,7 +237,9 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   filter), `--font-size`, `--bbox-width`. Offline, needs no
   backends/network, and never modifies the run's own outputs.
 - Requirements: `OPENROUTER_API_KEY` in `.env` (paid detection) and the Spark
-  FLUX server running (`curl http://spark:3000/healthz`). Offline demo without
+  FLUX server running (`curl http://spark:3000/healthz`); full-page mode
+  (`--full-page`) instead needs `OPENAI_API_KEY` in `.env` (paid gpt-image-2)
+  and no Spark server. Offline demo without
   any of that: `pipeline_v1/run.py --mock --limit 1` (mock backends). Tests:
   `.venv/bin/pytest pipeline_v1/tests -q` (fully offline; the real full-pipeline
   run with real backends is covered by the `integration`-marked
@@ -236,7 +248,9 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 - Cost: character detection ~$0.00008/panel (measured via `usage.cost`, paid
   OpenRouter tier; recorded in `2_characters/` and the manifest
   `totals.openrouter_cost_usd`); colorization $0 per call (self-hosted FLUX on
-  Spark, electricity only).
+  Spark, electricity only). Full-page mode: gpt-image-2 is a paid API —
+  projected ≈ $0.0499/page at the minimal 672×1008 size (research-v2
+  measurement, standard tier), recorded in `totals.gpt_image_cost_usd`.
 - Evaluation: the fixed failure set (`evaluation/v1_1_cases.json`) is run by
   the real-network integration suite — `.venv/bin/pytest pipeline_v1/tests -m integration -n 8` —
   (pytest-xdist, 8 parallel workers; each worker is its own pytest session and

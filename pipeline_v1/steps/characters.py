@@ -70,12 +70,12 @@ def run_characters_step(
 ) -> dict:
     """Run stage 3 for all panels extracted by stage 1+2.
 
-    Pages are independent units of work: with `--workers N`
-    (config.workers) they are processed concurrently by a
+    Pages are independent units of work: with `--worker-detection N`
+    (config.worker_detection) they are processed concurrently by a
     ThreadPoolExecutor. Every per-page write goes to its own
     `2_characters/<page>/` directory, so worker threads never race on the
     same files; per-page results/totals are merged back in the main thread
-    as futures complete. workers=1 keeps the original sequential
+    as futures complete. worker_detection=1 keeps the original sequential
     behaviour, including per-panel progress bars and the `--sleep` page
     throttle (ignored when workers > 1).
     """
@@ -88,6 +88,26 @@ def run_characters_step(
         raise ValueError(
             f"no extracted panels under {panels_root}; run the 'panels' step first"
         )
+
+    if config.full_page and config.atlas_source == "cast":
+        # Full-page + --atlas-source cast: the characters step is a no-op.
+        # The colorize step derives the atlas names from the chapter cast
+        # itself (zero VLM calls; no OpenRouter key required).
+        print(
+            "characters: --atlas-source cast: step is a no-op (no VLM calls; "
+            "atlas names derived from the chapter cast in the colorize step)",
+            flush=True,
+        )
+        totals = _new_totals()
+        summary = {
+            "records": [],
+            "totals": totals,
+            "skipped": True,
+            "reason": "atlas-source cast: atlas names derived from the "
+                       "chapter cast in the colorize step",
+        }
+        write_json(ctx.step_dir("characters") / "summary.json", summary)
+        return {"records": [], "totals": totals, "skipped": True}
 
     profiles = {}
     try:
@@ -104,7 +124,7 @@ def run_characters_step(
         leave=False,
     )
     try:
-        if config.workers <= 1:
+        if config.worker_detection <= 1:
             for page_dir in page_dirs:
                 page_records, page_totals, worked = _process_page(
                     ctx, config, strategy, page_dir, profiles
@@ -116,7 +136,7 @@ def run_characters_step(
                 pages_bar.update(1)
         else:
             with ThreadPoolExecutor(
-                max_workers=config.workers, thread_name_prefix="characters"
+                max_workers=config.worker_detection, thread_name_prefix="characters"
             ) as pool:
                 futures = {
                     pool.submit(

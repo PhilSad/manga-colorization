@@ -7,10 +7,15 @@ from pathlib import Path
 import pytest
 
 from config import (
+    GPT_IMAGE_MAX_EDGE,
+    GPT_IMAGE_MAX_PIXELS,
+    GPT_IMAGE_MIN_PIXELS,
     STEP_ORDER,
     PipelineConfig,
+    minimal_gpt_image_size,
     nearest_multiple_of,
     parse_args,
+    parse_gpt_size,
     parse_steps,
     requested_panel_size,
 )
@@ -184,3 +189,182 @@ def test_requested_panel_size():
     w, h = requested_panel_size(1200, 1800)
     assert w % 16 == 0 and h % 16 == 0
     assert abs(w - 1200) <= 8 and abs(h - 1800) <= 8
+
+
+# ---------------------------------------------------------------------------
+# V1.2 full-page gpt-image-2: new flags and validation
+
+def test_full_page_flags_parse():
+    config = parse_args([
+        "--full-page",
+        "--atlas-source", "cast",
+        "--worker-detection", "4",
+        "--worker-colorization", "2",
+        "--gpt-model", "gpt-image-2-preview",
+        "--gpt-size", "1024x1536",
+        "--gpt-atlas-scale", "0.5",
+        "--gpt-image-prompt-file", "custom/gpt.txt",
+        "--openai-api-key-env", "MY_OPENAI_KEY",
+    ])
+    assert config.full_page is True
+    assert config.atlas_source == "cast"
+    assert config.worker_detection == 4
+    assert config.worker_colorization == 2
+    assert config.gpt_model == "gpt-image-2-preview"
+    assert config.gpt_size == "1024x1536"
+    assert config.gpt_atlas_scale == 0.5
+    assert config.gpt_image_prompt_file == Path("custom/gpt.txt")
+    assert config.openai_api_key_env == "MY_OPENAI_KEY"
+    doc = config.to_dict()
+    assert doc["worker_detection"] == 4
+    assert doc["worker_colorization"] == 2
+    assert doc["full_page"] is True
+
+
+def test_full_page_detected_forces_page_detection_mode(capsys):
+    config = parse_args(["--full-page", "--detection-mode", "panel"])
+    # _validate coerces page mode for --atlas-source detected (the default).
+    assert config.detection_mode == "page"
+    assert "forces --detection-mode 'page'" in capsys.readouterr().err
+
+
+def test_atlas_source_cast_requires_full_page():
+    with pytest.raises(SystemExit):
+        parse_args(["--atlas-source", "cast"])
+
+
+def test_atlas_source_value_validated():
+    with pytest.raises(SystemExit):
+        parse_args(["--full-page", "--atlas-source", "everything"])
+
+
+def test_workers_flag_removed():
+    # The old umbrella --workers flag is gone: --worker-detection /
+    # --worker-colorization replaced it.
+    with pytest.raises(SystemExit):
+        parse_args(["--workers", "4"])
+
+
+def test_worker_flags_parse():
+    config = parse_args(["--worker-detection", "3"])
+    assert config.worker_detection == 3
+    assert config.worker_colorization == 1  # default stays 1
+    config = parse_args(["--worker-colorization", "6"])
+    assert config.worker_detection == 1
+    assert config.worker_colorization == 6
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--worker-detection", "0"],
+        ["--worker-detection", "-1"],
+        ["--worker-colorization", "0"],
+        ["--worker-colorization", "-1"],
+    ],
+)
+def test_worker_flags_reject_less_than_one(argv):
+    with pytest.raises(SystemExit):
+        parse_args(argv)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--gpt-atlas-scale", "0"],
+        ["--gpt-atlas-scale", "-0.5"],
+        ["--gpt-atlas-scale", "1.5"],
+        ["--gpt-atlas-scale", "2"],
+    ],
+)
+def test_gpt_atlas_scale_validated(argv):
+    with pytest.raises(SystemExit):
+        parse_args(argv)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--gpt-size", "abc"],
+        ["--gpt-size", "672"],          # not WxH
+        ["--gpt-size", "672x"],         # not WxH
+        ["--gpt-size", "671x1008"],     # not a multiple of 16
+        ["--gpt-size", "672x672"],      # below the pixel floor
+        ["--gpt-size", "4096x2048"],    # over max edge / max pixels
+        ["--gpt-size", "4000x1000"],    # 4:1 ratio > 3:1
+    ],
+)
+def test_gpt_size_validated(argv):
+    with pytest.raises(SystemExit):
+        parse_args(argv)
+
+
+def test_parse_gpt_size():
+    assert parse_gpt_size("672x1008") == (672, 1008)
+    assert parse_gpt_size("1024x1536") == (1024, 1536)
+    assert parse_gpt_size("3840x2160") == (3840, 2160)
+    with pytest.raises(ValueError):
+        parse_gpt_size("abc")
+    with pytest.raises(ValueError):
+        parse_gpt_size("672")
+
+
+# ---------------------------------------------------------------------------
+# minimal_gpt_image_size (full-page output size policy)
+
+def test_minimal_gpt_image_size_plan_examples():
+    # Research-v2 measured sizes must be reproduced exactly.
+    assert minimal_gpt_image_size(1500, 2250) == (672, 1008)   # 2:3
+    assert minimal_gpt_image_size(1200, 1800) == (672, 1008)
+    assert minimal_gpt_image_size(3000, 2250) == (960, 720)    # 4:3 spread
+    # Already minimal: never upscales.
+    assert minimal_gpt_image_size(672, 1008) == (672, 1008)
+
+
+@pytest.mark.parametrize(
+    "width,height",
+    [
+        (1500, 2250),   # 2:3 manga page (research-v2)
+        (3000, 2250),   # 4:3 spread
+        (2000, 2000),   # square
+        (3840, 2160),   # 16:9
+        (700, 1000),    # odd prime-ish ratio
+        # NOTE: 1240x1754 / 2480x3508 (B5 scans) are deliberately absent: their
+        # exact ratios are unsolvable within the API caps and must raise
+        # (see test_minimal_gpt_image_size_rejects_unsolvable_ratios).
+    ],
+)
+def test_minimal_gpt_image_size_constraints(width, height):
+    w, h = minimal_gpt_image_size(width, height)
+    assert w % 16 == 0 and h % 16 == 0
+    assert GPT_IMAGE_MIN_PIXELS <= w * h <= GPT_IMAGE_MAX_PIXELS
+    assert max(w, h) <= GPT_IMAGE_MAX_EDGE
+    # Exact aspect ratio is preserved (the whole point of the policy).
+    assert w / h == pytest.approx(width / height)
+    assert w * h >= GPT_IMAGE_MIN_PIXELS
+
+
+def test_minimal_gpt_image_size_is_minimal():
+    # For the 2:3 headline case: one 16px step smaller falls below the
+    # pixel floor, so (672, 1008) is the smallest valid exact-ratio size.
+    assert 672 * 1008 >= GPT_IMAGE_MIN_PIXELS
+    assert 656 * 984 < GPT_IMAGE_MIN_PIXELS
+
+
+def test_minimal_gpt_image_size_rejects_unsolvable_ratios():
+    # 4:1 — every size at that ratio is rejected by the API: fail loudly
+    # rather than distort.
+    with pytest.raises(ValueError, match="outside"):
+        minimal_gpt_image_size(4000, 1000)
+    with pytest.raises(ValueError, match="outside"):
+        minimal_gpt_image_size(500, 2000)  # 1:4
+    # 2480x3508 (300 dpi B5): reduced ratio 620:877 needs k=16 ->
+    # 9920x14032, beyond the max edge/pixels; no exact-ratio size exists.
+    with pytest.raises(ValueError, match="no minimal size"):
+        minimal_gpt_image_size(2480, 3508)
+    with pytest.raises(ValueError, match="no minimal size"):
+        minimal_gpt_image_size(1240, 1754)
+    with pytest.raises(ValueError, match="positive"):
+        minimal_gpt_image_size(0, 100)
+    with pytest.raises(ValueError, match="positive"):
+        minimal_gpt_image_size(100, -5)

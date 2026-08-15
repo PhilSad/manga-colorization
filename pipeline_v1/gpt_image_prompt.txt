@@ -1,0 +1,20 @@
+Colorize the manga page using the labelled character reference atlas.
+
+The second image is an atlas with each character's canonical colors labelled.
+Use the correct character colors from the atlas for hair, eyes, skin, clothing
+and accessories whenever that character appears, but keep the page's own
+lineart, poses, orientation, composition, panel borders, screentones,
+lettering, and gutters exactly as in the black and white version. Do not copy
+the atlas layout, labels, borders, or background into the output; only the
+colors should transfer.
+
+{atlas_instruction}
+
+{character_profiles}
+
+For elements without reference evidence, invent harmonious, restrained anime
+colors that fit the scene.
+
+Return only the colorized version of the page at exactly {width}x{height};
+do not crop, rotate, rearrange, smooth, repaint, remove, or invent any story
+element.

@@ -1234,8 +1234,8 @@ def test_characters_step_panel_page_prev2_mode(tmp_path):
 
 
 def test_characters_step_threaded_matches_sequential(tmp_path):
-    """`--workers N` parallelizes pages but produces identical totals and
-    per-panel records (page-scoped writes never race)."""
+    """`--worker-detection N` parallelizes pages but produces identical
+    totals and per-panel records (page-scoped writes never race)."""
     from mock_backends import MockPageCharacterDetector
     from run_context import RunContext
     from steps.characters import run_characters_step
@@ -1248,7 +1248,7 @@ def test_characters_step_threaded_matches_sequential(tmp_path):
     def run(workers: int) -> dict:
         config = make_step_fixture(tmp_path / f"w{workers}")
         config.detection_mode = "panel-page"
-        config.workers = workers
+        config.worker_detection = workers
         ctx = RunContext.create(tmp_path / f"output{workers}", {"status": "running"})
         for page_stem, panel_map in panel_map_by_page.items():
             panels_root = ctx.step_dir("panels") / page_stem

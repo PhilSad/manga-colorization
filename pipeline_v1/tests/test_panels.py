@@ -186,3 +186,48 @@ def make_ctx(tmp_path):
     from run_context import RunContext
 
     return RunContext.create(tmp_path / "output", {"status": "running"})
+
+
+# ---------------------------------------------------------------------------
+# full-page mode (--full-page): one synthetic panel, detector never invoked
+
+class ExplodingDetector:
+    def detect(self, page):
+        raise AssertionError("full-page mode must not call the panel detector")
+
+
+def test_full_page_mode_single_synthetic_panel(tmp_path):
+    page = make_page(tmp_path / "pages", "p006.png", ink=True)
+    config = make_config(tmp_path, full_page=True)
+    ctx = make_ctx(tmp_path)
+    result = run_panels_step(ctx, config, ExplodingDetector())
+
+    geometry = read_json(ctx.run_dir / "1_panels" / "p006" / "panels.json")
+    assert geometry["blank_page"] is False
+    assert geometry["full_page_fallback"] is False  # not the fallback path
+    assert len(geometry["detections"]) == 1
+    detection = geometry["detections"][0]
+    assert detection["box"] == [0, 0, 500, 700]
+    assert detection["crop"] == "panel_0001.png"
+    assert detection["provenance"] == "full-page-mode"
+    # The crop is the entire page (inset forced to 0).
+    crop = ctx.run_dir / "1_panels" / "p006" / "panel_0001.png"
+    with Image.open(crop) as image:
+        assert image.size == (500, 700)
+    assert result["pages"][0]["full_page_fallback"] is False
+    assert result["pages"][0]["blank_page"] is False
+
+
+def test_full_page_mode_blank_page_still_skipped(tmp_path):
+    page = make_page(tmp_path / "pages", "blank.png")  # all white
+    config = make_config(tmp_path, full_page=True)
+    ctx = make_ctx(tmp_path)
+    run_panels_step(ctx, config, ExplodingDetector())
+
+    geometry = read_json(ctx.run_dir / "1_panels" / "blank" / "panels.json")
+    assert geometry["blank_page"] is True
+    assert geometry["skip_reason"] == "blank-page"
+    assert geometry["detections"] == []
+    page_dir = ctx.run_dir / "1_panels" / "blank"
+    assert not (page_dir / "panel_0001.png").exists()
+    assert not (page_dir / "overlay.png").exists()

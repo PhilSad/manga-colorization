@@ -600,3 +600,49 @@ stitched page):
 | vol1 p003 | vol1 p008 | ch134 0134-004 |
 |---|---|---|
 | ![p003](docs/pipeline_v1/v11-vol1-p003.png) | ![p008](docs/pipeline_v1/v11-vol1-p008.png) | ![0134-004](docs/pipeline_v1/v11-ch134-0134-004.png) |
+
+---
+
+## Full-page gpt-image-2 atlas mode (pipeline_v1 `--full-page`)
+
+A second colorization backend for the same pipeline skeleton, ported from the
+`research-v2` atlas method: **no panel extraction** — the whole page is
+colorized in one OpenAI `gpt-image-2` `images.edit` call (page + labelled
+reference atlas + explicit palette instruction from
+`character_profiles.json`), at the smallest output size that preserves the
+page's exact aspect ratio (`config.minimal_gpt_image_size`). The five stages
+still run and write the same `output/<ts>/` layout with one synthetic
+`panel_0001` per page (`provenance: full-page-mode`), so `--resume`,
+`--from-step`, `--only-panel`, `--mock` and the debug annotation all keep
+working unchanged.
+
+- **Flags:** `--full-page`; `--atlas-source detected|cast` — `detected`
+  (default) forces the page-level VLM detection mode (one
+  `google/gemma-4-31b-it` call per page), `cast` skips character detection
+  entirely (zero VLM calls, `OPENROUTER_API_KEY` not needed; the colorize
+  step derives the chapter cast via `cast_key_for_page` / `--cast-key`, full
+  canonical roster fallback when no cast is derivable). `--atlas-source cast`
+  requires `--full-page`. Optional: `--gpt-size WxH` (override), `--gpt-model`,
+  `--gpt-atlas-scale` (downscale the atlas before upload). Quality is fixed at
+  `medium`; calls retry transient errors with backoff (≤ 3 retries) and then
+  fail loudly.
+- **Size policy:** minimal exact-ratio size — 1500×2250 (2:3) → **672×1008**,
+  3000×2250 spread (4:3) → **960×720** (both match the research-v2 measured
+  runs); 300 dpi B5 scans (2480×3508) are unsolvable within the API caps and
+  are rejected loudly instead of distorted.
+- **Cost (projected, not yet measured through the pipeline):** research-v2
+  measured **$0.0499/page** at 672×1008 @ medium (1029 output tokens; input
+  floor ≈ $0.019/page with the 4-character atlas) — standard tier. Volume-1
+  projection (187 pages, all 1500×2250): **≈ $9.32**. The input-cost floor
+  dominates the cheap sizes; halving the output edge only halves the *output*
+  component (see research-v2's full 8-size ladder). A real pipeline run will
+  replace these projections with measured per-call usage from the manifest
+  (`totals.gpt_image_calls` / `totals.gpt_image_cost_usd`).
+- **Backend comparison:** FLUX panel mode is $0/call + electricity on Spark
+  (free but panel-wise, per-panel coherence); gpt-image-2 full-page mode is a
+  paid API (~$0.05/page) with page-level coherence in a single call — the
+  comparison is quality vs cost, and this mode is the pipeline-level
+  counterpart of the `research-v2` atlas method.
+- **Status:** implemented, offline-tested (`tests/test_full_page.py`, mock
+  backends; full offline suite green). Real-run evaluation pending — see the
+  plan's verification list (`docs/plans/fullpage-gpt-image2-atlas.md`).

@@ -191,9 +191,12 @@ Flags: `--model`, `--quality` (repeatable; `low|medium|high|auto`),
 ratio ≤ 3:1, 655,360–8,294,400 px), `--output-format` (`png|jpeg|webp`),
 `--input-dir`, `--orig-file` (default `<input-dir>/orig.png`; colorize any
 page/panel directly), `--prompt-file`, `--output-root`, `--env-file`,
-`--atlas-chars`, `--refs-dir`, `--no-reference`. Cost: paid OpenAI API; `gpt-image-2` bills
-image input $8/1M tokens, text input $5/1M, image output $30/1M (standard
-tier) and always processes image inputs at high fidelity.
+`--atlas-chars`, `--refs-dir`, `--atlas-scale F`, `--resize-input WxH`
+(downscale the primary B&W input to WxH, LANCZOS, before sending; the
+reference image is untouched — an input-cost knob, see the input-resize
+benchmark below), `--no-reference`. Cost: paid OpenAI API; `gpt-image-2`
+bills image input $8/1M tokens, text input $5/1M, image output $30/1M
+(standard tier) and always processes image inputs at high fidelity.
 
 ### Quality sweep run 20260815-082623 (2880×2240, 2 reference images)
 
@@ -325,6 +328,30 @@ All 6 pages together: **$0.303**. p009 was re-run for a complete,
 self-contained batch (identical inputs to 20260815-092433, same cost).
 Grid overview (all pages at the same visual scale, labelled with size +
 cost): `output/pages_all_small_grid.jpg`; full-res PNGs in each run dir.
+
+### Input-size reduction: page at the small-output size (run 20260815-135825)
+
+Follow-up on the size sweep: what does it cost if the **input** page is
+downscaled to the same size as the small output (672×1008) instead of being
+sent at native 1500×2250? Same p009, same 4-character atlas (720×960,
+untouched), same prompt, `medium`, output 672×1008. New flag
+`--resize-input 672x1008` (the resized copy is written into the run dir; the
+source page is never modified).
+
+| variant | input image tokens | cost (measured) | latency |
+|---|---:|---:|---:|
+| page 1500×2250 + atlas 720×960 (baseline, 20260815-092433) | 2304 | $0.0499 | 59 s |
+| page resized 672×1008 + atlas 720×960 (20260815-135825) | 1472 | $0.0432 | 47 s |
+
+The resized page alone bills **704 image tokens** (1472 − 768 for the atlas)
+— roughly linear below ~0.7 MP (the larger pages in earlier runs showed
+saturated billing ~1450–1540 tokens regardless of size). Savings: input
+image tokens 2304 → 1472 (−36%), total cost $0.0499 → $0.0432 (−13%);
+output tokens are unchanged (1029, size-driven). This is the last cheap
+input cut for the atlas method: **the 720×960 atlas itself already bills
+768 tokens, more than the downscaled page** — if the input bill matters,
+`--atlas-scale` on the atlas is the next knob (e.g. 0.5 → 360×480 ≈ 192
+tokens expected, ~$0.005 saved per image, subject to reference legibility).
 
 ## Conventions
 

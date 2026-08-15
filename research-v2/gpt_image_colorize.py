@@ -17,6 +17,11 @@ references) and the script runs the edit once per requested quality (default:
 low, medium, high) so the quality settings can be compared on identical
 inputs.
 
+--resize-input WxH downscales the primary B&W input (orig) to the given size
+before sending (LANCZOS, into the run dir) — a knob to measure how the billed
+input image tokens respond to smaller inputs; the reference image is left
+untouched.
+
 Output: research-v2/output/<YYYYMMDD-HHMMSS>/ with one PNG per quality
 (quality_<low|medium|high>.png) and a manifest.json recording the prompt,
 config, per-quality timestamps/duration, the API's `usage` (if returned) and
@@ -97,6 +102,17 @@ def main() -> int:
                     "input image instead of patch.png")
     ap.add_argument("--refs-dir", default=str(REPO_ROOT / "data" / "refs"),
                     help="reference images dir for --atlas-chars (default: data/refs)")
+    ap.add_argument("--atlas-scale", type=float, default=1.0, metavar="F",
+                    help="resize the built atlas by this factor before sending "
+                    "(e.g. 0.5 = half the edge length = 1/4 the pixels, 0.25 = "
+                    "quarter edge = 1/16 pixels). Experiment: gpt-image-2 bills "
+                    "input image tokens by size, so a smaller atlas should cut "
+                    "the fixed input cost.")
+    ap.add_argument("--resize-input", default=None, metavar="WxH",
+                    help="resize the primary B&W input image (orig) to WxH "
+                    "(LANCZOS) before sending; the reference image "
+                    "(atlas/patch.png) is untouched. Use e.g. 672x1008 to bill "
+                    "the main input at the same size as a small output.")
     ap.add_argument("--no-reference", action="store_true",
                     help="send only orig.png (no patch/atlas reference image)")
     args = ap.parse_args()
@@ -158,10 +174,30 @@ def main() -> int:
         run_dir.mkdir(parents=True, exist_ok=False)
 
     prompt = prompt_path.read_text().strip()
+
+    # Optional input downscaling: apply to the primary B&W image only. The
+    # resized copy is written into the run dir (never touches the source).
+    orig_sent = orig_path
+    resize_applied = None
+    if args.resize_input:
+        rw, rh = (int(v) for v in args.resize_input.lower().split("x"))
+        with Image.open(orig_path) as im:
+            orig_dims = im.size
+            resized = im.convert("RGB").resize((rw, rh), Image.LANCZOS)
+        orig_sent = run_dir / f"{orig_path.stem}_resized_{rw}x{rh}.png"
+        resized.save(orig_sent)
+        resize_applied = {
+            "from": {"width": orig_dims[0], "height": orig_dims[1]},
+            "to": {"width": rw, "height": rh},
+            "file": orig_sent.name,
+        }
+        print(f"resize-input: {orig_path.name} {orig_dims[0]}x{orig_dims[1]} "
+              f"-> {rw}x{rh} ({orig_sent.name})", flush=True)
+
     images = []
     inputs_info = []
     second_paths = [] if args.no_reference else ([atlas_path] if atlas_built else [input_dir / "patch.png"])
-    for p in [orig_path] + second_paths:
+    for p in [orig_sent] + second_paths:
         if not p.exists():
             print(f"error: expected {p.name} in {p.parent}", file=sys.stderr)
             return 2
@@ -272,6 +308,7 @@ def main() -> int:
             "mode": "no-reference" if args.no_reference else (
                 "atlas" if atlas_built else "patch"),
             "atlas": atlas_built,
+            "input_resize": resize_applied,
             "input_images": inputs_info,
             "prompt_file": str(prompt_path),
         },

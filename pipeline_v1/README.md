@@ -49,9 +49,14 @@ Pipeline stages (per page):
    with the characters detected for it (from `2_characters/`); panels
    stitched from their original B&W crop (`--stitch-bw-fallback`) get an
    orange box and a `[B&W fallback]` tag → `5_debug/<page>.png`
+7. **PDF export** — packs every stitched page (from `4_stitched/`, filename
+   order = reading order) into one multi-page PDF with Pillow's native PDF
+   writer (no extra dependency): `--pdf-name` (default `colorized.pdf`) and
+   `--pdf-dpi` (default 72, page size in points = pixels × 72 / dpi) →
+   `6_pdf/colorized.pdf` + `summary.json`
 
 Each invocation creates a fresh `output/YYYYMMDD-HHMMSS/` run directory (never
-overwritten) with the five numbered intermediate directories and an incremental
+overwritten) with the six numbered intermediate directories and an incremental
 `manifest.json` (command, configuration, prompt/profile hashes, per-step
 records, measured costs).
 
@@ -102,7 +107,7 @@ Offline demo (mock backends, no API keys, no server):
 `--full-page` skips panel extraction entirely: the whole page is colorized in
 one OpenAI `gpt-image-2` call with a labelled reference atlas + palette
 instruction, at the smallest output size that keeps the page's aspect ratio
-(see Size policy below). The five pipeline stages still run and write the same
+(see Size policy below). The six pipeline stages still run and write the same
 output layout (one synthetic `panel_0001` per page).
 
 ```bash
@@ -159,6 +164,8 @@ recorded in the step record as `panels_bw_fallback` and in the manifest
 `totals.panels_bw_fallback`),
 `--debug-font-size` / `--debug-bbox-width` (5_debug label font size and
 bounding-box stroke width),
+`--pdf-name` / `--pdf-dpi` (6_pdf PDF filename, default `colorized.pdf`;
+embedding resolution, default 72 — page size in points = pixels × 72 / dpi),
 `--verify-attempts N` (character-palette verification loop, 0 = off),
 `--verify-model <openrouter-model>` (default `openai/gpt-5.6-luna`),
 `--verify-prompt-file <path>` (default `verify_color_prompt.txt`).
@@ -221,6 +228,7 @@ output/<YYYYMMDD-HHMMSS>/
 │                           attempt_<n> retry images when --verify-attempts ≥ 2)
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
 ├── 5_debug/<page>.png      stitched page + bbox + character label per panel
+├── 6_pdf/colorized.pdf     all stitched pages as one multi-page PDF
 └── manifest.json
 ```
 
@@ -243,6 +251,28 @@ implementation) with custom options, without re-running the pipeline:
     --run-dir pipeline_v1/output/20260809-125148
 # options: --output-dir, --page SUBSTR (repeatable filter), --font-size,
 #          --bbox-width
+```
+
+## PDF export of a run
+
+The final pipeline stage (`pdf` → `6_pdf/`) packs every stitched page from
+`4_stitched/` into a single multi-page PDF using Pillow's native PDF writer
+(`save_all=True`) — **no extra dependency** (no reportlab/fpdf). Page order is
+the `4_stitched/` filename order, i.e. the volume reading order; each PDF page
+is the stitched PNG at its original pixel size, embedded at `--pdf-dpi`
+(default 72, so 1 px = 1 pt; 144 gives a half-size page in points). The stage
+runs automatically at the end of every run and writes a per-page `summary.json`
+(next to `colorized.pdf`, or `--pdf-name`).
+
+`scripts/make_pdf.py` is the standalone, offline companion of that stage: it
+re-exports any *completed* run (same `steps.pdf.run_pdf_step` implementation)
+with custom options, without re-running the pipeline:
+
+```bash
+.venv/bin/python pipeline_v1/scripts/make_pdf.py \
+    --run-dir pipeline_v1/output/20260815-124816
+# options: --output-dir, --page SUBSTR (repeatable filter), --name,
+#          --dpi
 ```
 
 ## Size policy

@@ -4,8 +4,9 @@ Panel-wise manga colorization pipeline: for each manga page, detect its panels,
 extract them in Japanese reading order, detect which reference characters appear in
 each panel, colorize each panel with FLUX.2 Klein 9B base + manga-colorization LoRA
 using an atlas filtered to the detected characters, stitch the colorized panels
-back onto the original page, and finally annotate a debug copy of each stitched
-page with its panel boxes and detected characters.
+back onto the original page, annotate a debug copy of each stitched
+page with its panel boxes and detected characters, and finally pack every
+stitched page into a multi-page PDF.
 
 ## Module map
 
@@ -35,6 +36,7 @@ pipeline_v1/
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
 ├── steps/debug.py        # stage 6 -> 5_debug/ (bbox + character annotation; shared with scripts/annotate_stitch.py)
+├── steps/pdf.py          # stage 7 -> 6_pdf/ (multi-page PDF of 4_stitched/, pure Pillow; shared with scripts/make_pdf.py)
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
 ├── evaluation/v1_1_cases.json  # fixed failure set (task 0001), run by the integration suite
@@ -46,6 +48,7 @@ pipeline_v1/
 │   ├── 3_colorized/      # per-panel colorized outputs
 │   ├── 4_stitched/       # final pages
 │   ├── 5_debug/          # stitched pages + bbox + characters per panel (stage 6)
+│   ├── 6_pdf/            # colorized.pdf + summary.json (stage 7)
 │   └── manifest.json
 └── tests/                # unit tests + offline end-to-end suite
 ```
@@ -69,6 +72,9 @@ page (input_dir)
   -> [steps/debug.py]  per page (pure image processing)
        -> 5_debug/<page>.png                  (bbox + characters per panel)
        -> 5_debug/summary.json
+  -> [steps/pdf.py]    run-level (pure image processing)
+       -> 6_pdf/colorized.pdf                 (all stitched pages, filename order)
+       -> 6_pdf/summary.json
 ```
 
 **Full-page mode** (`--full-page`, gpt-image-2) replaces the panel path per

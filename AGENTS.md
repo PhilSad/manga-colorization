@@ -193,11 +193,17 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
    page, draw the detected panel boxes + a label per panel with the
    characters detected for it; B&W-fallback panels get an orange box and a
    `[B&W fallback]` tag → `5_debug/<page>.png` + `summary.json`.
+7. **PDF export** — pure image processing (no backends): packs every
+   stitched page (`4_stitched/`, filename order = reading order) into one
+   multi-page PDF with Pillow's native PDF writer (no extra dependency) →
+   `6_pdf/colorized.pdf` + `summary.json`; `--pdf-name` / `--pdf-dpi`
+   (default 72) control the filename and the embedding resolution
+   (page size in points = pixels × 72 / dpi).
 
 - Entry point: `pipeline_v1/run.py`; full usage in `pipeline_v1/README.md`,
   module map and design decisions in `pipeline_v1/ARCHITECTURE.md`.
 - Run conventions: same as methods — each invocation creates a fresh
-  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the five
+  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the six
   numbered intermediate directories and an incremental `manifest.json`
   (command, config, prompt/profile hashes, per-step records, measured costs).
   `output/` and `models/` are gitignored.
@@ -220,7 +226,9 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   failed FLUX call — is stitched from its original B&W crop instead of failing
   the stitch step; each fallback is logged to stderr and recorded per page and
   in `totals.panels_bw_fallback`), `--debug-font-size` / `--debug-bbox-width`
-  (5_debug rendering knobs).
+  (5_debug rendering knobs), `--pdf-name` / `--pdf-dpi` (6_pdf PDF filename,
+  default `colorized.pdf`; embedding resolution, default 72 — page size in
+  points = pixels × 72 / dpi).
 - Full-page mode: `--full-page` skips panel extraction entirely and colorizes
   the whole page in one OpenAI `gpt-image-2` call (atlas + palette
   instruction, minimal aspect-preserving size). `--atlas-source {detected,cast}`

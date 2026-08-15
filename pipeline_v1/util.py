@@ -33,16 +33,30 @@ def image_mime(path: Path) -> str:
     return mime
 
 
-def file_record(path: Path, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Provenance record for an image file (repo convention)."""
+def file_record(
+    path: Path,
+    extra: dict[str, Any] | None = None,
+    *,
+    mime_type: str | None = None,
+) -> dict[str, Any]:
+    """Provenance record for a file (repo convention).
+
+    Image files get their MIME type and pixel dimensions from Pillow. Pass
+    `mime_type` for non-image files (e.g. the exported PDF, which Pillow
+    cannot open): the record then carries `dimensions: None`.
+    """
     record: dict[str, Any] = {
         "path": str(Path(path).resolve()),
         "filename": Path(path).name,
         "sha256": sha256(path),
         "bytes": Path(path).stat().st_size,
-        "mime_type": image_mime(path),
-        "dimensions": image_dimensions(path),
     }
+    if mime_type is None:
+        record["mime_type"] = image_mime(path)
+        record["dimensions"] = image_dimensions(path)
+    else:
+        record["mime_type"] = mime_type
+        record["dimensions"] = None
     if extra:
         record.update(extra)
     return record

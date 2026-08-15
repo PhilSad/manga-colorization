@@ -100,6 +100,7 @@ def test_full_run_success(tmp_path):
     assert (ctx.run_dir / "3_colorized").is_dir()
     assert (ctx.run_dir / "4_stitched").is_dir()
     assert (ctx.run_dir / "5_debug").is_dir()
+    assert (ctx.run_dir / "6_pdf").is_dir()
 
     # Two pages x two panels.
     totals = ctx.manifest["totals"]
@@ -111,11 +112,12 @@ def test_full_run_success(tmp_path):
     assert totals["panels_colorized"] == 4
     assert totals["pages_stitched"] == 2
     assert totals["pages_annotated"] == 2
+    assert totals["pdf_pages"] == 2
     assert "wall_time_s" in totals
 
     # Step records are present in the manifest.
     assert set(ctx.manifest["steps"].keys()) == {
-        "panels", "characters", "colorize", "stitch", "debug",
+        "panels", "characters", "colorize", "stitch", "debug", "pdf",
     }
 
 
@@ -208,7 +210,7 @@ def test_resume_copies_previous_outputs(tmp_path):
     assert ctx2.run_dir != first.run_dir
     # All step dirs were copied from the first run.
     for name in ("1_panels", "2_characters", "3_colorized", "4_stitched",
-                 "5_debug"):
+                 "5_debug", "6_pdf"):
         assert (ctx2.run_dir / name).is_dir()
     # The new run has no fresh calls (all steps skipped).
     totals = ctx2.manifest["totals"]

@@ -87,16 +87,16 @@ def test_pipeline_end_to_end(pipeline_inputs, mock_backends):
     config = make_config(tmp_path, refs)
     ctx = PipelineRunner(config, mock_backends).run()
 
-    # 1. Manifest completed with the five stages.
+    # 1. Manifest completed with the six stages.
     assert ctx.manifest["status"] == "completed"
     assert list(ctx.manifest["steps"].keys()) == [
-        "panels", "characters", "colorize", "stitch", "debug",
+        "panels", "characters", "colorize", "stitch", "debug", "pdf",
     ]
     assert ctx.manifest["configuration"]["mock"] is True
 
     # 2. Numbered intermediate directories.
     for name in ("1_panels", "2_characters", "3_colorized", "4_stitched",
-                 "5_debug"):
+                 "5_debug", "6_pdf"):
         assert (ctx.run_dir / name).is_dir()
 
     # 3. Panels extracted in Japanese reading order with geometry saved.

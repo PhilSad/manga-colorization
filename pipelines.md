@@ -681,7 +681,7 @@ A second colorization backend for the same pipeline skeleton, ported from the
 colorized in one OpenAI `gpt-image-2` `images.edit` call (page + labelled
 reference atlas + explicit palette instruction from
 `character_profiles.json`), at the smallest output size that preserves the
-page's exact aspect ratio (`config.minimal_gpt_image_size`). The five stages
+page's exact aspect ratio (`config.minimal_gpt_image_size`). The six stages
 still run and write the same `output/<ts>/` layout with one synthetic
 `panel_0001` per page (`provenance: full-page-mode`), so `--resume`,
 `--from-step`, `--only-panel`, `--mock` and the debug annotation all keep

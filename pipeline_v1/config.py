@@ -18,13 +18,16 @@ REPO_ROOT = PIPELINE_DIR.parent
 
 # Pipeline stages in execution order; the run directory for each stage is
 # prefixed with its 1-based index (1_panels/, 2_characters/, ...).
-STEP_ORDER: tuple[str, ...] = ("panels", "characters", "colorize", "stitch", "debug")
+STEP_ORDER: tuple[str, ...] = (
+    "panels", "characters", "colorize", "stitch", "debug", "pdf"
+)
 STEP_DIRS: dict[str, str] = {
     "panels": "1_panels",
     "characters": "2_characters",
     "colorize": "3_colorized",
     "stitch": "4_stitched",
     "debug": "5_debug",
+    "pdf": "6_pdf",
 }
 
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -179,6 +182,11 @@ class PipelineConfig:
     debug_font_size: int = 42      # label font size in px
     debug_bbox_width: int = 5      # bounding-box stroke width in px
 
+    # Stage 6 (pdf, 6_pdf/): PDF export of the stitched pages via Pillow's
+    # native PDF writer (pure image processing, no extra dependency).
+    pdf_name: str = "colorized.pdf"  # output PDF filename in 6_pdf/
+    pdf_dpi: int = 72   # embedding resolution; page size in pt = px * 72 / dpi
+
     # V1.1 (task 0001): targeted reruns.
     only_panels: tuple[str, ...] = ()  # "PAGE:PANEL" selectors (repeatable)
     forced_characters: dict[str, list[str]] = field(default_factory=dict)
@@ -242,6 +250,8 @@ class PipelineConfig:
             "stitch_bw_fallback": self.stitch_bw_fallback,
             "debug_font_size": self.debug_font_size,
             "debug_bbox_width": self.debug_bbox_width,
+            "pdf_name": self.pdf_name,
+            "pdf_dpi": self.pdf_dpi,
             "only_panels": list(self.only_panels),
             "forced_characters": self.forced_characters,
         }
@@ -305,6 +315,12 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
     if config.max_megapixels <= 0:
         raise ValueError("--max-megapixels must be positive")
+    if not config.pdf_name.strip():
+        raise ValueError("--pdf-name must not be empty")
+    if not config.pdf_name.lower().endswith(".pdf"):
+        raise ValueError("--pdf-name must end with '.pdf'")
+    if config.pdf_dpi < 1:
+        raise ValueError("--pdf-dpi must be at least 1")
     for selector in config.only_panels:
         from selection import parse_only_panel
 
@@ -348,8 +364,9 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             "in Japanese reading order, detect characters per panel (OpenRouter "
             "gemma-4-31b-it), colorize each panel with FLUX.2 Klein 9B base + LoRA "
             "(atlas filtered to the detected characters), stitch the colorized "
-            "panels back onto the original page, and annotate a debug copy of "
-            "each stitched page (5_debug/)."
+            "panels back onto the original page, annotate a debug copy of "
+            "each stitched page (5_debug/), and export all stitched pages "
+            "as a single multi-page PDF (6_pdf/)."
         ),
     )
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR,
@@ -465,11 +482,16 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--limit", type=int,
                         help="Process only the first N pages after skip.")
     parser.add_argument("--steps", default=None,
-                        help="Comma-separated subset of panels,characters,colorize,stitch,debug.")
+                        help="Comma-separated subset of panels,characters,colorize,stitch,debug,pdf.")
     parser.add_argument("--debug-font-size", type=int, default=42,
                         help="5_debug label font size in px (default 42).")
     parser.add_argument("--debug-bbox-width", type=int, default=5,
                         help="5_debug bounding-box stroke width in px (default 5).")
+    parser.add_argument("--pdf-name", default="colorized.pdf",
+                        help="Output PDF filename in 6_pdf/ (default colorized.pdf).")
+    parser.add_argument("--pdf-dpi", type=int, default=72,
+                        help="PDF embedding resolution; page size in points = "
+                             "pixel size * 72 / dpi (72 = 1 px : 1 pt, default).")
     parser.add_argument("--from-step", choices=STEP_ORDER,
                         help="Start at this step (skip earlier ones).")
     parser.add_argument("--resume", type=Path,
@@ -583,6 +605,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             stitch_bw_fallback=args.stitch_bw_fallback,
             debug_font_size=args.debug_font_size,
             debug_bbox_width=args.debug_bbox_width,
+            pdf_name=args.pdf_name,
+            pdf_dpi=args.pdf_dpi,
             only_panels=tuple(args.only_panel),
             forced_characters=forced_characters,
         )

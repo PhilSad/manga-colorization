@@ -197,31 +197,40 @@ class GptImage2Colorizer:
             )
         finally:
             for handle in images:
-                handle.close()
+                if isinstance(handle, tuple):
+                    handle[1].close()
+                else:
+                    handle.close()
         data = response.data[0]
         return {
             "b64_json": data.b64_json,
             "usage": getattr(response, "usage", None),
         }
 
-    def _scaled_atlas(self, atlas: Path) -> io.BytesIO:
-        """Atlas bytes for upload, downscaled by `self.atlas_scale` (1.0 ->
-        the original file bytes; the resize keeps JPEG compression)."""
+    def _scaled_atlas(self, atlas: Path) -> tuple[str, io.BytesIO]:
+        """Atlas upload as a `(filename, buffer)` tuple, downscaled by
+        `self.atlas_scale` (1.0 -> the original file bytes; the resize keeps
+        JPEG compression).
+
+        The filename is what httpx uses to sniff the mimetype: a bare BytesIO
+        uploads as `application/octet-stream` and gpt-image-2 rejects it with
+        400 ("unsupported mimetype"). Both paths emit JPEG content, so the
+        upload is always named `atlas.jpg`.
+        """
         if self.atlas_scale == 1.0:
             buffer = io.BytesIO(atlas.read_bytes())
-            buffer.seek(0)
-            return buffer
-        with Image.open(atlas) as image:
-            target = (
-                max(1, round(image.width * self.atlas_scale)),
-                max(1, round(image.height * self.atlas_scale)),
-            )
-            buffer = io.BytesIO()
-            image.convert("RGB").resize(
-                target, Image.Resampling.LANCZOS
-            ).save(buffer, format="JPEG", quality=94, subsampling=0)
+        else:
+            with Image.open(atlas) as image:
+                target = (
+                    max(1, round(image.width * self.atlas_scale)),
+                    max(1, round(image.height * self.atlas_scale)),
+                )
+                buffer = io.BytesIO()
+                image.convert("RGB").resize(
+                    target, Image.Resampling.LANCZOS
+                ).save(buffer, format="JPEG", quality=94, subsampling=0)
         buffer.seek(0)
-        return buffer
+        return ("atlas.jpg", buffer)
 
     def _retryable(self, error: BaseException) -> bool:
         name = type(error).__name__

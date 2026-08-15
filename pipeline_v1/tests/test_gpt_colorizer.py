@@ -69,6 +69,8 @@ class FakeImagesAPI:
         self.calls.append(kwargs)
         payloads = []
         for handle in kwargs.get("image", []):
+            if isinstance(handle, tuple):   # ("atlas.jpg", buffer) upload
+                handle = handle[1]
             try:
                 payloads.append(handle.read())
             except Exception:
@@ -188,6 +190,28 @@ def test_gpt_size_override_used(tmp_path, monkeypatch):
 
     assert client.images.calls[0]["size"] == "1024x1536"
     assert record.requested_size == (1024, 1536)
+
+
+def test_atlas_upload_carries_filename(tmp_path, monkeypatch):
+    """Regression: the atlas must upload with a filename so httpx sniffs
+    image/jpeg — a bare BytesIO uploads as application/octet-stream and
+    gpt-image-2 rejects it with 400."""
+    page = make_page(tmp_path)
+    atlas = make_atlas(tmp_path)
+    b64 = base64.b64encode(make_png()).decode()
+    client = install_fake_openai(monkeypatch, [make_response(b64)])
+    colorizer = make_colorizer(monkeypatch)
+
+    colorizer.colorize(page, atlas, tmp_path / "panel_0001.png")
+
+    page_handle, atlas_upload = client.images.calls[0]["image"]
+    assert not isinstance(page_handle, tuple)          # page: plain file handle
+    assert isinstance(atlas_upload, tuple)             # atlas: named upload
+    assert atlas_upload[0] == "atlas.jpg"
+    # the named upload still carries the atlas bytes (sniffed as image/jpeg)
+    upload = client.images.payloads[0][1]
+    with Image.open(io.BytesIO(upload)) as image:
+        assert image.size == (360, 480)
 
 
 def test_atlas_scale_downscales_upload(tmp_path, monkeypatch):

@@ -630,19 +630,33 @@ working unchanged.
   3000×2250 spread (4:3) → **960×720** (both match the research-v2 measured
   runs); 300 dpi B5 scans (2480×3508) are unsolvable within the API caps and
   are rejected loudly instead of distorted.
-- **Cost (projected, not yet measured through the pipeline):** research-v2
-  measured **$0.0499/page** at 672×1008 @ medium (1029 output tokens; input
-  floor ≈ $0.019/page with the 4-character atlas) — standard tier. Volume-1
-  projection (187 pages, all 1500×2250): **≈ $9.32**. The input-cost floor
-  dominates the cheap sizes; halving the output edge only halves the *output*
-  component (see research-v2's full 8-size ladder). A real pipeline run will
-  replace these projections with measured per-call usage from the manifest
-  (`totals.gpt_image_calls` / `totals.gpt_image_cost_usd`).
+- **Cost (measured, run `output/20260815-152145`):** 5 pages, `--skip-first 3
+  --limit 5` on volume 1 (p003–p008), **$0.24958 total** (std tier) =
+  **$0.0499 avg/page**, matching the research-v2 projection:
+  - p003 672×1008 $0.05074 · p004-p005 960×720 $0.05401 · p006 672×1008
+    $0.04424 · p007 672×1008 $0.05074 · p008 672×1008 $0.04985.
+  - Character detection added $0.00056 (5 page-level gemma calls).
+  - Volume-1 projection (187 pages): **≈ $9.3** — the projection is now
+    backed by measured per-call usage in the manifest
+    (`steps.colorize.records[].est_cost_usd`, `totals.gpt_image_cost_usd`).
+- **Atlas upload bug fixed:** the first real run (`output/20260815-151659`)
+  failed 4/5 pages with `400 - Invalid file 'image[1]': unsupported mimetype
+  ('application/octet-stream')` — the atlas `BytesIO` was uploaded bare, so
+  httpx couldn't sniff a mimetype (the no-atlas page succeeded). `_scaled_atlas`
+  now returns a `("atlas.jpg", buffer)` tuple (openai 3.x `FileTypes`),
+  regression-tested in `tests/test_gpt_colorizer.py::test_atlas_upload_carries_filename`.
+- **Atlas matters (quality finding):** in the same run, p006 (no detected
+  characters → no atlas, no palette) came out essentially **black & white**
+  (mean HSV saturation 2.8/255 vs 31–67 for the atlas=yes pages). The
+  reference atlas + palette instruction is what drives the colorization;
+  a no-atlas page is a de-facto no-op.
 - **Backend comparison:** FLUX panel mode is $0/call + electricity on Spark
   (free but panel-wise, per-panel coherence); gpt-image-2 full-page mode is a
   paid API (~$0.05/page) with page-level coherence in a single call — the
   comparison is quality vs cost, and this mode is the pipeline-level
   counterpart of the `research-v2` atlas method.
 - **Status:** implemented, offline-tested (`tests/test_full_page.py`, mock
-  backends; full offline suite green). Real-run evaluation pending — see the
-  plan's verification list (`docs/plans/fullpage-gpt-image2-atlas.md`).
+  backends; full offline suite green), and verified with a real 5-page run
+  (`output/20260815-152145`, 5/5 colorize calls OK, 0 errors, ~5 min wall
+  time). See `docs/plans/fullpage-gpt-image2-atlas.md` for the original
+  verification list.

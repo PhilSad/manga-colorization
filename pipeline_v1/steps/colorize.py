@@ -24,8 +24,10 @@ colorization the panel is checked by the Luna verifier (strict structured
 output). On a mismatch the fix prompt is output (console + per-panel files)
 and the panel is re-colorized with it up to N attempts total. Every attempt
 and every verdict is recorded in `<panel>.verify.json` (+ `attempt_<n>`
-images, `<panel>.fix_prompt.txt`); the final attempt is copied to the
-canonical output name so the stitch step is untouched.
+images for every superseded attempt — including the original as
+`attempt_1.png` when a retry wins — and `<panel>.fix_prompt.txt`); the final
+attempt is copied to the canonical output name so the stitch step is
+untouched.
 
 Parallel colorization (`--worker-colorization N`): pages are independent units
 of work — each page writes only to its own `3_colorized/<page>/` dir, so

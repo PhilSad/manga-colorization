@@ -134,8 +134,11 @@ crop and the labelled character atlas.
 - `--verify-attempts N` (N ≥ 2): on `good_color: false` the panel is
   re-colorized with the fix prompt appended as an authoritative block to the
   palette instruction, up to N−1 retries; the first verified attempt (or the
-  last attempt if exhausted) is the canonical `<panel>.png`, intermediate
-  attempts are kept as `<panel>.attempt_<n>.png`.
+  last attempt if exhausted) is the canonical `<panel>.png`; every
+  superseded attempt is kept as `<panel>.attempt_<n>.png` — including the
+  original as `attempt_1.png` when a retry wins (fixed 2026-08-15: earlier
+  runs overwrote the canonical with the last attempt's copy, losing
+  attempt 1's image and leaving canonical == last-attempt byte-identical).
 - Verifier errors stop the loop without burning a retry; colorization errors
   stop before any verify call.
 - Every attempt (colorize + verify records, verdicts, latencies, measured
@@ -714,9 +717,9 @@ working unchanged.
   re-run with `--verify-attempts 3` (`output/20260815-165721`) — Luna
   verified 5/5 pages (4 on attempt 1, p003 caught and auto-fixed on
   attempt 2), 6 verify calls **$0.00613 ≈ $0.00102/call**, one extra
-  gpt-image-2 retry **$0.05074** (6 calls $0.30056 total). All retry
-  attempts are kept (`<panel>.attempt_<n>.png`) and recorded in
-  `<panel>.verify.json`. Cost accounting detail: the run's manifest
+  gpt-image-2 retry **$0.05074** (6 calls $0.30056 total). All superseded
+  attempts are kept (`<panel>.attempt_<n>.png`, including the original as
+  `attempt_1.png`) and recorded in `<panel>.verify.json`. Cost accounting detail: the run's manifest
   `gpt_image_cost_usd` ($0.24982) summed only each page's final attempt —
   the retry cost is in the per-attempt records; `orchestrator.sum_gpt_image_cost`
   now sums all attempts (fixed after this run, unit-tested).

@@ -10,9 +10,11 @@ and, while attempts remain, re-colorizes the panel with the fix prompt
 appended to the palette instruction, then verifies again.
 
 Every colorization attempt and every verification response is recorded: the
-step writes `<panel>.verify.json` (all attempts), `attempt_<n>` image files
-for retries, and `<panel>.fix_prompt.txt` when a fix prompt was produced. The
-final attempt is copied to the canonical `<stem><ext>` name the stitch step
+step writes `<panel>.verify.json` (all attempts), an `attempt_<n>` image file
+for **every** attempt that is superseded (including attempt 1, preserved as
+`attempt_1.png` when a retry wins — so the original bad colorization is never
+lost), and `<panel>.fix_prompt.txt` when a fix prompt was produced. The final
+attempt is copied to the canonical `<stem><ext>` name the stitch step
 expects, so the stitch step is untouched.
 
 Loop outcomes:
@@ -34,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from colorizer import ColorizeRecord
+from util import file_record
 from verify_color import (
     ERROR,
     MISMATCH,
@@ -100,6 +103,9 @@ def run_verify_loop(
     expects); retries write `<stem>.attempt_<n><ext>`. After the loop the
     final successful colorization is copied to `output` (no-op for attempt 1),
     and the returned record's `.output` always points at the canonical file.
+    If a retry supersedes attempt 1, attempt 1's image is preserved as
+    `<stem>.attempt_1<ext>` before the canonical is overwritten, so every
+    attempt (including the original) is kept on disk and in verify.json.
 
     `max_attempts` semantics: 1 = verify and output the fix prompt only (no
     re-colorization); N >= 2 = up to N colorization attempts with at most
@@ -183,8 +189,19 @@ def run_verify_loop(
 
     # The canonical output file must hold the final successful colorization:
     # attempt 1 already wrote it; a later retry (or a failed final attempt
-    # after a successful one) is copied over.
+    # after a successful one) is copied over. Before overwriting, preserve
+    # attempt 1's image as `<stem>.attempt_1<ext>` so EVERY attempt is kept
+    # on disk — previously the canonical was left as a byte-copy of the last
+    # attempt and the original attempt-1 image was lost forever.
     if last_ok_record is not None and last_ok_record.output != output:
+        if len(attempts) > 1 and output.exists():
+            attempt_1_path = output.with_name(
+                f"{output.stem}.attempt_1{output.suffix}"
+            )
+            shutil.copy2(output, attempt_1_path)
+            # Repoint the attempt-1 provenance record at the preserved file;
+            # the canonical name now holds a later attempt's image.
+            attempts[0]["colorize"]["output"] = file_record(attempt_1_path)
         shutil.copy2(last_ok_record.output, output)
         last_ok_record.output = output
     if last_ok_record is not None:

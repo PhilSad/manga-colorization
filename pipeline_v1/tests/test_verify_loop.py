@@ -133,11 +133,17 @@ def test_loop_mismatch_then_verified(tmp_path):
     assert result.successful_verify_calls == 1  # only the VERIFIED verdict
     assert result.fix_prompt == "Frieren: hair silver-white, eyes teal"
 
-    # attempt_2 image kept; canonical output copied from it
+    # EVERY superseded attempt keeps an image: attempt_1 (the original, which
+    # wrote directly to the canonical name) is preserved as attempt_1.png,
+    # attempt_2 kept, canonical copied from the final attempt.
+    attempt1 = output.with_name("panel_0001.attempt_1.png")
     attempt2 = output.with_name("panel_0001.attempt_2.png")
+    assert attempt1.is_file()
     assert attempt2.is_file()
     assert output.read_bytes() == attempt2.read_bytes()
     assert result.colorize.output == output
+    # provenance: the attempt-1 record points at the preserved attempt_1 file
+    assert result.attempts[0]["colorize"]["output"]["filename"] == "panel_0001.attempt_1.png"
 
     # the retry prompt carried the fix (authoritative, appended)
     prompts = [c[3] for c in colorizer.calls]
@@ -166,8 +172,10 @@ def test_loop_mismatch_exhausted(tmp_path):
     assert len(result.attempts) == 2
     assert result.colorization_retries == 1
     assert result.verify_calls == 2
-    # panel keeps its last colorization as the canonical output
+    # panel keeps its last colorization as the canonical output, and BOTH
+    # superseded attempts keep their images (attempt_1 preserved too).
     assert output.is_file()
+    assert output.with_name("panel_0001.attempt_1.png").is_file()
     assert output.with_name("panel_0001.attempt_2.png").is_file()
     assert output.read_bytes() == output.with_name("panel_0001.attempt_2.png").read_bytes()
 
@@ -290,12 +298,14 @@ def test_pipeline_end_to_end_verify_loop(pipeline_inputs, tmp_path):
     assert totals["verify_cost_usd"] == pytest.approx(0.0006, abs=1e-9)
 
     # 2. Colorized outputs: canonical name for every panel; the retried panel
-    #    keeps its attempt_2 image.
+    #    keeps BOTH superseded attempt images (attempt_1 original + retry).
     colorized_dir = ctx.run_dir / "3_colorized" / page_name
     for i in range(1, 6):
         assert (colorized_dir / f"panel_000{i}.png").is_file()
+    assert (colorized_dir / "panel_0001.attempt_1.png").is_file()
     assert (colorized_dir / "panel_0001.attempt_2.png").is_file()
     assert not (colorized_dir / "panel_0002.attempt_2.png").exists()
+    assert not (colorized_dir / "panel_0002.attempt_1.png").exists()
 
     # 3. Fix prompt recorded only for the mismatched panel.
     fix_text = (colorized_dir / "panel_0001.fix_prompt.txt").read_text(

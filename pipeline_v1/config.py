@@ -441,8 +441,10 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                              "2+ = up to N total colorization attempts with up to "
                              "N-1 fix-prompt retries. 0 = disabled (default). "
                              "Every attempt and verdict is recorded in "
-                             "<panel>.verify.json; retries keep attempt_<n> images "
-                             "and the final attempt is copied to the canonical name.")
+                             "<panel>.verify.json; every superseded attempt keeps "
+                             "an attempt_<n> image (including attempt_1.png when a "
+                             "retry wins) and the final attempt is copied to the "
+                             "canonical name.")
     parser.add_argument("--verify-model", default=DEFAULT_VERIFY_MODEL,
                         help="OpenRouter vision model for color verification "
                              "(default: openai/gpt-5.6-luna).")

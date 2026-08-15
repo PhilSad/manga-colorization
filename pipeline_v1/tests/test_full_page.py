@@ -212,10 +212,13 @@ def test_full_page_verify_retry_totals(tmp_path):
     assert totals["verified_panels"] == 2
     assert totals["mismatch_panels"] == 0
     assert totals["verifier_error_panels"] == 0
-    # Retry images are kept (attempt_2 = the retry; the first attempt keeps
-    # the canonical name, which is what the stitch step consumes).
-    assert (ctx.run_dir / "3_colorized" / "p001" / "panel_0001.attempt_2.png").is_file()
-    assert (ctx.run_dir / "3_colorized" / "p001" / "panel_0001.png").is_file()
+    # Retry images are kept: every superseded attempt keeps an image, so the
+    # original (attempt_1) is preserved too — the canonical name is a copy of
+    # the final attempt, which is what the stitch step consumes.
+    colorized_p001 = ctx.run_dir / "3_colorized" / "p001"
+    assert (colorized_p001 / "panel_0001.attempt_1.png").is_file()
+    assert (colorized_p001 / "panel_0001.attempt_2.png").is_file()
+    assert (colorized_p001 / "panel_0001.png").is_file()
     # The retry's verify loop is recorded on the p001 page record.
     p001_rec = next(
         r for r in ctx.manifest["steps"]["colorize"]["records"]

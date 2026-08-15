@@ -189,8 +189,9 @@ character atlas — using strict structured output (`json_schema` +
   re-colorized with the verifier's `fix_prompt` appended as an authoritative
   block to the palette instruction, up to N−1 retries. The first verified
   attempt (or the last attempt if attempts are exhausted) becomes the
-  canonical `<panel>.png`; every intermediate attempt is kept as
-  `<panel>.attempt_<n>.png`.
+  canonical `<panel>.png`; every attempt that is superseded is kept as
+  `<panel>.attempt_<n>.png` — including the original as `attempt_1.png`
+  when a retry wins, so the initial bad colorization is never lost.
 - A verifier error (non-JSON response, failed call, `good_color: null`)
   stops the loop for that panel without burning a retry; the panel keeps its
   latest colorization and is counted under `verifier_error_panels`.
@@ -225,7 +226,8 @@ output/<YYYYMMDD-HHMMSS>/
 ├── 2_characters/<page>/    one JSON per panel (characters, cost, latency)
 ├── 3_colorized/<page>/     colorized panels + per-panel atlas + verify
 │                           records (<panel>.verify.json, fix prompts,
-│                           attempt_<n> retry images when --verify-attempts ≥ 2)
+│                           attempt_<n> images for superseded attempts
+│                           when --verify-attempts ≥ 2, incl. attempt_1)
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
 ├── 5_debug/<page>.png      stitched page + bbox + character label per panel
 ├── 6_pdf/colorized.pdf     all stitched pages as one multi-page PDF

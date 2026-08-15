@@ -50,6 +50,11 @@ DEFAULT_CHAPTER_PAGE_MAP_FILE = (
 FLUX_MULTIPLE = 16
 # The smallest dimension we will ever request (rounding must not produce 0).
 FLUX_MIN_SIDE = 16
+# Hard floor enforced by the FLUX.2 Klein edit pipeline on Spark: any input
+# image (panel or atlas) with an axis below this is rejected with "Image too
+# small: WxH. Both dimensions must be at least 64px". Degenerate panels below
+# the floor must be upscaled client-side or they cannot be colorized at all.
+FLUX_MIN_AXIS = 64
 
 
 @dataclass
@@ -433,6 +438,7 @@ def bounded_requested_size(
     width: int,
     height: int,
     max_megapixels: float,
+    min_axis: int = FLUX_MIN_AXIS,
 ) -> tuple[int, int]:
     """FLUX request size for a panel of `width`x`height`, capped to at most
     `max_megapixels` (task 0004).
@@ -441,25 +447,41 @@ def bounded_requested_size(
     multiples of 16). Oversized panels are scaled down proportionally to fit
     the cap, then rounded to multiples of 16; if the rounded area still
     exceeds the cap, the axis with the larger rounding overshoot is reduced
-    by one multiple until the area fits. Never upscales.
+    by one multiple until the area fits.
+
+    `min_axis` is the server-side floor (`FLUX_MIN_AXIS`): the Spark edit
+    pipeline rejects any input image with an axis below 64 px ("Image too
+    small"). Degenerate panels whose rounded size falls below the floor are
+    upscaled proportionally to reach it (the only case where the size policy
+    upscales — the alternative is a request the server always rejects); for
+    such panels the requested size may exceed `max_megapixels` (a documented
+    exception, noted in the colorizer record).
     """
     if width <= 0 or height <= 0:
         raise ValueError(f"panel size must be positive, got {width}x{height}")
+    if min_axis < 1:
+        raise ValueError(f"min_axis must be positive, got {min_axis}")
     max_pixels = max_megapixels * 1_000_000
     if width * height <= max_pixels:
-        return (nearest_multiple_of(width), nearest_multiple_of(height))
-    import math
+        requested_w = nearest_multiple_of(width)
+        requested_h = nearest_multiple_of(height)
+    else:
+        import math
 
-    scale = math.sqrt(max_pixels / (width * height))
-    ideal_w = width * scale
-    ideal_h = height * scale
-    requested_w = nearest_multiple_of(ideal_w)
-    requested_h = nearest_multiple_of(ideal_h)
-    while requested_w * requested_h > max_pixels:
-        if (requested_w - ideal_w) >= (requested_h - ideal_h):
-            requested_w -= FLUX_MULTIPLE
-        else:
-            requested_h -= FLUX_MULTIPLE
+        scale = math.sqrt(max_pixels / (width * height))
+        ideal_w = width * scale
+        ideal_h = height * scale
+        requested_w = nearest_multiple_of(ideal_w)
+        requested_h = nearest_multiple_of(ideal_h)
+        while requested_w * requested_h > max_pixels:
+            if (requested_w - ideal_w) >= (requested_h - ideal_h):
+                requested_w -= FLUX_MULTIPLE
+            else:
+                requested_h -= FLUX_MULTIPLE
+    if requested_w < min_axis or requested_h < min_axis:
+        scale = max(min_axis / requested_w, min_axis / requested_h)
+        requested_w = max(min_axis, nearest_multiple_of(requested_w * scale))
+        requested_h = max(min_axis, nearest_multiple_of(requested_h * scale))
     return (requested_w, requested_h)
 
 

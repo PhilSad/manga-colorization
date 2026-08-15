@@ -5,13 +5,22 @@ same HTTP contract as `server/service.py` in this repo: the first image is the
 edit target, further images are references. The request size is the resolution
 closest to the panel's original size with both axes multiples of 16 (V1 size
 policy), bounded by the configurable megapixel cap (task 0004): oversized
-inputs are scaled down proportionally, never upscaled. The prompt can carry an
-explicit canonical-palette instruction for the detected characters (task 0002)
-in addition to the atlas.
+inputs are scaled down proportionally, never upscaled. Two exceptions forced
+by the server contract (FLUX.2 Klein edit pipeline on Spark):
+
+- the server rejects any input image with an axis below `min_axis` (64 px),
+  so degenerate panels/atlases are upscaled client-side to the floor (recorded
+  as `upscaled` in the colorize record);
+- transient HTTP 5xx responses (e.g. cuBLAS hiccups on the GPU) are retried
+  with exponential backoff before the panel is recorded as failed.
+
+The prompt can carry an explicit canonical-palette instruction for the
+detected characters (task 0002) in addition to the atlas.
 """
 
 from __future__ import annotations
 
+import io
 import math
 import time
 from dataclasses import dataclass
@@ -21,10 +30,13 @@ from typing import Protocol
 import requests
 from PIL import Image
 
-from config import bounded_requested_size
+from config import FLUX_MIN_AXIS, bounded_requested_size
 from util import file_record
 
 _TIMEOUT_SECONDS = 1800
+# Status codes worth retrying on a self-hosted server: transient GPU/cuBLAS
+# failures surface as 500, and 502/503/504 cover proxy/gateway hiccups.
+_RETRYABLE_STATUS = {500, 502, 503, 504}
 
 ATLAS_INSTRUCTION = (
     "Use the labelled character reference atlas in #2 for canonical hair, eye, "
@@ -52,6 +64,8 @@ class ColorizeRecord:
     scale: float | None = None
     cap_applied: bool = False
     max_megapixels: float | None = None
+    upscaled: bool = False          # input was below the server min axis and
+                                    # had to be upscaled client-side
 
     def to_dict(self, panel: Path, atlas: Path | None) -> dict:
         doc = {
@@ -67,6 +81,7 @@ class ColorizeRecord:
             "scale": round(self.scale, 4) if self.scale is not None else None,
             "cap_applied": self.cap_applied,
             "max_megapixels": self.max_megapixels,
+            "upscaled": self.upscaled,
             "latency_s": round(self.latency_s, 3),
             "seed": self.seed,
             "error": self.error,
@@ -104,6 +119,9 @@ class FluxColorizer:
         output_format: str = "png",
         timeout: float = _TIMEOUT_SECONDS,
         max_megapixels: float = 2.0,
+        min_axis: int = FLUX_MIN_AXIS,
+        retries: int = 2,
+        retry_backoff_s: float = 3.0,
     ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.prompt_template = prompt_template
@@ -114,6 +132,9 @@ class FluxColorizer:
         self.output_format = output_format
         self.timeout = timeout
         self.max_megapixels = max_megapixels
+        self.min_axis = min_axis
+        self.retries = retries
+        self.retry_backoff_s = retry_backoff_s
 
     def _prompt(
         self,
@@ -141,7 +162,8 @@ class FluxColorizer:
         with Image.open(panel) as image:
             original = (image.width, image.height)
         requested = bounded_requested_size(
-            original[0], original[1], self.max_megapixels
+            original[0], original[1], self.max_megapixels,
+            min_axis=self.min_axis,
         )
         width, height = requested
         original_area = original[0] * original[1]
@@ -151,6 +173,18 @@ class FluxColorizer:
             if cap_applied and original_area
             else 1.0
         )
+        # The server rejects input images with an axis below the floor, so a
+        # degenerate panel is upscaled to the requested (already floored) size
+        # before upload; a degenerate atlas is upscaled to the floor too.
+        upscaled = original[0] < self.min_axis or original[1] < self.min_axis
+        panel_payload = _image_payload(
+            panel, target=(width, height) if upscaled else None
+        )
+        atlas_payload = (
+            _image_payload(atlas, min_axis=self.min_axis) if atlas is not None
+            else None
+        )
+
         fields = {
             "prompt": self._prompt(width, height, atlas, palette_instruction),
             "width": str(width),
@@ -164,63 +198,99 @@ class FluxColorizer:
         if self.seed is not None:
             fields["seed"] = str(self.seed)
 
-        files = [("images", (panel.name, open(panel, "rb"), _mime(panel)))]
-        if atlas is not None:
-            files.append(("images", (atlas.name, open(atlas, "rb"), _mime(atlas))))
-
         started = time.monotonic()
-        try:
-            response = requests.post(
-                f"{self.endpoint}/edit",
-                data=fields,
-                files=files,
-                timeout=self.timeout,
-            )
-        except Exception as error:  # noqa: BLE001 - connection errors etc.
-            return ColorizeRecord(
-                status="error",
-                output=None,
-                requested_size=(width, height),
-                latency_s=time.monotonic() - started,
-                error=f"{type(error).__name__}: {error}",
-                seed=self.seed,
-                original_size=original,
-                scale=scale,
-                cap_applied=cap_applied,
-                max_megapixels=self.max_megapixels,
-            )
-        finally:
-            for _, (_, handle, _) in files:
-                handle.close()
+        last_error: str | None = None
+        response: requests.Response | None = None
+        for attempt in range(self.retries + 1):
+            # Fresh byte streams per attempt (requests consumes them).
+            files = [
+                (
+                    "images",
+                    (panel_payload[0], io.BytesIO(panel_payload[1]),
+                     panel_payload[2]),
+                )
+            ]
+            if atlas_payload is not None:
+                files.append(
+                    (
+                        "images",
+                        (atlas_payload[0], io.BytesIO(atlas_payload[1]),
+                         atlas_payload[2]),
+                    )
+                )
+            try:
+                response = requests.post(
+                    f"{self.endpoint}/edit",
+                    data=fields,
+                    files=files,
+                    timeout=self.timeout,
+                )
+            except Exception as error:  # noqa: BLE001 - connection errors etc.
+                last_error = f"{type(error).__name__}: {error}"
+                if attempt < self.retries:
+                    time.sleep(self.retry_backoff_s * (2 ** attempt))
+                    continue
+                break
+            if response.status_code == 200:
+                last_error = None
+                break
+            last_error = f"HTTP {response.status_code}: {response.text[:500]}"
+            if (
+                response.status_code not in _RETRYABLE_STATUS
+                or attempt >= self.retries
+            ):
+                break
+            time.sleep(self.retry_backoff_s * (2 ** attempt))
 
         latency = time.monotonic() - started
-        if response.status_code != 200:
-            return ColorizeRecord(
-                status="error",
-                output=None,
-                requested_size=(width, height),
-                latency_s=latency,
-                error=f"HTTP {response.status_code}: {response.text[:500]}",
-                seed=self.seed,
-                original_size=original,
-                scale=scale,
-                cap_applied=cap_applied,
-                max_megapixels=self.max_megapixels,
-            )
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_bytes(response.content)
+        if response is not None and response.status_code == 200:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(response.content)
         return ColorizeRecord(
-            status="ok",
-            output=output,
+            status="ok" if last_error is None else "error",
+            output=output if last_error is None else None,
             requested_size=(width, height),
             latency_s=latency,
-            error=None,
+            error=last_error,
             seed=self.seed,
             original_size=original,
             scale=scale,
             cap_applied=cap_applied,
             max_megapixels=self.max_megapixels,
+            upscaled=upscaled,
         )
+
+
+def _image_payload(
+    path: Path,
+    target: tuple[int, int] | None = None,
+    min_axis: int | None = None,
+) -> tuple[str, bytes, str]:
+    """Read an image file for multipart upload.
+
+    If `target` is given the image is resized to exactly that size; else if
+    `min_axis` is given and the image has an axis below it, the image is
+    upscaled proportionally so both axes reach the floor. Resized images are
+    re-encoded as PNG; otherwise the original bytes are passed through.
+    """
+    with Image.open(path) as image:
+        below_floor = (
+            min_axis is not None
+            and (image.width < min_axis or image.height < min_axis)
+        )
+        if target is None and below_floor:
+            scale = max(min_axis / image.width, min_axis / image.height)
+            target = (
+                max(min_axis, round(image.width * scale)),
+                max(min_axis, round(image.height * scale)),
+            )
+        if target is not None:
+            buffer = io.BytesIO()
+            image.convert("RGB").resize(
+                target, Image.Resampling.LANCZOS
+            ).save(buffer, format="PNG")
+            return path.name, buffer.getvalue(), "image/png"
+    return path.name, path.read_bytes(), _mime(path)
 
 
 def _mime(path: Path) -> str:

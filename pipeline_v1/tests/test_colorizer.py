@@ -235,3 +235,92 @@ def test_no_cap_for_ordinary_panels(server, tmp_path):
     assert record.cap_applied is False
     assert record.requested_size == (336, 496)
     assert record.scale == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Server minimum axis (FLUX.2 Klein edit rejects images with an axis < 64px)
+
+def test_bounded_size_min_axis_upscale():
+    from config import bounded_requested_size
+
+    # 0134-003 panel_0003: 48x349 -> floor on the short axis, rounded to /16.
+    assert bounded_requested_size(48, 349, 2.0) == (64, 464)
+    # 40 -> 32 (banker's rounding), then floor scale 64/32 = 2 -> 192*2 = 384.
+    assert bounded_requested_size(40, 200, 2.0) == (64, 384)
+    assert bounded_requested_size(20, 20, 2.0) == (64, 64)
+    # Ordinary panels are untouched by the floor.
+    assert bounded_requested_size(340, 500, 2.0) == (336, 496)
+    # Floor results stay multiples of 16 and at/above 64 on both axes.
+    for width, height in ((48, 349), (63, 400), (40, 40), (10, 1000)):
+        requested_w, requested_h = bounded_requested_size(width, height, 2.0)
+        assert requested_w >= 64 and requested_h >= 64
+        assert requested_w % 16 == 0 and requested_h % 16 == 0
+
+
+def test_colorize_upscales_degenerate_panel_to_floor(server, tmp_path):
+    panel = make_panel(tmp_path / "narrow.png", size=(48, 349))
+    colorizer = FluxColorizer(
+        endpoint=server.url,
+        prompt_template=PROMPT_TEMPLATE,
+        timeout=60,
+    )
+    record = colorizer.colorize(panel, None, tmp_path / "out.png")
+    assert record.status == "ok"
+    assert record.upscaled is True
+    assert record.requested_size == (64, 464)
+    assert record.original_size == (48, 349)
+    request = server.requests[0]
+    assert request["fields"]["width"] == "64"
+    assert request["fields"]["height"] == "464"
+    # The uploaded panel must already satisfy the server's 64px floor.
+    assert request["images_sizes"][0] == [64, 464]
+    with Image.open(tmp_path / "out.png") as image:
+        assert image.size == (64, 464)
+
+
+def test_colorize_ordinary_panel_not_upscaled(server, tmp_path):
+    panel = make_panel(tmp_path / "p.png", size=(340, 500))
+    colorizer = FluxColorizer(
+        endpoint=server.url, prompt_template=PROMPT_TEMPLATE, timeout=60
+    )
+    record = colorizer.colorize(panel, None, tmp_path / "out.png")
+    assert record.status == "ok"
+    assert record.upscaled is False
+    assert server.requests[0]["images_sizes"][0] == [340, 500]
+
+
+# ---------------------------------------------------------------------------
+# Transient HTTP 5xx retry (server-side GPU/cuBLAS hiccups)
+
+def test_colorize_retries_transient_500(server, tmp_path):
+    panel = make_panel(tmp_path / "p.png")
+    server.fail_next = 1
+    colorizer = FluxColorizer(
+        endpoint=server.url,
+        prompt_template=PROMPT_TEMPLATE,
+        timeout=60,
+        retries=2,
+        retry_backoff_s=0.01,
+    )
+    record = colorizer.colorize(panel, None, tmp_path / "out.png")
+    assert record.status == "ok"
+    assert record.error is None
+    assert len(server.requests) == 2  # one 500, then a successful retry
+
+
+def test_colorize_gives_up_after_retries(server, tmp_path):
+    panel = make_panel(tmp_path / "p.png")
+    server.fail_next = 10
+    colorizer = FluxColorizer(
+        endpoint=server.url,
+        prompt_template=PROMPT_TEMPLATE,
+        timeout=60,
+        retries=2,
+        retry_backoff_s=0.01,
+    )
+    record = colorizer.colorize(panel, None, tmp_path / "out.png")
+    assert record.status == "error"
+    assert record.error is not None
+    assert "HTTP 500" in record.error
+    assert len(server.requests) == 3  # initial + 2 retries
+    assert not (tmp_path / "out.png").exists()

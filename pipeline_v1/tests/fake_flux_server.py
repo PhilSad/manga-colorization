@@ -18,10 +18,15 @@ from PIL import Image
 
 
 class FakeFluxServer:
-    """Records incoming /edit requests; returns tinted panels."""
+    """Records incoming /edit requests; returns tinted panels.
+
+    `fail_next` (int) injects that many HTTP 500 responses before the server
+    starts answering normally again — used by the retry tests.
+    """
 
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.fail_next: int = 0
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -59,6 +64,15 @@ def _make_handler(server: FakeFluxServer):
                     ],
                 }
                 server.requests.append(record)
+                if server.fail_next > 0:
+                    server.fail_next -= 1
+                    payload = b"injected failure"
+                    self.send_response(500)
+                    self.send_header("Content-Type", "text/plain")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 payload = _tint_response(images, fields)
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")

@@ -360,9 +360,11 @@ the computed size for comparison runs.
   with `--verify-attempts ≥ 1`): measured per verify call via `usage.cost`,
   recorded in each `3_colorized/<page>/<panel>.verify.json` and the manifest
   `totals.verify_cost_usd` (plus `verify_calls`, `verified_panels`,
-  `mismatch_panels`, `colorization_retries`, …). Retries are extra FLUX
-  calls (still $0/call). Real Luna pricing is measured on live runs (mock
-  runs fabricate $0.0001/call).
+  `mismatch_panels`, `colorization_retries`, …). **Measured live:**
+  ≈ **$0.00102/call** (run `output/20260815-165721`, 6 calls $0.00613).
+  Retries are extra colorization calls — on FLUX they are still $0/call, but
+  in full-page mode each gpt-image-2 retry costs ≈ $0.05/page (measured:
+  one retry $0.05074 in that run).
 
 ## Testing
 

@@ -9,7 +9,13 @@
 >   full-page mode is supported (one synthetic panel per page) but its extra
 >   ~$0.05/page retry cost is only warned about in the README, not blocked.
 > - New integration case VER-001 is not yet added to the suite; the loop is
->   covered offline end-to-end (mock backends) and a live run is pending.
+>   covered offline end-to-end (mock backends). **Live run done**
+>   (`output/20260815-165721`, full-page gpt-image-2 mode, 5 pages,
+>   `--verify-attempts 3`): 6 Luna calls, **$0.00613 total ≈ $0.00102/call**
+>   (paid OpenRouter tier); p003 was caught as a palette mismatch on
+>   attempt 1, re-colorized with the fix prompt and verified on attempt 2;
+>   the other 4 pages verified on attempt 1. One retry = +$0.05074
+>   (6 gpt-image-2 calls $0.30056).
 > - `run_verify_loop` prints `[verify] …` progress lines (including the fix
 >   prompt block) — the "output the prompt to fix it" behaviour.
 > - Manifest `totals.panels_colorized` counts distinct panels

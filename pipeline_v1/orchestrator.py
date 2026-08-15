@@ -42,6 +42,24 @@ class Backends:
     verifier: object | None = None  # verify_color.ColorVerifier (None -> no loop)
 
 
+def sum_gpt_image_cost(records: list[dict]) -> float:
+    """Sum per-call `est_cost_usd` across full-page colorize records.
+
+    The top-level record only carries the *final* colorization attempt, so
+    verify-loop retries must be summed from each attempt's `colorize` sub-
+    record; records without a verify loop carry the cost on the record
+    itself. `None`/missing usage (failed calls, mocks) contributes 0."""
+    cost = 0.0
+    for r in records:
+        attempts = (r.get("verify_loop") or {}).get("attempts")
+        if attempts:
+            for a in attempts:
+                cost += (a.get("colorize", {}).get("est_cost_usd") or 0.0)
+        else:
+            cost += (r.get("est_cost_usd") or 0.0)
+    return cost
+
+
 class PipelineRunner:
     def __init__(self, config: PipelineConfig, backends: Backends) -> None:
         self.config = config
@@ -309,13 +327,17 @@ class PipelineRunner:
             if self.config.full_page:
                 # gpt-image-2 backend: per-call est_cost_usd (None for failed
                 # calls or missing usage) is summed into gpt_image_cost_usd.
-                cost = sum(
-                    (r.get("est_cost_usd") or 0.0) for r in record["records"]
-                )
+                cost = sum_gpt_image_cost(record["records"])
                 self.manifest_totals_update(ctx, {
                     "gpt_image_calls": totals["api_calls"],
                     "successful_gpt_image_calls": totals["successful_calls"],
                     "gpt_image_cost_usd": cost,
+                    # distinct panels, not calls: verify-loop retries are extra
+                    # successful calls, not extra colorized panels
+                    "panels_colorized": max(
+                        0, totals["successful_calls"]
+                        - totals.get("colorization_retries", 0)
+                    ),
                 })
             else:
                 self.manifest_totals_update(ctx, {

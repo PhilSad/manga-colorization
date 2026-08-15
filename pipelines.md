@@ -147,9 +147,21 @@ crop and the labelled character atlas.
 
 Offline tests (`pipeline_v1/tests/test_verify_loop.py`, mock backends)
 cover the loop outcomes, retry semantics, per-panel provenance and the
-end-to-end manifest totals. Real Luna verdicts and measured per-call cost on
-live pages are pending a live run (the offline suite uses a mock verifier
-fabricating $0.0001/call).
+end-to-end manifest totals.
+
+**Measured live run** (`output/20260815-165721`, full-page gpt-image-2 mode,
+vol 1 p003–p008, `--skip-first 3 --limit 5 --verify-attempts 3`): 6 Luna
+calls across 5 pages, **$0.00613 total ≈ $0.00102/call** (paid OpenRouter
+tier, measured `usage.cost`; per page $0.00074–$0.00198). One real mismatch
+caught and auto-fixed: p003 attempt 1 colored Eisen's cloak gray/brown →
+fix prompt ("cloak deep red, beard blond-gold, light gray armor") →
+re-colorized → verified on attempt 2 (verify_calls 2, successful 1, retry
+cost $0.05074). The other 4 pages verified on attempt 1
+(verify_calls 1 each). Per-panel provenance lives in
+`3_colorized/<page>/<panel>.verify.json` (full attempt list, verdicts,
+fix prompt, measured costs). The retry added one extra gpt-image-2 call:
+6 calls $0.30056 total ($0.0501 avg/page) vs $0.24958 for the
+no-verify baseline.
 
 ---
 
@@ -670,6 +682,16 @@ working unchanged.
   - Volume-1 projection (187 pages): **≈ $9.3** — the projection is now
     backed by measured per-call usage in the manifest
     (`steps.colorize.records[].est_cost_usd`, `totals.gpt_image_cost_usd`).
+- **Verification loop on full-page mode (measured):** the same 5 pages were
+  re-run with `--verify-attempts 3` (`output/20260815-165721`) — Luna
+  verified 5/5 pages (4 on attempt 1, p003 caught and auto-fixed on
+  attempt 2), 6 verify calls **$0.00613 ≈ $0.00102/call**, one extra
+  gpt-image-2 retry **$0.05074** (6 calls $0.30056 total). All retry
+  attempts are kept (`<panel>.attempt_<n>.png`) and recorded in
+  `<panel>.verify.json`. Cost accounting detail: the run's manifest
+  `gpt_image_cost_usd` ($0.24982) summed only each page's final attempt —
+  the retry cost is in the per-attempt records; `orchestrator.sum_gpt_image_cost`
+  now sums all attempts (fixed after this run, unit-tested).
 - **Atlas upload bug fixed:** the first real run (`output/20260815-151659`)
   failed 4/5 pages with `400 - Invalid file 'image[1]': unsupported mimetype
   ('application/octet-stream')` — the atlas `BytesIO` was uploaded bare, so

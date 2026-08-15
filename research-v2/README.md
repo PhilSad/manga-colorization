@@ -303,6 +303,29 @@ The input component (~$0.019/page) is fixed across sizes and dominates the
 cheapest sizes, so volume cost compresses from $24.08 (7.53 MP output) to
 $9.32 (0.68 MP) — only 2.6× cheaper for 11× fewer pixels.
 
+#### All pages in `data/pages/` at the smallest size (20260815-093857 … 094401)
+
+The user picked 672×1008 as the sweet spot; applied the atlas method to every
+page in `data/pages/` (chapter 1 pages). Same atlas (frieren/himmel/heiter/
+eisen), same `data/atlas/prompt.txt`, `medium` quality. The spread
+p004-p005 (3000×2250, 4:3) uses the aspect-matched smallest valid size
+960×720 (691,200 px, just above the 655,360 px floor) instead of 672×1008,
+which would have squeezed it into 2:3.
+
+| page | input | output size | cost (measured) | run dir |
+|---|---|---|---:|---|
+| p004-p005 (spread) | 3000×2250 | 960×720 | $0.0532 | 20260815-093857 |
+| p006 | 1500×2250 | 672×1008 | $0.0499 | 20260815-093957 |
+| p007 | 1500×2250 | 672×1008 | $0.0499 | 20260815-094048 |
+| p008 | 1500×2250 | 672×1008 | $0.0499 | 20260815-094146 |
+| p009 | 1500×2250 | 672×1008 | $0.0499 | 20260815-094303 |
+| p010 | 1500×2250 | 672×1008 | $0.0499 | 20260815-094401 |
+
+All 6 pages together: **$0.303**. p009 was re-run for a complete,
+self-contained batch (identical inputs to 20260815-092433, same cost).
+Grid overview (all pages at the same visual scale, labelled with size +
+cost): `output/pages_all_small_grid.jpg`; full-res PNGs in each run dir.
+
 ## Conventions
 
 Same as the repo's methods: each run creates a fresh timestamped directory,

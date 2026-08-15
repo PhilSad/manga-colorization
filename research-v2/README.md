@@ -263,13 +263,21 @@ image + 112 text ≈ $0.019), so the cost ladder is output-token driven:
 | 1664×2496 | 4.15 MP | 2363 | $0.0899 | 64 s |
 | 1280×1920 | 2.46 MP | 1712 | $0.0704 | 53 s |
 | 1024×1536 | 1.57 MP | 1372 | $0.0602 | 56 s |
+| 960×1440 | 1.38 MP | 1299 | $0.0580 | 58 s |
+| 832×1248 | 1.04 MP | 1167 | $0.0540 | 53 s |
+| 768×1152 | 0.88 MP | 1108 | $0.0522 | 54 s |
+| 672×1008 | 0.68 MP | 1029 | $0.0499 | 59 s |
 
-Side-by-side comparison sheet (all sizes scaled to the same height, labelled
-with size + cost): `output/page9_atlas_medium_sizes_compare.jpg`; full-res
+Side-by-side comparison sheets (all sizes scaled to the same height, labelled
+with size + cost): `output/page9_atlas_medium_sizes_compare.jpg` (4 sizes)
+and `output/page9_atlas_medium_sizes_compare_v2.jpg` (all 8 sizes); full-res
 PNGs in each run dir. The input-cost floor (~$0.02) means halving the output
-edge only halves the *output* component — the cheapest useful sizes are
-1280×1920 ($0.070) and 1024×1536 ($0.060, the documented medium sweet spot).
-Quality differences are for the reader to judge visually; see the sheet.
+edge only halves the *output* component. The smaller runs show **diminishing
+returns**: below 1024×1536 the output-token count plateaus (1372 → 1029
+tokens from 1.57 → 0.68 MP) and cost only drops $0.060 → $0.050, while
+resolution visibly suffers — the last four sizes cost ~90% of 1024×1536 for
+less than half the pixels. Practical sweet spot: 1024×1536 ($0.060). Quality
+differences are for the reader to judge visually; see the sheets.
 
 ## Conventions
 

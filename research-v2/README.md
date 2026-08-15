@@ -22,6 +22,9 @@ formal method or pipeline).
 - `data/refs_manga/`: the converted references (`manifest.json` records the
   prompt/seed/cost) — used automatically by `detect_characters_yoloe.py` when
   present.
+- `data/patch/`: the OpenAI gpt-image-2 colorization test inputs — `orig.png`
+  (the B&W panel), `patch.png` (the same panel with the character reference
+  composited on top) and `prompt.txt`.
 - `models/`: downloaded model weights (gitignored).
 
 ## split_panels.py
@@ -146,6 +149,56 @@ Observed problems (measured, not speculation):
 
 Verdict: keep as an experimental open-vocabulary datapoint; do not use for
 cast detection in the pipeline.
+
+## gpt_image_colorize.py
+
+One-shot manga panel colorization with **OpenAI gpt-image-2** (Image API
+`/images/edits` endpoint, no mask — both input images act as references).
+
+```bash
+.venv/bin/python research-v2/gpt_image_colorize.py
+# --quality low --quality medium --quality high   (defaults)
+# --size 2880x2240                                (multiple of 16; source-panel aspect)
+```
+
+Inputs (from `data/patch/`): `orig.png` — the black & white panel to colorize,
+and `patch.png` — the same panel with the character reference composited on
+top. The prompt instructs the model to colorize the line art with the
+reference character's colors while adapting the reference's orientation/pose
+to match the B&W panel. Both images are sent together; the prompt supplies the
+glue. Output: `output/<YYYYMMDD-HHMMSS>/quality_<low|medium|high>.png` (one
+image per requested quality, same size) + `manifest.json` (prompt, config,
+per-quality timestamps, API `usage` tokens and computed cost).
+
+Flags: `--model`, `--quality` (repeatable; `low|medium|high|auto`),
+`--size` (WxH, constraints: max edge ≤ 3840, both edges multiples of 16,
+ratio ≤ 3:1, 655,360–8,294,400 px), `--output-format` (`png|jpeg|webp`),
+`--input-dir`, `--prompt-file`, `--output-root`, `--env-file`. Cost: paid
+OpenAI API; `gpt-image-2` bills image input $8/1M tokens, text input $5/1M,
+image output $30/1M (standard tier) and always processes image inputs at high
+fidelity.
+
+### Quality sweep run 20260815-082623 (2880×2240, 2 reference images)
+
+| quality | latency | output tokens | cost (measured) |
+|---|---|---:|---:|
+| low | 51 s | 406 | $0.0364 |
+| medium | 67 s | 3753 | $0.1368 |
+| high | 149 s | 15213 | $0.4806 |
+
+Measured via API `usage` (input tokens 3042 = 2992 image + 50 text, constant
+across the sweep; output tokens = total − 3042 — the input count was confirmed
+by an identical-inputs probe call). Sweep total ≈ $0.65 (+ ≈$0.03 for the
+probe). Input 2895×2250 + 2048×1591; output 2880×2240 PNG.
+
+Observations (objective only — files in the run dir for visual inspection):
+all three outputs are colored (mean saturation 0.18–0.22, Hasler–Süsstrunk
+colorfulness ≈ 32–35 vs 0 for the gray input); file size grows with quality
+(7.1/8.1/10.5 MB), consistent with higher detail. The model produced a
+full-page colorization from the two reference images — no mask or atlas
+needed. Known limitations from the docs: output >2560×1440 is "experimental",
+so a 2K size (e.g. 2048×1600) is a cheaper, supported alternative; the model
+cannot guarantee exact reference-color reproduction across generations.
 
 ## Conventions
 

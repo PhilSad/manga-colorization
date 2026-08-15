@@ -279,6 +279,30 @@ resolution visibly suffers — the last four sizes cost ~90% of 1024×1536 for
 less than half the pixels. Practical sweet spot: 1024×1536 ($0.060). Quality
 differences are for the reader to judge visually; see the sheets.
 
+#### Volume-1 projection (187 pages)
+
+Volume 1 (`data/page_per_volume/… v01 …/`) has 187 pages, every one
+1500×2250 — the same dimensions as p009, so the measured per-page cost
+transfers directly. High-res poster with all 8 sizes + B&W, labelled with
+cost/page and volume cost: `output/page9_atlas_medium_sizes_compare_v3_volume1cost.jpg`.
+
+| output size | cost/page (measured p009) | volume 1 (187 pages) |
+|---|---:|---:|
+| 2240×3360 | $0.1288 | $24.08 |
+| 1664×2496 | $0.0899 | $16.81 |
+| 1280×1920 | $0.0704 | $13.16 |
+| 1024×1536 | $0.0602 | $11.25 |
+| 960×1440 | $0.0580 | $10.84 |
+| 832×1248 | $0.0540 | $10.10 |
+| 768×1152 | $0.0522 | $9.77 |
+| 672×1008 | $0.0499 | $9.32 |
+
+Estimate: per-page cost measured on p009 (atlas of the 4 party members +
+`data/atlas/prompt.txt`); assumes other pages produce similar output tokens.
+The input component (~$0.019/page) is fixed across sizes and dominates the
+cheapest sizes, so volume cost compresses from $24.08 (7.53 MP output) to
+$9.32 (0.68 MP) — only 2.6× cheaper for 11× fewer pixels.
+
 ## Conventions
 
 Same as the repo's methods: each run creates a fresh timestamped directory,

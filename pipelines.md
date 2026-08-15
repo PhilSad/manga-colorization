@@ -40,6 +40,13 @@ stitched pages):
 |---|---|---|---|---|
 | ![p003 debug](docs/pipeline_v1/vol1-p003.png) | ![p004-p005 debug](docs/pipeline_v1/vol1-p004-p005.png) | ![p006 debug](docs/pipeline_v1/vol1-p006.png) | ![p007 debug](docs/pipeline_v1/vol1-p007.png) | ![p008 debug](docs/pipeline_v1/vol1-p008.png) |
 
+A more recent FLUX panel run on the same 5 pages (with the full-page fallback
+for p006 and the panel+page+prev2+cast detection mode) is
+[`output/20260815-161521`](pipeline_v1/output/20260815-161521/); its direct
+comparison against the gpt-image-2 full-page backend is in the
+[full-page gpt-image-2 atlas mode](#full-page-gpt-image-2-atlas-mode-pipeline_v1---full-page)
+section below.
+
 ## What works
 
 - **Panel detection** — the YOLO26n detector finds the panel layout reliably
@@ -650,11 +657,41 @@ working unchanged.
   (mean HSV saturation 2.8/255 vs 31–67 for the atlas=yes pages). The
   reference atlas + palette instruction is what drives the colorization;
   a no-atlas page is a de-facto no-op.
-- **Backend comparison:** FLUX panel mode is $0/call + electricity on Spark
-  (free but panel-wise, per-panel coherence); gpt-image-2 full-page mode is a
-  paid API (~$0.05/page) with page-level coherence in a single call — the
-  comparison is quality vs cost, and this mode is the pipeline-level
-  counterpart of the `research-v2` atlas method.
+- **Direct backend comparison (measured, same 5 pages):** the same pages
+  (p003–p008, `--skip-first 3 --limit 5`) were also run through the FLUX
+  panel backend on Spark —
+  [`output/20260815-161521`](pipeline_v1/output/20260815-161521/):
+
+  | | gpt-image-2 full-page | FLUX.2 Klein panel pipeline |
+  |---|---|---|
+  | run | `output/20260815-152145` | `output/20260815-161521` |
+  | calls | 5 (1/page, whole page) | 19 (1/panel; p003 6, spread 1, p006 1, p007 7, p008 4) |
+  | output resolution | 672×1008 / 960×720 (minimal API size) | full res 1500×2250 / 3000×2250 (stitched) |
+  | colorization cost | $0.24958 (5 calls, std tier) | $0 (self-hosted Spark) |
+  | character detection | $0.00056 (5 page-level calls) | $0.00363 (19 panel+page+prev2+cast calls) |
+  | wall time | ~5 min | 343.7 s (incl. first-request model load) |
+  | failures / B&W fallbacks | 0 / 0 | 0 / 0 |
+
+  Both use the same labelled atlas + palette instruction machinery
+  (`character_profiles.json`), so the difference is backend: gpt-image-2
+  colorizes the whole page in one call (page-level coherence, ~$0.05/page,
+  downscaled output); FLUX colorizes each panel separately ($0, full
+  resolution, per-panel coherence — the classic panel-vs-page tradeoff).
+  Mean HSV saturation (0–255) per page: p003 66.2 vs 56.8 · spread 69.7 vs
+  49.3 · **p006 3.5 vs 3.7** · p007 34.7 vs 45.7 · p008 54.7 vs 48.2. The
+  p006 finding (no detected characters → no atlas → near-B&W) reproduces on
+  **both** backends, confirming the atlas drives the colorization, not the
+  backend. Side-by-side views (left gpt-image-2, right FLUX panel, both at
+  common display height):
+
+  | p003 | spread p004-p005 | p006 | p007 | p008 |
+  |---|---|---|---|---|
+  | ![p003](docs/pipeline_v1/compare-gpt2-vs-flux-p003.png) | ![spread](docs/pipeline_v1/compare-gpt2-vs-flux-p004-p005.png) | ![p006](docs/pipeline_v1/compare-gpt2-vs-flux-p006.png) | ![p007](docs/pipeline_v1/compare-gpt2-vs-flux-p007.png) | ![p008](docs/pipeline_v1/compare-gpt2-vs-flux-p008.png) |
+
+  Full-res copies: `docs/pipeline_v1/gpt-image2-vol1-p003.png` /
+  `gpt-image2-vol1-p007.png` and `flux-panel-vol1-p003.png` /
+  `flux-panel-vol1-p007.png`. This mode is the pipeline-level counterpart of
+  the `research-v2` atlas method.
 - **Status:** implemented, offline-tested (`tests/test_full_page.py`, mock
   backends; full offline suite green), and verified with a real 5-page run
   (`output/20260815-152145`, 5/5 colorize calls OK, 0 errors, ~5 min wall

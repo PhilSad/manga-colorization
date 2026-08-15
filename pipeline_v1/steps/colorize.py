@@ -19,6 +19,14 @@ page-level VLM record; `cast` derives the full chapter cast
 (`cast_key_for_page` / `--cast-key`) with zero VLM calls, falling back to the
 full canonical roster when no chapter cast is derivable.
 
+Verification loop (`--verify-attempts N`, see verify_loop.py): after each
+colorization the panel is checked by the Luna verifier (strict structured
+output). On a mismatch the fix prompt is output (console + per-panel files)
+and the panel is re-colorized with it up to N attempts total. Every attempt
+and every verdict is recorded in `<panel>.verify.json` (+ `attempt_<n>`
+images, `<panel>.fix_prompt.txt`); the final attempt is copied to the
+canonical output name so the stitch step is untouched.
+
 Parallel colorization (`--worker-colorization N`): pages are independent units
 of work — each page writes only to its own `3_colorized/<page>/` dir, so
 worker threads never race on files. With N > 1 the per-page body runs in a
@@ -52,20 +60,36 @@ def _panel_images(page_dir: Path) -> list[Path]:
 
 
 def _new_totals() -> dict:
-    return {
+    totals = {
         "api_calls": 0,
         "successful_calls": 0,
         "error_calls": 0,
         "total_latency_s": 0.0,
     }
+    # Verification loop counters (--verify-attempts); all zero when off.
+    totals.update({
+        "verify_calls": 0,
+        "successful_verify_calls": 0,
+        "verified_panels": 0,
+        "mismatch_panels": 0,
+        "verifier_error_panels": 0,
+        "colorization_retries": 0,
+        "verify_cost_usd": 0.0,
+    })
+    return totals
 
 
 def run_colorize_step(
     ctx: RunContext,
     config: PipelineConfig,
     colorizer,  # Colorizer
+    verifier=None,  # ColorVerifier (None -> no verification loop)
 ) -> dict:
-    """Run stage 4 for all panels of all pages. Returns per-call records."""
+    """Run stage 4 for all panels of all pages. Returns per-call records.
+
+    When `verifier` is set and `config.verify_attempts > 0`, each panel goes
+    through the verify loop (verify_loop.py) instead of a single colorize
+    call."""
     from atlas import build_filtered_atlas  # noqa: F401 (kept for _process_page imports)
     from profiles import load_profiles, profiles_sha256
 
@@ -93,7 +117,8 @@ def run_colorize_step(
         ):
             page_records, page_totals, _ = _process_page(
                 ctx, config, colorizer, page_dir,
-                profiles, profiles_sha, extension, progress=True,
+                profiles, profiles_sha, extension, verifier=verifier,
+                progress=True,
             )
             records.extend(page_records)
             _merge_totals(totals, page_totals)
@@ -112,7 +137,8 @@ def run_colorize_step(
                 futures = {
                     pool.submit(
                         _process_page, ctx, config, colorizer, page_dir,
-                        profiles, profiles_sha, extension, progress=False,
+                        profiles, profiles_sha, extension, verifier=verifier,
+                        progress=False,
                     ): page_dir
                     for page_dir in page_dirs
                 }
@@ -137,6 +163,7 @@ def _process_page(
     profiles_sha: str,
     extension: str,
     *,
+    verifier=None,
     progress: bool,
 ) -> tuple[list[dict], dict, set[str]]:
     """Full per-page colorization work: character lookup, atlas build, calls,
@@ -208,31 +235,140 @@ def _process_page(
                     atlas="yes" if atlas else "no",
                     palette="yes" if palette else "no",
                 )
-            record = colorizer.colorize(
-                panel_path, atlas, output_path, palette_instruction=palette
-            )
-            doc = record.to_dict(panel_path, atlas)
-            doc["characters"] = characters
-            doc["palette_instruction"] = palette
-            doc["unknown_characters"] = unknown_names(characters, profiles)
-            doc["profiles_sha256"] = profiles_sha
-            doc["page"] = page
+            if config.verify_attempts > 0 and verifier is not None:
+                record, doc, verify_doc = _colorize_with_verify_loop(
+                    ctx, config, colorizer, verifier, panel_path, atlas,
+                    output_path, page, stem, palette, characters, profiles,
+                    profiles_sha,
+                )
+                page_totals["api_calls"] += verify_doc["api_calls"]
+                page_totals["successful_calls"] += verify_doc["successful_calls"]
+                page_totals["error_calls"] += verify_doc["error_calls"]
+                page_totals["total_latency_s"] = round(
+                    page_totals["total_latency_s"] + verify_doc["total_latency_s"], 3
+                )
+                page_totals["verify_calls"] += verify_doc["verify_calls"]
+                page_totals["successful_verify_calls"] += (
+                    verify_doc["successful_verify_calls"]
+                )
+                page_totals["colorization_retries"] += verify_doc["colorization_retries"]
+                page_totals["verify_cost_usd"] = round(
+                    page_totals["verify_cost_usd"] + verify_doc["verify_cost_usd"], 8
+                )
+                outcome = verify_doc["outcome"]
+                if outcome == "verified":
+                    page_totals["verified_panels"] += 1
+                elif outcome == "mismatch":
+                    page_totals["mismatch_panels"] += 1
+                elif outcome == "verifier_error":
+                    page_totals["verifier_error_panels"] += 1
+            else:
+                record = colorizer.colorize(
+                    panel_path, atlas, output_path, palette_instruction=palette
+                )
+                doc = record.to_dict(panel_path, atlas)
+                doc["characters"] = characters
+                doc["palette_instruction"] = palette
+                doc["unknown_characters"] = unknown_names(characters, profiles)
+                doc["profiles_sha256"] = profiles_sha
+                doc["page"] = page
+                page_totals["api_calls"] += 1
+                if record.status == "ok":
+                    page_totals["successful_calls"] += 1
+                else:
+                    page_totals["error_calls"] += 1
+                page_totals["total_latency_s"] = round(
+                    page_totals["total_latency_s"] + record.latency_s, 3
+                )
             docs.append(doc)
             fresh_stems.add(stem)
-            page_totals["api_calls"] += 1
-            if record.status == "ok":
-                page_totals["successful_calls"] += 1
-            else:
-                page_totals["error_calls"] += 1
-            page_totals["total_latency_s"] = round(
-                page_totals["total_latency_s"] + record.latency_s, 3
-            )
     finally:
         if panels_bar is not None:
             panels_bar.close()
 
     _copy_resumed_panels(ctx, config, page, fresh_stems)
     return docs, page_totals, fresh_stems
+
+
+def _colorize_with_verify_loop(
+    ctx: RunContext,
+    config: PipelineConfig,
+    colorizer,
+    verifier,
+    panel_path: Path,
+    atlas: Path | None,
+    output_path: Path,
+    page: str,
+    stem: str,
+    palette: str,
+    characters: list[str],
+    profiles: dict,
+    profiles_sha: str,
+) -> tuple[object, dict, dict]:
+    """Run the per-panel verify loop (verify_loop.py) and persist the extra
+    provenance: `<stem>.verify.json` (outcome, every attempt's colorize +
+    verify records, fix prompt, verify cost) and `<stem>.fix_prompt.txt`
+    (last fix prompt, when one was produced). Returns
+    (final ColorizeRecord, pipeline doc dict, verify counters dict)."""
+    from profiles import unknown_names  # noqa: F401 (used below; _process_page
+                                        # imports palette_instruction itself)
+    from verify_loop import run_verify_loop
+
+    out_dir = output_path.parent
+    result = run_verify_loop(
+        colorizer,
+        verifier,
+        panel_path,
+        atlas,
+        output_path,
+        palette_instruction=palette,
+        max_attempts=max(1, config.verify_attempts),
+    )
+
+    record = result.colorize
+    doc = record.to_dict(panel_path, atlas)
+    doc["characters"] = characters
+    doc["palette_instruction"] = palette
+    doc["unknown_characters"] = unknown_names(characters, profiles)
+    doc["profiles_sha256"] = profiles_sha
+    doc["page"] = page
+    doc["verify_loop"] = {
+        "outcome": result.outcome,
+        "max_attempts": max(1, config.verify_attempts),
+        "fix_prompt": result.fix_prompt,
+        "verify_calls": result.verify_calls,
+        "successful_verify_calls": result.successful_verify_calls,
+        "verify_cost_usd": result.verify_cost_usd,
+        "attempts": result.attempts,
+    }
+
+    write_json(out_dir / f"{stem}.verify.json", doc["verify_loop"])
+    if result.fix_prompt:
+        (out_dir / f"{stem}.fix_prompt.txt").write_text(
+            result.fix_prompt + "\n", encoding="utf-8"
+        )
+
+    # Per-attempt colorize counters so totals reflect every call (not just
+    # the final one): attempts == colorize calls, one record each.
+    api_calls = len(result.attempts)
+    successful_calls = sum(
+        1 for a in result.attempts if a["colorize"].get("status") == "ok"
+    )
+    total_latency_s = sum(
+        a["colorize"].get("latency_s") or 0.0 for a in result.attempts
+    )
+    verify_doc = {
+        "outcome": result.outcome,
+        "api_calls": api_calls,
+        "successful_calls": successful_calls,
+        "error_calls": api_calls - successful_calls,
+        "total_latency_s": round(total_latency_s, 3),
+        "verify_calls": result.verify_calls,
+        "successful_verify_calls": result.successful_verify_calls,
+        "colorization_retries": result.colorization_retries,
+        "verify_cost_usd": result.verify_cost_usd,
+    }
+    return record, doc, verify_doc
 
 
 def _cast_names_by_panel(
@@ -289,8 +425,20 @@ def _copy_resumed_panels(
 def _merge_totals(target: dict, source: dict) -> None:
     for key in ("api_calls", "successful_calls", "error_calls"):
         target[key] += source[key]
+    for key in (
+        "verify_calls",
+        "successful_verify_calls",
+        "verified_panels",
+        "mismatch_panels",
+        "verifier_error_panels",
+        "colorization_retries",
+    ):
+        target[key] += source.get(key, 0)
     target["total_latency_s"] = round(
         target["total_latency_s"] + source["total_latency_s"], 3
+    )
+    target["verify_cost_usd"] = round(
+        target["verify_cost_usd"] + source.get("verify_cost_usd", 0.0), 8
     )
 
 

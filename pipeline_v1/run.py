@@ -43,6 +43,7 @@ def build_backends(config):
             MockColorizer,
             MockPageCharacterDetector,
             MockPanelDetector,
+            MockVerifier,
         )
         from orchestrator import Backends
 
@@ -59,6 +60,7 @@ def build_backends(config):
             colorizer=MockColorizer(
                 backend="gpt-image-2" if config.full_page else "flux"
             ),
+            verifier=MockVerifier(),
         )
 
     if config.full_page:
@@ -131,6 +133,7 @@ def build_backends(config):
         detector=detector,
         character_detector=character_detector,
         colorizer=colorizer,
+        verifier=_build_verifier(config, api_key),
     )
 
 
@@ -212,6 +215,32 @@ def _build_full_page_backends(config):
         detector=None,
         character_detector=character_detector,
         colorizer=colorizer,
+        verifier=_build_verifier(config, os.getenv(config.verify_api_key_env)),
+    )
+
+
+def _build_verifier(config, api_key):
+    """ColorVerifier for the verify loop, or None when --verify-attempts is
+    off (the default; zero extra OpenRouter calls). Raises SystemExit when
+    enabled but the OpenRouter key or the prompt file is missing."""
+    if config.verify_attempts <= 0:
+        return None
+    if not api_key:
+        raise SystemExit(
+            "--verify-attempts needs an OpenRouter key: set "
+            f"{config.verify_api_key_env} or add it to {REPO_ROOT / '.env'}"
+        )
+    if not config.verify_prompt_file.is_file():
+        raise SystemExit(
+            f"verify prompt file not found: {config.verify_prompt_file}"
+        )
+    from verify_color import ColorVerifier
+
+    return ColorVerifier(
+        model=config.verify_model,
+        api_key=api_key,
+        prompt_template=config.verify_prompt_file.read_text(encoding="utf-8"),
+        max_tokens=config.verify_max_tokens,
     )
 
 

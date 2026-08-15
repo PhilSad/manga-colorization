@@ -46,6 +46,11 @@ DEFAULT_CHAPTER_PAGE_MAP_FILE = (
     REPO_ROOT / "frieren_wiki_dataset" / "chapter_page_map.json"
 )
 
+# Color verification (verify loop, --verify-attempts): OpenRouter vision model
+# with strict json_schema structured output (analyse/good_color/fix_prompt).
+DEFAULT_VERIFY_MODEL = "openai/gpt-5.6-luna"
+DEFAULT_VERIFY_PROMPT_FILE = PIPELINE_DIR / "verify_color_prompt.txt"
+
 # FLUX VAE constraint: every requested dimension must be a multiple of 16.
 FLUX_MULTIPLE = 16
 # The smallest dimension we will ever request (rounding must not produce 0).
@@ -144,6 +149,15 @@ class PipelineConfig:
     # Parallel colorization worker threads (1 = sequential, current behavior).
     worker_colorization: int = 1
 
+    # Verification loop: 0 = disabled; 1 = verify each panel and output the
+    # fix prompt without re-colorizing; N >= 2 = up to N colorization attempts
+    # with at most N-1 fix-prompt retries (verify_loop.py).
+    verify_attempts: int = 0
+    verify_model: str = DEFAULT_VERIFY_MODEL
+    verify_prompt_file: Path = DEFAULT_VERIFY_PROMPT_FILE
+    verify_max_tokens: int = 1024
+    verify_api_key_env: str = "OPENROUTER_API_KEY"
+
     # Page selection (repo convention: --skip-first / --limit)
     skip_first: int = 0
     limit: int | None = None
@@ -214,6 +228,11 @@ class PipelineConfig:
             "gpt_atlas_scale": self.gpt_atlas_scale,
             "openai_api_key_env": self.openai_api_key_env,
             "worker_colorization": self.worker_colorization,
+            "verify_attempts": self.verify_attempts,
+            "verify_model": self.verify_model,
+            "verify_prompt_file": str(self.verify_prompt_file),
+            "verify_max_tokens": self.verify_max_tokens,
+            "verify_api_key_env": self.verify_api_key_env,
             "skip_first": self.skip_first,
             "limit": self.limit,
             "steps": list(self.steps),
@@ -252,6 +271,10 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError("--worker-detection must be at least 1")
     if config.worker_colorization < 1:
         raise ValueError("--worker-colorization must be at least 1")
+    if config.verify_attempts < 0:
+        raise ValueError("--verify-attempts must be non-negative")
+    if config.verify_max_tokens < 1:
+        raise ValueError("--verify-max-tokens must be positive")
     if config.limit is not None and config.limit < 1:
         raise ValueError("--limit must be at least 1")
     if config.flux_steps < 1:
@@ -394,6 +417,28 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         help="Parallel colorization worker threads over pages "
                              "(1 = sequential; each page writes only its own "
                              "3_colorized/<page>/ dir, so workers never race).")
+    parser.add_argument("--verify-attempts", type=int, default=0,
+                        help="Verify each colorized panel with Luna (OpenRouter, "
+                             "strict structured output) and re-colorize on palette "
+                             "mismatch: 1 = verify + output the fix prompt only; "
+                             "2+ = up to N total colorization attempts with up to "
+                             "N-1 fix-prompt retries. 0 = disabled (default). "
+                             "Every attempt and verdict is recorded in "
+                             "<panel>.verify.json; retries keep attempt_<n> images "
+                             "and the final attempt is copied to the canonical name.")
+    parser.add_argument("--verify-model", default=DEFAULT_VERIFY_MODEL,
+                        help="OpenRouter vision model for color verification "
+                             "(default: openai/gpt-5.6-luna).")
+    parser.add_argument("--verify-prompt-file", type=Path,
+                        default=DEFAULT_VERIFY_PROMPT_FILE,
+                        help="Prompt for the color verification model "
+                             "(default: verify_color_prompt.txt).")
+    parser.add_argument("--verify-max-tokens", type=int, default=1024,
+                        help="Completion token cap for the verifier "
+                             "(default: 1024).")
+    parser.add_argument("--verify-api-key-env", default="OPENROUTER_API_KEY",
+                        help="Env var holding the OpenRouter key used by the "
+                             "verifier (default: OPENROUTER_API_KEY).")
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--atlas-columns", type=int,
                         help="Atlas grid columns (default: ceil(sqrt(n))).")
@@ -524,6 +569,11 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             gpt_atlas_scale=args.gpt_atlas_scale,
             openai_api_key_env=args.openai_api_key_env,
             worker_colorization=args.worker_colorization,
+            verify_attempts=args.verify_attempts,
+            verify_model=args.verify_model,
+            verify_prompt_file=args.verify_prompt_file,
+            verify_max_tokens=args.verify_max_tokens,
+            verify_api_key_env=args.verify_api_key_env,
             skip_first=args.skip_first,
             limit=args.limit,
             steps=steps,

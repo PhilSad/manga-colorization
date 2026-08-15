@@ -144,6 +144,62 @@ class MockColorizer:
         )
 
 
+class MockVerifier:
+    """Deterministic offline stand-in for verify_color.ColorVerifier.
+
+    Verdicts are canned per panel stem (the monochrome crop's stem — stable
+    across retries even though the colorized file is renamed per attempt):
+    `by_panel: {stem: ("good"|"bad"|"bad-once", fix_prompt)}`. Default: good
+    (verified). "bad" yields a MISMATCH verdict carrying the given fix prompt
+    (or a default one); "bad-once" is bad on the first verify call for that
+    stem and good afterwards (the fix worked) — both exercise the verify
+    loop's retry path without any network.
+    """
+
+    def __init__(
+        self, by_panel: dict[str, tuple[str, str]] | None = None
+    ) -> None:
+        self.by_panel = by_panel or {}
+        self.calls: list[tuple[Path, Path | None, Path | None]] = []
+        self._stem_counts: dict[str, int] = {}
+
+    def verify(
+        self,
+        colorized: Path,
+        input_crop: Path | None,
+        atlas: Path | None = None,
+    ) -> "ColorVerifyRecord":
+        from verify_color import ColorVerifyRecord
+
+        colorized = Path(colorized)
+        self.calls.append((colorized, input_crop, atlas))
+        stem = Path(input_crop).stem if input_crop is not None else colorized.stem
+        verdict, fix = self.by_panel.get(stem, ("good", ""))
+        if verdict == "bad-once":
+            n = self._stem_counts.get(stem, 0)
+            self._stem_counts[stem] = n + 1
+            if n == 0:
+                verdict, fix = "bad", fix
+            else:
+                verdict, fix = "good", ""
+        good = verdict == "good"
+        return ColorVerifyRecord(
+            status="verified" if good else "mismatch",
+            good_color=good,
+            analyse="mock analysis",
+            fix_prompt="" if good else (fix or "mock: re-colorize with canonical palette"),
+            response_text="",
+            usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            cost_usd=0.0001,
+            cost_source="mock",
+            latency_s=0.01,
+            model_returned="mock",
+            attempts=1,
+            finished_at="mock",
+            error=None,
+        )
+
+
 class MockPageCharacterDetector:
     """Canned page-level detections keyed by page stem: `{page_stem: {panel_stem:
     (characters, uncertain)}}`. Panels not covered are reported as a fallback

@@ -208,7 +208,12 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   (4 for the step-distilled model), `--lora-scale`, `--seed`, `--detection-mode`,
   `--cast-key`, `--only-panel PAGE:PANEL` (targeted rerun),
   `--force-characters PAGE:PANEL=Name` (ground-truth identities, no paid
-  call), `--worker-detection N` (parallel page-level detection),
+  call), `--verify-attempts N` (per-panel character-palette verification
+  loop with Luna `openai/gpt-5.6-luna` structured output: 1 = verify + write
+  `<panel>.fix_prompt.txt` only; N≥2 = re-colorize with the fix prompt up to
+  N−1 retries, keeping `<panel>.attempt_<n>.png`; every attempt recorded in
+  `<panel>.verify.json` and `totals.verify_cost_usd`; `--verify-model` /
+  `--verify-prompt-file` override the verifier), `--worker-detection N` (parallel page-level detection),
   `--worker-colorization N` (parallel page-level colorization — parallelizes
   the paid gpt-image-2 calls directly in full-page mode),
   `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a

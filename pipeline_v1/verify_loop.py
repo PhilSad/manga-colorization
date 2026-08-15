@@ -1,0 +1,201 @@
+"""Verification loop for the colorize step (`--verify-attempts`).
+
+After a panel is colorized, an OpenRouter vision-language model
+(`openai/gpt-5.6-luna`, strict json_schema structured output) checks whether
+every character has its canonical Frieren palette — sending the colorized
+panel, the original monochrome crop, and the same labelled atlas the
+colorizer saw as context (reuses `verify_color.ColorVerifier`). On a "not
+good" verdict the loop **outputs the fix prompt** (console + per-panel file)
+and, while attempts remain, re-colorizes the panel with the fix prompt
+appended to the palette instruction, then verifies again.
+
+Every colorization attempt and every verification response is recorded: the
+step writes `<panel>.verify.json` (all attempts), `attempt_<n>` image files
+for retries, and `<panel>.fix_prompt.txt` when a fix prompt was produced. The
+final attempt is copied to the canonical `<stem><ext>` name the stitch step
+expects, so the stitch step is untouched.
+
+Loop outcomes:
+- `verified`        the last verification judged the palette canonical
+- `mismatch`        attempts exhausted with a "not good" verdict (fix prompt
+                    output; panel keeps its last colorization)
+- `verifier_error`  the verifier failed (error/unparseable); the panel keeps
+                    its latest colorization and the loop stops without
+                    burning retries on a broken verifier
+- `colorize_error`  a colorization attempt failed; nothing to verify, loop
+                    stops (the record carries the error as usual)
+"""
+
+from __future__ import annotations
+
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from colorizer import ColorizeRecord
+from verify_color import (
+    ERROR,
+    MISMATCH,
+    UNPARSEABLE,
+    VERIFIED,
+    ColorVerifier,
+)
+
+OUTCOME_VERIFIED = "verified"
+OUTCOME_MISMATCH = "mismatch"
+OUTCOME_VERIFIER_ERROR = "verifier_error"
+OUTCOME_COLORIZE_ERROR = "colorize_error"
+
+# Marker prepended to the canonical palette instruction for retry attempts,
+# telling the colorizer the fix prompt is authoritative.
+FIX_HEADER = (
+    "Correction from the verification pass (authoritative; overrides any "
+    "conflicting colors above):"
+)
+
+
+@dataclass
+class VerifyLoopResult:
+    outcome: str
+    colorize: ColorizeRecord            # final colorize record (output = canonical file)
+    attempts: list[dict[str, Any]]      # per-attempt logs (see run_verify_loop)
+    fix_prompt: str = ""                # last fix prompt output ("" if none)
+    verify_calls: int = 0
+    successful_verify_calls: int = 0
+    verify_cost_usd: float = 0.0
+
+    @property
+    def colorization_retries(self) -> int:
+        return max(0, len(self.attempts) - 1)
+
+
+def _apply_fix(palette_instruction: str, fix_prompt: str) -> str:
+    """Canonical palette instruction + the verification fix prompt for a
+    retry attempt. The fix block is authoritative (appended last)."""
+    block = f"{FIX_HEADER}\n{fix_prompt}"
+    if palette_instruction:
+        return f"{palette_instruction}\n\n{block}"
+    return block
+
+
+def _synthesize_fix(analyse: str) -> str:
+    """Fallback when a mismatch verdict carries no fix_prompt: derive a
+    corrective instruction from the model's own analysis text."""
+    return f"Corrections from the verification pass: {analyse}"
+
+
+def run_verify_loop(
+    colorizer,
+    verifier: ColorVerifier,
+    panel: Path,
+    atlas: Path | None,
+    output: Path,
+    palette_instruction: str = "",
+    max_attempts: int = 2,
+) -> VerifyLoopResult:
+    """Colorize + verify up to `max_attempts` times.
+
+    Attempt 1 writes directly to `output` (the canonical name the stitch step
+    expects); retries write `<stem>.attempt_<n><ext>`. After the loop the
+    final successful colorization is copied to `output` (no-op for attempt 1),
+    and the returned record's `.output` always points at the canonical file.
+
+    `max_attempts` semantics: 1 = verify and output the fix prompt only (no
+    re-colorization); N >= 2 = up to N colorization attempts with at most
+    N-1 fix-prompt retries.
+    """
+    attempts: list[dict[str, Any]] = []
+    verify_calls = 0
+    successful_verify_calls = 0
+    verify_cost_usd = 0.0
+    fix_prompt = ""
+    final_record: ColorizeRecord | None = None
+    last_ok_record: ColorizeRecord | None = None
+    outcome = OUTCOME_MISMATCH  # default when the last verdict is "not good"
+
+    for attempt in range(1, max_attempts + 1):
+        if attempt == 1:
+            attempt_output = output
+            prompt = palette_instruction
+        else:
+            attempt_output = output.with_name(
+                f"{output.stem}.attempt_{attempt}{output.suffix}"
+            )
+            prompt = _apply_fix(palette_instruction, fix_prompt)
+
+        record = colorizer.colorize(
+            panel, atlas, attempt_output, palette_instruction=prompt
+        )
+        final_record = record
+
+        verdict = None
+        if record.status == "ok":
+            last_ok_record = record
+            verdict = verifier.verify(attempt_output, panel, atlas=atlas)
+            verify_calls += 1
+            if verdict.status == VERIFIED:
+                successful_verify_calls += 1
+            if verdict.cost_usd is not None:
+                verify_cost_usd += verdict.cost_usd
+
+        attempt_doc: dict[str, Any] = {
+            "attempt": attempt,
+            "prompt_used": prompt,
+            "colorize": record.to_dict(panel, atlas),
+        }
+        if verdict is not None:
+            attempt_doc["verify"] = verdict.to_dict()
+        attempts.append(attempt_doc)
+
+        if record.status != "ok":
+            outcome = OUTCOME_COLORIZE_ERROR
+            break
+        if verdict is None:  # defensive: an ok record always gets a verdict
+            outcome = OUTCOME_VERIFIER_ERROR
+            break
+        if verdict.status == VERIFIED:
+            outcome = OUTCOME_VERIFIED
+            print(f"[verify] {panel.name}: palette verified (attempt {attempt})",
+                  flush=True)
+            break
+        if verdict.status in (UNPARSEABLE, ERROR):
+            outcome = OUTCOME_VERIFIER_ERROR
+            print(
+                f"[verify] {panel.name}: verifier {verdict.status} "
+                f"(no retry; keeping attempt {attempt})",
+                flush=True,
+            )
+            break
+
+        # verdict.status == MISMATCH: output the fix prompt for the user and,
+        # with attempts left, re-colorize with it.
+        fix_prompt = (verdict.fix_prompt or _synthesize_fix(verdict.analyse)).strip()
+        print(f"[verify] {panel.name}: palette MISMATCH (attempt {attempt})",
+              flush=True)
+        print(f"[verify] fix prompt:\n{fix_prompt}", flush=True)
+        if attempt < max_attempts:
+            continue
+        outcome = OUTCOME_MISMATCH
+        break
+
+    assert final_record is not None  # max_attempts >= 1 always runs one iteration
+
+    # The canonical output file must hold the final successful colorization:
+    # attempt 1 already wrote it; a later retry (or a failed final attempt
+    # after a successful one) is copied over.
+    if last_ok_record is not None and last_ok_record.output != output:
+        shutil.copy2(last_ok_record.output, output)
+        last_ok_record.output = output
+    if last_ok_record is not None:
+        final_record = last_ok_record
+
+    return VerifyLoopResult(
+        outcome=outcome,
+        colorize=final_record,
+        attempts=attempts,
+        fix_prompt=fix_prompt,
+        verify_calls=verify_calls,
+        successful_verify_calls=successful_verify_calls,
+        verify_cost_usd=round(verify_cost_usd, 8),
+    )

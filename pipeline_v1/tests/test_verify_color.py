@@ -33,10 +33,20 @@ def _panel(path, size=(32, 32), color="white"):
 def test_parse_color_verdict_ok():
     verdict = parse_color_verdict(
         '{"analyse": "Frieren hair is silver-white as expected", '
-        '"good_color": true}'
+        '"good_color": true, "fix_prompt": ""}'
     )
     assert verdict["good_color"] is True
     assert "silver-white" in verdict["analyse"]
+    assert verdict["fix_prompt"] == ""
+
+
+def test_parse_color_verdict_fix_prompt():
+    verdict = parse_color_verdict(
+        '{"analyse": "hair is lavender", "good_color": false, '
+        '"fix_prompt": "Frieren: hair silver-white, eyes teal"}'
+    )
+    assert verdict["good_color"] is False
+    assert verdict["fix_prompt"] == "Frieren: hair silver-white, eyes teal"
 
 
 def test_parse_color_verdict_string_bool_and_fenced_json():
@@ -65,13 +75,18 @@ def test_parse_color_verdict_missing_analyse_defaults():
 # Structured-output contract
 
 def test_color_verdict_schema_is_strict_and_complete():
-    """The structured-output contract: exactly analyse + good_color, both
-    required, no extra properties, strict mode enabled, descriptive props."""
+    """The structured-output contract: analyse + good_color + fix_prompt, all
+    required, no extra properties, strict mode enabled, descriptive props.
+
+    fix_prompt is the superset field consumed by the verify loop
+    (verify_loop.py); the eval suite reads only the first two fields and
+    ignores the third."""
     schema = COLOR_VERDICT_SCHEMA
-    assert set(schema["properties"]) == {"analyse", "good_color"}
+    assert set(schema["properties"]) == {"analyse", "good_color", "fix_prompt"}
     assert schema["properties"]["analyse"]["type"] == "string"
     assert schema["properties"]["good_color"]["type"] == "boolean"
-    assert schema["required"] == ["analyse", "good_color"]
+    assert schema["properties"]["fix_prompt"]["type"] == "string"
+    assert schema["required"] == ["analyse", "good_color", "fix_prompt"]
     assert schema["additionalProperties"] is False
     assert RESPONSE_FORMAT["type"] == "json_schema"
     assert RESPONSE_FORMAT["json_schema"]["strict"] is True
@@ -126,7 +141,7 @@ def test_verify_mismatch_when_good_color_false(tmp_path):
     def bad():
         return FakeResponse(
             '{"analyse": "hair is lavender instead of silver-white", '
-            '"good_color": false}',
+            '"good_color": false, "fix_prompt": "Frieren: hair silver-white"}',
             usage=FakeUsage(),
         )
 
@@ -135,6 +150,25 @@ def test_verify_mismatch_when_good_color_false(tmp_path):
     assert record.status == "mismatch"
     assert record.good_color is False
     assert "lavender" in record.analyse
+    assert record.fix_prompt == "Frieren: hair silver-white"
+
+
+def test_verify_fix_prompt_defaults_empty_when_verdict_lacks_it(tmp_path):
+    """Backwards compatibility with the pre-loop two-field verdict: a real
+    strict output always carries fix_prompt, but the parser defaults it to ''
+    when absent so older recorded responses stay parseable."""
+    colorized = _panel(tmp_path / "colorized.png")
+
+    def ok():
+        return FakeResponse(
+            '{"analyse": "fine", "good_color": true}',
+            usage=FakeUsage(),
+        )
+
+    verifier = ColorVerifier(client=FakeClient([ok]))
+    record = verifier.verify(colorized, None)
+    assert record.status == "verified"
+    assert record.fix_prompt == ""
 
 
 def test_verify_bad_request_does_not_downgrade(tmp_path):

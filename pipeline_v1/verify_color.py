@@ -6,10 +6,12 @@ its canonical Frieren palette. The prompt is deliberately generic: no
 fixture expectations (required/forbidden colors, left-to-right order) are
 rendered into it; the model judges from its own knowledge of the manga. The
 verdict is a **real structured output** — `response_format` type
-`json_schema` (strict) with the fields `analyse: str` and
-`good_color: bool`, routed with `provider.require_parameters: true` so the
+`json_schema` (strict) with the fields `analyse: str`, `good_color: bool`
+and `fix_prompt: str`, routed with `provider.require_parameters: true` so the
 request only reaches endpoints that natively support structured outputs and
-never silently degrades to loose JSON.
+never silently degrades to loose JSON. The third field is the corrective
+instruction consumed by the verification loop (verify_loop.py); the eval
+suite ignores it.
 
 Shared with the character detector: the OpenAI-compatible call machinery
 with retry/backoff and `usage.cost` accounting lives in
@@ -37,6 +39,10 @@ UNPARSEABLE = "unparseable"
 ERROR = "error"
 
 # Strict json_schema structured output (OpenRouter structured-outputs mode).
+# The schema is a superset of the COL-* evaluation verdict: `fix_prompt` is
+# required by the verify loop (verify_loop.py) so one schema serves both the
+# eval suite and the per-panel loop (the eval's parse only reads the fields it
+# needs; the extra field is ignored there).
 COLOR_VERDICT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -53,8 +59,18 @@ COLOR_VERDICT_SCHEMA: dict[str, Any] = {
                 "Frieren color palette."
             ),
         },
+        "fix_prompt": {
+            "type": "string",
+            "description": (
+                "If good_color is false: a concise corrective instruction "
+                "for the colorizer naming each wrong character and the exact "
+                "canonical colors to apply (e.g. 'Frieren: hair silver-white, "
+                "eyes teal — the hair was colored lavender'). Empty string "
+                "when good_color is true."
+            ),
+        },
     },
-    "required": ["analyse", "good_color"],
+    "required": ["analyse", "good_color", "fix_prompt"],
     "additionalProperties": False,
 }
 
@@ -72,12 +88,13 @@ RESPONSE_FORMAT: dict[str, Any] = {
 # Answer parsing
 
 def parse_color_verdict(text: str) -> dict | None:
-    """Parse `{"analyse": str, "good_color": bool}`.
+    """Parse `{"analyse": str, "good_color": bool, "fix_prompt": str}`.
 
     Returns None for unparseable/malformed answers. `good_color` accepts a
-    bool or the strings "true"/"false" (case-insensitive); `analyse` is
-    defaulted to "" when missing. With the strict json_schema request the
-    content is guaranteed-valid JSON, so this parser is a safety net only.
+    bool or the strings "true"/"false" (case-insensitive); `analyse` and
+    `fix_prompt` default to "" when missing. With the strict json_schema
+    request the content is guaranteed-valid JSON, so this parser is a safety
+    net only (fix_prompt is present on real structured outputs).
     """
     if not text:
         return None
@@ -92,9 +109,11 @@ def parse_color_verdict(text: str) -> dict | None:
     else:
         return None
     analyse = data.get("analyse")
+    fix_prompt = data.get("fix_prompt")
     return {
         "analyse": str(analyse or ""),
         "good_color": good_color,
+        "fix_prompt": str(fix_prompt or ""),
     }
 
 
@@ -116,6 +135,7 @@ class ColorVerifyRecord:
     model_returned: str | None
     attempts: int
     error: str | None = None
+    fix_prompt: str = ""        # corrective instruction ("" when good_color)
     finished_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -123,6 +143,7 @@ class ColorVerifyRecord:
             "status": self.status,
             "good_color": self.good_color,
             "analyse": self.analyse,
+            "fix_prompt": self.fix_prompt,
             "response_text": self.response_text,
             "usage": self.usage,
             "cost_usd": self.cost_usd,
@@ -175,9 +196,11 @@ class ColorVerifier:
         crop and the reference atlas of the detected characters (the same
         contact sheet the colorizer saw) as context when available. One paid
         OpenRouter call with strict json_schema structured output
-        (`analyse`/`good_color`). The request omits `temperature`
-        (gpt-5.6-luna does not support it; sending it would make
-        `provider.require_parameters` reject every endpoint).
+        (`analyse`/`good_color`/`fix_prompt`; the eval suite reads only the
+        first two, the verify loop uses `fix_prompt` to re-colorize). The
+        request omits `temperature` (gpt-5.6-luna does not support it;
+        sending it would make `provider.require_parameters` reject every
+        endpoint).
         """
         template = self.prompt_template or VERIFY_PROMPT_FILE.read_text(
             encoding="utf-8"
@@ -195,19 +218,23 @@ class ColorVerifier:
             status = ERROR
             good_color = None
             analyse = ""
+            fix_prompt = ""
         elif parsed is None:
             status = UNPARSEABLE
             good_color = None
             analyse = ""
+            fix_prompt = ""
         else:
             good_color = parsed["good_color"]
             analyse = parsed["analyse"]
+            fix_prompt = parsed["fix_prompt"]
             status = VERIFIED if good_color else MISMATCH
 
         return ColorVerifyRecord(
             status=status,
             good_color=good_color,
             analyse=analyse,
+            fix_prompt=fix_prompt,
             response_text=result.text,
             usage=result.usage,
             cost_usd=result.cost_usd,

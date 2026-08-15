@@ -158,7 +158,57 @@ instead of failing the stitch step; each fallback is logged to stderr and
 recorded in the step record as `panels_bw_fallback` and in the manifest
 `totals.panels_bw_fallback`),
 `--debug-font-size` / `--debug-bbox-width` (5_debug label font size and
-bounding-box stroke width).
+bounding-box stroke width),
+`--verify-attempts N` (character-palette verification loop, 0 = off),
+`--verify-model <openrouter-model>` (default `openai/gpt-5.6-luna`),
+`--verify-prompt-file <path>` (default `verify_color_prompt.txt`).
+
+### Character-palette verification loop (`--verify-attempts`)
+
+After colorization, each panel is checked by a vision-language verifier
+(Luna, `openai/gpt-5.6-luna` on OpenRouter) against the same inputs the
+colorizer saw — colorized panel, original B&W crop, and the labelled
+character atlas — using strict structured output (`json_schema` +
+`provider.require_parameters`):
+
+```json
+{ "analyse": "...", "good_color": true, "fix_prompt": "" }
+```
+
+- `--verify-attempts 1` — check only: every panel is verified, and any
+  mismatch is written to `<panel>.fix_prompt.txt` next to the colorized
+  panel; no re-colorization.
+- `--verify-attempts N` (N ≥ 2) — auto-retry: on a mismatch, the panel is
+  re-colorized with the verifier's `fix_prompt` appended as an authoritative
+  block to the palette instruction, up to N−1 retries. The first verified
+  attempt (or the last attempt if attempts are exhausted) becomes the
+  canonical `<panel>.png`; every intermediate attempt is kept as
+  `<panel>.attempt_<n>.png`.
+- A verifier error (non-JSON response, failed call, `good_color: null`)
+  stops the loop for that panel without burning a retry; the panel keeps its
+  latest colorization and is counted under `verifier_error_panels`.
+- A colorization error stops the loop before any verify call.
+
+Everything is recorded: per panel, `3_colorized/<page>/<panel>.verify.json`
+holds every attempt (colorize + verify records, verdicts, latencies,
+measured `usage.cost`), and the manifest `totals` gain `verify_calls`,
+`successful_verify_calls`, `verified_panels`, `mismatch_panels`,
+`verifier_error_panels`, `colorization_retries` and `verify_cost_usd`.
+`fix_prompt` (authoritative retry block) is written per panel only when
+non-empty. Verify calls are paid OpenRouter calls (Luna pricing, measured
+per call); retries are extra FLUX calls on the Spark server (still $0/call).
+
+```bash
+# verify only, output fix prompts, no re-colorization:
+.venv/bin/python pipeline_v1/run.py \
+  --input-dir data/chapter_134 --refs-dir data/refs \
+  --endpoint http://spark:3000 --verify-attempts 1 --skip-first 3 --limit 5
+
+# verify + up to 2 fix retries per panel:
+.venv/bin/python pipeline_v1/run.py \
+  --input-dir data/chapter_134 --refs-dir data/refs \
+  --endpoint http://spark:3000 --verify-attempts 3 --skip-first 3 --limit 5
+```
 
 ## Output layout
 
@@ -166,7 +216,9 @@ bounding-box stroke width).
 output/<YYYYMMDD-HHMMSS>/
 ├── 1_panels/<page>/        crops + panels.json + overlay.png
 ├── 2_characters/<page>/    one JSON per panel (characters, cost, latency)
-├── 3_colorized/<page>/     colorized panels + per-panel atlas
+├── 3_colorized/<page>/     colorized panels + per-panel atlas + verify
+│                           records (<panel>.verify.json, fix prompts,
+│                           attempt_<n> retry images when --verify-attempts ≥ 2)
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
 ├── 5_debug/<page>.png      stitched page + bbox + character label per panel
 └── manifest.json
@@ -304,6 +356,13 @@ the computed size for comparison runs.
   `totals.gpt_image_calls` / `totals.gpt_image_cost_usd` from each call's
   parsed usage (image input $8/1M, text input $5/1M, image+text output
   $30/1M).
+- **Verification loop** (OpenRouter `openai/gpt-5.6-luna`, paid tier, only
+  with `--verify-attempts ≥ 1`): measured per verify call via `usage.cost`,
+  recorded in each `3_colorized/<page>/<panel>.verify.json` and the manifest
+  `totals.verify_cost_usd` (plus `verify_calls`, `verified_panels`,
+  `mismatch_panels`, `colorization_retries`, …). Retries are extra FLUX
+  calls (still $0/call). Real Luna pricing is measured on live runs (mock
+  runs fabricate $0.0001/call).
 
 ## Testing
 
@@ -316,7 +375,11 @@ Offline (no network, $0): unit tests per stage plus an end-to-end suite
 running the whole pipeline with mock backends on a synthetic manga page,
 including page-level character detection, targeted reruns (`--only-panel` /
 `--resume --from-step`), forced ground-truth identities, full-page fallback,
-blank-page skip, and the megapixel cap. `tests/test_full_page.py` covers the
+blank-page skip, and the megapixel cap. `tests/test_verify_loop.py` covers the
+verification loop end to end with mock backends (verified-on-first-attempt,
+fix-prompt retry, attempts-exhausted, verifier-error and colorize-error
+outcomes, per-panel `verify.json` / `fix_prompt.txt` / `attempt_<n>` images,
+and the manifest verify totals). `tests/test_full_page.py` covers the
 `--full-page` gpt-image-2 mode end to end with mock backends (detected and
 cast atlas sources, parallel colorization). Integration tests are marked
 `integration` and excluded by default (`addopts = "-m 'not integration'"`).

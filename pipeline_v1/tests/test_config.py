@@ -123,6 +123,42 @@ def test_invalid_detection_mode_rejected():
         parse_args(["--detection-mode", "panel-page-prev3"])
 
 
+def test_verify_loop_flags_parse():
+    config = parse_args([
+        "--verify-attempts", "2",
+        "--verify-model", "openai/gpt-5.6-luna",
+        "--verify-prompt-file", "custom/verify.txt",
+        "--verify-max-tokens", "2048",
+        "--verify-api-key-env", "MY_OR_KEY",
+    ])
+    assert config.verify_attempts == 2
+    assert config.verify_model == "openai/gpt-5.6-luna"
+    assert config.verify_prompt_file == Path("custom/verify.txt")
+    assert config.verify_max_tokens == 2048
+    assert config.verify_api_key_env == "MY_OR_KEY"
+    d = config.to_dict()
+    assert d["verify_attempts"] == 2
+    assert d["verify_max_tokens"] == 2048
+    assert d["verify_api_key_env"] == "MY_OR_KEY"
+
+
+def test_verify_attempts_defaults_off():
+    config = parse_args([])
+    assert config.verify_attempts == 0
+    assert config.verify_model == "openai/gpt-5.6-luna"
+    assert config.verify_max_tokens == 1024
+
+
+def test_invalid_verify_values_rejected():
+    for argv in (
+        ["--verify-attempts", "-1"],
+        ["--verify-max-tokens", "0"],
+        ["--verify-max-tokens", "-5"],
+    ):
+        with pytest.raises(SystemExit):
+            parse_args(argv)
+
+
 def test_invalid_v1_1_values_rejected():
     for argv in (
         ["--detection-mode", "pagex"],

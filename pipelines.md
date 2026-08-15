@@ -122,10 +122,34 @@ Ideas:
 Even when the character is correctly detected and its atlas entry is passed,
 the model does not always apply the right colors to it.
 
-Idea:
-- If prompt-level conditioning is still insufficient, verify a contact sheet of
-  all colorized panels once per page and re-colorize only flagged panels, with a
-  one-retry limit. Avoid one paid verification call per panel.
+Implemented as the **verification loop** (`--verify-attempts`, added
+2026-08-15): each colorized panel is checked by Luna
+(`openai/gpt-5.6-luna` on OpenRouter) with strict structured output
+(`analyse` / `good_color` / `fix_prompt`, json_schema +
+`provider.require_parameters`) against the colorized panel, the original B&W
+crop and the labelled character atlas.
+
+- `--verify-attempts 1`: verify + write the fix prompt, never re-colorize
+  (the "check-only" mode).
+- `--verify-attempts N` (N ≥ 2): on `good_color: false` the panel is
+  re-colorized with the fix prompt appended as an authoritative block to the
+  palette instruction, up to N−1 retries; the first verified attempt (or the
+  last attempt if exhausted) is the canonical `<panel>.png`, intermediate
+  attempts are kept as `<panel>.attempt_<n>.png`.
+- Verifier errors stop the loop without burning a retry; colorization errors
+  stop before any verify call.
+- Every attempt (colorize + verify records, verdicts, latencies, measured
+  `usage.cost`) is recorded per panel in
+  `3_colorized/<page>/<panel>.verify.json`; the manifest `totals` gain
+  `verify_calls`, `successful_verify_calls`, `verified_panels`,
+  `mismatch_panels`, `verifier_error_panels`, `colorization_retries` and
+  `verify_cost_usd`.
+
+Offline tests (`pipeline_v1/tests/test_verify_loop.py`, mock backends)
+cover the loop outcomes, retry semantics, per-panel provenance and the
+end-to-end manifest totals. Real Luna verdicts and measured per-call cost on
+live pages are pending a live run (the offline suite uses a mock verifier
+fabricating $0.0001/call).
 
 ---
 

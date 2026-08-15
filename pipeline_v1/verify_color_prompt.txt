@@ -9,5 +9,11 @@ I tried to automatically colorize this panel from the Frieren manga. Are all
 the characters' color palettes correct? Identify the characters with the
 help of the reference atlas and check each one's palette.
 
+If any palette is wrong, write `fix_prompt`: a concise, concrete corrective
+instruction for the colorizer, naming each wrong character and the exact
+canonical colors to apply (e.g. "Frieren: hair silver-white, eyes teal — the
+hair was colored lavender"). If every palette is correct, `fix_prompt` must
+be an empty string.
+
 Answer in JSON only, with no extra text:
-{ "analyse": "short explanation of which characters' palettes are correct or wrong", "good_color": true or false }
+{ "analyse": "short explanation of which characters' palettes are correct or wrong", "good_color": true or false, "fix_prompt": "corrective instruction or empty string" }

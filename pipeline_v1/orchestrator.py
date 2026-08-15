@@ -39,6 +39,7 @@ class Backends:
     detector: object
     character_detector: object
     colorizer: object
+    verifier: object | None = None  # verify_color.ColorVerifier (None -> no loop)
 
 
 class PipelineRunner:
@@ -115,6 +116,13 @@ class PipelineRunner:
                 "gpt_image_calls": 0,
                 "successful_gpt_image_calls": 0,
                 "gpt_image_cost_usd": 0.0,
+                "verify_calls": 0,
+                "successful_verify_calls": 0,
+                "verified_panels": 0,
+                "mismatch_panels": 0,
+                "verifier_error_panels": 0,
+                "colorization_retries": 0,
+                "verify_cost_usd": 0.0,
                 "panels_bw_fallback": 0,
                 "pages_stitched": 0,
                 "pages_annotated": 0,
@@ -133,6 +141,7 @@ class PipelineRunner:
             ("vlm_panel_page_prev2_prompt", self.config.vlm_panel_page_prev2_prompt_file),
             ("colorizer_prompt", self.config.colorizer_prompt_file),
             ("gpt_image_prompt", self.config.gpt_image_prompt_file),
+            ("verify_prompt", self.config.verify_prompt_file),
             ("profiles", self.config.profiles_file),
         ):
             try:
@@ -191,6 +200,19 @@ class PipelineRunner:
                           "Full-page --atlas-source cast: zero VLM calls."),
             },
             "colorization": colorization,
+            "verification": {
+                "provider": "OpenRouter",
+                "model": self.config.verify_model,
+                "tier": "paid (user-funded)",
+                "cost_source": "usage.cost per verify call (USD), measured",
+                "note": ("Enabled only with --verify-attempts >= 1. Strict "
+                          "json_schema structured output (analyse/good_color/"
+                          "fix_prompt); per-call cost recorded in the "
+                          "3_colorized/<page>/<panel>.verify.json records and "
+                          "totals.verify_cost_usd. --verify-attempts 1 = check "
+                          "and output fix prompt only; N >= 2 re-colorizes with "
+                          "the fix prompt up to N-1 times."),
+            },
         }
 
     # -- step selection -----------------------------------------------------
@@ -270,8 +292,20 @@ class PipelineRunner:
         elif step == "colorize":
             from steps.colorize import run_colorize_step
 
-            record = run_colorize_step(ctx, self.config, self.backends.colorizer)
+            record = run_colorize_step(
+                ctx, self.config, self.backends.colorizer,
+                verifier=self.backends.verifier,
+            )
             totals = record["totals"]
+            self.manifest_totals_update(ctx, {
+                "verify_calls": totals.get("verify_calls", 0),
+                "successful_verify_calls": totals.get("successful_verify_calls", 0),
+                "verified_panels": totals.get("verified_panels", 0),
+                "mismatch_panels": totals.get("mismatch_panels", 0),
+                "verifier_error_panels": totals.get("verifier_error_panels", 0),
+                "colorization_retries": totals.get("colorization_retries", 0),
+                "verify_cost_usd": totals.get("verify_cost_usd", 0.0),
+            })
             if self.config.full_page:
                 # gpt-image-2 backend: per-call est_cost_usd (None for failed
                 # calls or missing usage) is summed into gpt_image_cost_usd.
@@ -287,7 +321,12 @@ class PipelineRunner:
                 self.manifest_totals_update(ctx, {
                     "flux_calls": totals["api_calls"],
                     "successful_flux_calls": totals["successful_calls"],
-                    "panels_colorized": totals["successful_calls"],
+                    # distinct panels, not calls: verify-loop retries are extra
+                    # successful calls, not extra colorized panels
+                    "panels_colorized": max(
+                        0, totals["successful_calls"]
+                        - totals.get("colorization_retries", 0)
+                    ),
                 })
         elif step == "stitch":
             from steps.stitch import run_stitch_step
@@ -311,7 +350,7 @@ class PipelineRunner:
 
     def manifest_totals_update(self, ctx: RunContext, update: dict) -> None:
         for key, value in update.items():
-            if key == "openrouter_cost_usd":
+            if key in ("openrouter_cost_usd", "verify_cost_usd"):
                 ctx.manifest["totals"][key] = round(
                     ctx.manifest["totals"].get(key, 0.0) + value, 8
                 )

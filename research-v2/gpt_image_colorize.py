@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """Colorize a manga panel with OpenAI gpt-image-2 (Image API edits endpoint).
 
-The test inputs live in data/patch/:
+Three input modes (method A/B on the same orig.png):
 
-  orig.png   — the black & white manga panel (the image to colorize)
-  patch.png  — the same panel with the character reference composited on top
-  prompt.txt — the edit prompt ("colorize the manga panel using the character
-               reference ... adapt the orientation ... use the correct
-               characters colors")
+  patch (default)   — data/patch/: orig.png (the B&W panel) + patch.png (the
+                      same panel with the character reference composited on
+                      top) + prompt.txt. Both images act as references.
+  atlas             — --atlas-chars: orig.png + a labelled reference atlas
+                      (pipeline_v1/atlas.py, 360x480 labelled cells) built at
+                      run time from data/refs/ for the given characters.
+  no-reference      --no-reference: orig.png alone (model baseline, no
+                      reference conditioning).
 
-Both images are sent as input images (no mask -> they act as references) and
-the script runs the edit once per requested quality (default: low, medium,
-high) so the quality settings can be compared on identical inputs.
+The image(s) are sent as input images (no mask -> additional images act as
+references) and the script runs the edit once per requested quality (default:
+low, medium, high) so the quality settings can be compared on identical
+inputs.
 
 Output: research-v2/output/<YYYYMMDD-HHMMSS>/ with one PNG per quality
 (quality_<low|medium|high>.png) and a manifest.json recording the prompt,
@@ -39,6 +43,8 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
+# pipeline_v1 modules (atlas builder) are imported as a library.
+PIPELINE_V1 = REPO_ROOT / "pipeline_v1"
 
 
 def load_env(env_path: Path) -> dict:
@@ -77,10 +83,25 @@ def main() -> int:
     )
     ap.add_argument("--output-format", default="png", choices=["png", "jpeg", "webp"])
     ap.add_argument("--input-dir", default=str(HERE / "data" / "patch"))
-    ap.add_argument("--prompt-file", default=str(HERE / "data" / "patch" / "prompt.txt"))
+    ap.add_argument("--prompt-file", default=None,
+                    help="edit prompt file (default: data/patch/prompt.txt for the "
+                    "patch mode, data/atlas/prompt.txt for --atlas-chars)")
     ap.add_argument("--output-root", default=str(HERE / "output"))
     ap.add_argument("--env-file", default=str(REPO_ROOT / ".env"))
+    ap.add_argument("--atlas-chars", nargs="+", default=None, metavar="NAME",
+                    help="run the atlas method: build a labelled reference atlas "
+                    "from data/refs/ for these characters and send it as the second "
+                    "input image instead of patch.png")
+    ap.add_argument("--refs-dir", default=str(REPO_ROOT / "data" / "refs"),
+                    help="reference images dir for --atlas-chars (default: data/refs)")
+    ap.add_argument("--no-reference", action="store_true",
+                    help="send only orig.png (no patch/atlas reference image)")
     args = ap.parse_args()
+
+    if args.atlas_chars and args.no_reference:
+        print("error: --atlas-chars and --no-reference are mutually exclusive",
+              file=sys.stderr)
+        return 2
 
     qualities = args.quality or ["low", "medium", "high"]
 
@@ -96,20 +117,51 @@ def main() -> int:
 
     input_dir = Path(args.input_dir)
     orig_path = input_dir / "orig.png"
-    patch_path = input_dir / "patch.png"
-    prompt_path = Path(args.prompt_file)
-    if not all(p.exists() for p in (orig_path, patch_path, prompt_path)):
+    prompt_path = Path(args.prompt_file) if args.prompt_file else (
+        Path(HERE / "data" / "atlas" / "prompt.txt")
+        if args.atlas_chars else Path(input_dir / "prompt.txt")
+    )
+    if not orig_path.exists() or not prompt_path.exists():
         print(
-            f"error: expected {orig_path.name}, {patch_path.name}, {prompt_path.name} "
-            f"in {input_dir}",
+            f"error: expected {orig_path.name} in {input_dir} and {prompt_path.name} "
+            f"in {prompt_path.parent}",
             file=sys.stderr,
         )
         return 2
 
+    # Atlas mode: build the labelled reference atlas (pipeline_v1 builder).
+    atlas_built = None
+    if args.atlas_chars:
+        sys.path.insert(0, str(PIPELINE_V1))
+        from atlas import build_labelled_atlas, refs_for_characters  # noqa: E402
+
+        refs = refs_for_characters(args.atlas_chars, Path(args.refs_dir))
+        if not refs:
+            print("error: no reference images found for --atlas-chars "
+                  f"{args.atlas_chars} in {args.refs_dir}", file=sys.stderr)
+            return 2
+        run_dir = Path(args.output_root) / datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_dir.mkdir(parents=True, exist_ok=False)
+        atlas_path = run_dir / "atlas.jpg"
+        build_labelled_atlas(refs, atlas_path)
+        atlas_built = {
+            "file": atlas_path.name,
+            "characters": args.atlas_chars,
+            "refs": [str(r) for r in refs],
+        }
+        print(f"atlas: built {atlas_path} from {[r.name for r in refs]}", flush=True)
+    else:
+        run_dir = Path(args.output_root) / datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_dir.mkdir(parents=True, exist_ok=False)
+
     prompt = prompt_path.read_text().strip()
     images = []
     inputs_info = []
-    for p in (orig_path, patch_path):
+    second_paths = [] if args.no_reference else ([atlas_path] if atlas_built else [input_dir / "patch.png"])
+    for p in [orig_path] + second_paths:
+        if not p.exists():
+            print(f"error: expected {p.name} in {p.parent}", file=sys.stderr)
+            return 2
         with Image.open(p) as im:
             dims = im.size
             mode = im.mode
@@ -117,9 +169,6 @@ def main() -> int:
         inputs_info.append(
             {"file": p.name, "path": str(p), "width": dims[0], "height": dims[1], "mode": mode}
         )
-
-    run_dir = Path(args.output_root) / datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=False)
 
     size = args.size
     w, h = (int(v) for v in size.lower().split("x"))
@@ -217,6 +266,9 @@ def main() -> int:
             "size": size,
             "output_format": args.output_format,
             "qualities": qualities,
+            "mode": "no-reference" if args.no_reference else (
+                "atlas" if atlas_built else "patch"),
+            "atlas": atlas_built,
             "input_images": inputs_info,
             "prompt_file": str(prompt_path),
         },

@@ -25,6 +25,9 @@ formal method or pipeline).
 - `data/patch/`: the OpenAI gpt-image-2 colorization test inputs — `orig.png`
   (the B&W panel), `patch.png` (the same panel with the character reference
   composited on top) and `prompt.txt`.
+- `data/atlas/`: prompt for the atlas method (atlas itself is built at run
+  time into the run dir by `gpt_image_colorize.py --atlas-chars ...`).
+- `data/noref/`: prompt for the no-reference baseline arm.
 - `models/`: downloaded model weights (gitignored).
 
 ## split_panels.py
@@ -153,30 +156,42 @@ cast detection in the pipeline.
 ## gpt_image_colorize.py
 
 One-shot manga panel colorization with **OpenAI gpt-image-2** (Image API
-`/images/edits` endpoint, no mask — both input images act as references).
+`/images/edits` endpoint, no mask — additional input images act as
+references). Three input modes, all on the same `data/patch/orig.png`:
+
+- **patch** (default): `orig.png` + `patch.png` — the same panel with the
+  character reference composited on top; prompt from `data/patch/prompt.txt`.
+- **atlas**: `--atlas-chars NAME...` builds the pipeline_v1 labelled reference
+  atlas (360×480 labelled cells, `pipeline_v1/atlas.py`) from `data/refs/`
+  for the given characters and sends `orig.png` + `atlas.jpg`; prompt from
+  `data/atlas/prompt.txt` (defaults there automatically).
+- **no-reference**: `--no-reference` sends only `orig.png` (model baseline,
+  no reference conditioning); pass `--prompt-file` explicitly (e.g.
+  `data/noref/prompt.txt`).
 
 ```bash
 .venv/bin/python research-v2/gpt_image_colorize.py
 # --quality low --quality medium --quality high   (defaults)
 # --size 2880x2240                                (multiple of 16; source-panel aspect)
+# --atlas-chars frieren himmel heiter eisen       (atlas method)
+# --no-reference --prompt-file research-v2/data/noref/prompt.txt   (baseline)
 ```
 
-Inputs (from `data/patch/`): `orig.png` — the black & white panel to colorize,
-and `patch.png` — the same panel with the character reference composited on
-top. The prompt instructs the model to colorize the line art with the
-reference character's colors while adapting the reference's orientation/pose
-to match the B&W panel. Both images are sent together; the prompt supplies the
+The prompt instructs the model to colorize the line art with the reference
+character colors while keeping the panel's own lineart, poses, orientation,
+and composition. All input images are sent together; the prompt supplies the
 glue. Output: `output/<YYYYMMDD-HHMMSS>/quality_<low|medium|high>.png` (one
 image per requested quality, same size) + `manifest.json` (prompt, config,
-per-quality timestamps, API `usage` tokens and computed cost).
+mode, atlas provenance, per-quality timestamps, API `usage` tokens and
+computed cost).
 
 Flags: `--model`, `--quality` (repeatable; `low|medium|high|auto`),
 `--size` (WxH, constraints: max edge ≤ 3840, both edges multiples of 16,
 ratio ≤ 3:1, 655,360–8,294,400 px), `--output-format` (`png|jpeg|webp`),
-`--input-dir`, `--prompt-file`, `--output-root`, `--env-file`. Cost: paid
-OpenAI API; `gpt-image-2` bills image input $8/1M tokens, text input $5/1M,
-image output $30/1M (standard tier) and always processes image inputs at high
-fidelity.
+`--input-dir`, `--prompt-file`, `--output-root`, `--env-file`, `--atlas-chars`,
+`--refs-dir`, `--no-reference`. Cost: paid OpenAI API; `gpt-image-2` bills
+image input $8/1M tokens, text input $5/1M, image output $30/1M (standard
+tier) and always processes image inputs at high fidelity.
 
 ### Quality sweep run 20260815-082623 (2880×2240, 2 reference images)
 
@@ -199,6 +214,38 @@ full-page colorization from the two reference images — no mask or atlas
 needed. Known limitations from the docs: output >2560×1440 is "experimental",
 so a 2K size (e.g. 2048×1600) is a cheaper, supported alternative; the model
 cannot guarantee exact reference-color reproduction across generations.
+
+### A/B test: patch vs atlas vs no-reference (runs 20260815-085914 / 20260815-090035)
+
+Research question: was the good patch-method result caused by the *patch
+method* (reference composited on the panel) or just by *gpt-image-2 itself*?
+Same input `data/patch/orig.png` (2895×2250), same model, same size
+2880×2240, same `medium` quality in all three arms:
+
+| arm | reference conditioning | run | cost (measured) | mean sat. | colorfulness |
+|---|---|---|---|---:|---:|---:|
+| patch | panel + composited refs (2048×1591) | 20260815-082623 (medium row) | $0.1368 | 0.174 | 32.1 |
+| atlas | panel + labelled 720×960 atlas (4 chars) | 20260815-085914 | $0.1313 | 0.220 | 41.4 |
+| no-reference | panel only | 20260815-090035 | $0.1248 | 0.209 | 37.3 |
+
+All three arms colorize the panel with similar latency (67–73 s) and cost
+(≈$0.12–0.14/image at medium). The **no-reference baseline is nearly as
+colorful as the reference-conditioned runs** (sat 0.209/colorfulness 37.3 vs
+atlas 0.220/41.4), so a large part of the result is simply gpt-image-2's
+built-in ability to colorize manga sensibly from a B&W panel plus a short
+prompt. The **atlas is as good as (objectively slightly more saturated than)
+the patch** — so the patch compositing method itself is *not* what made the
+patch result good; the model handles either reference presentation, and
+references mainly steer palette *choices* (character-accurate hues) rather
+than overall colorfulness. Visual comparison sheet:
+`output/20260815-085914/comparison_patch_vs_atlas_vs_noref.png`.
+
+Caveats: subjective palette faithfulness (are Himmel's eyes actually blue,
+Frieren's coat actually white?) needs visual inspection of the run outputs;
+objective metrics here measure only how much/varied color was applied, not
+whether it matches canonical character colors. The no-reference prompt
+(`data/noref/prompt.txt`) asks for a "restrained anime palette consistent with
+the series" — a stronger baseline prompt could close the gap further.
 
 ## Conventions
 

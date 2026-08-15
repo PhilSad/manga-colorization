@@ -229,17 +229,36 @@ concurrently on two pipes, JSON `{"images": [base64, base64],
 "job_latency_s": [s, s]}`. `/edit2` holds **both** pipes for its duration, so
 a concurrent `/edit` waits (safe with traffic concurrency == pipe count).
 
-`torch.compile` for the single-request path (enabled by default):
-`FLUX2_COMPILE=1` compiles the transformer `forward`, `=2` also the VAE,
-`=0` off; `FLUX2_COMPILE_DYNAMIC` (default 1) keeps dynamic shapes so
-varying panel sizes don't recompile (static `=0` recompiles per new size).
-Compilation is lazy — the cold first call pays ~73 s (transformer) / ~115 s
-(+VAE); the cache survives container recreates. Measured at concurrency 1,
-4 steps: 8.39 → 6.03 s/job on small panels (1.39×) and 25.0 → 19.8 s at the
-2 MP cap (1.26×); VAE adds ~4% at 2 MP. Full data, the concurrency-2
-benchmark, methods tested (incl. why true diffusers batching is infeasible)
-and reproducibility notes in `docs/color_concurency.md`; client tooling in
+`torch.compile` for the single-request path (**disabled by default since
+2026-08-15**): `FLUX2_COMPILE=1` compiles the transformer `forward`, `=2`
+also the VAE, `=0` off; `FLUX2_COMPILE_DYNAMIC` (default 1) keeps dynamic
+shapes so varying panel sizes don't recompile (static `=0` recompiles per
+new size). Compilation is lazy — the cold first call pays ~73 s
+(transformer) / ~115 s (+VAE); the cache survives container recreates.
+Measured at concurrency 1, 4 steps: 8.39 → 6.03 s/job on small panels
+(1.39×) and 25.0 → 19.8 s at the 2 MP cap (1.26×); VAE adds ~4% at 2 MP.
+Full data, the concurrency-2 benchmark, methods tested (incl. why true
+diffusers batching is infeasible) and reproducibility notes in
+`docs/color_concurency.md`; client tooling in
 `server/benchmark_concurrency.py`.
+
+**GB10/sm_103 bug (why the default is off):** with `FLUX2_COMPILE=1` and
+dynamic shapes, torch 2.13.0+cu130 on the DGX Spark fails deterministically
+for certain bf16 attention GEMM shapes with
+`RuntimeError: CUDA error: CUBLAS_STATUS_INTERNAL_ERROR when calling
+cublasGemmEx(...)` — thrown ~0.2-0.4 s into a request from the inductor
+graph's `extern_kernels.mm((s50, 4096), (4096, 128))` (transformer, seq-len
+s50) or the VAE `mm` (m=448/960/1520). Observed failing seq-lens: 421/512/
+640/896/1024 (pipeline_v1 page 0134-003, panels 2/3/5, run 20260815-120802
+and the 122503 resume); other sizes (305/549/581/613/677/773/805/992)
+succeed — the failure is shape-specific, not OOM. Re-running the identical
+requests with `FLUX2_COMPILE=0` succeeded (16/16 panels, run
+`pipeline_v1/output/20260815-124816`), so the bug is in the compiled
+dynamic-shape path (a specific cuBLAS kernel config for those (m,n,k)
+combos on sm_103), not in eager cuBLAS. Workaround: keep the compose
+default `FLUX2_COMPILE=0` (costs the ~1.3-1.4× speedup); opt in with
+`FLUX2_COMPILE=1 docker compose up -d` only for input mixes known to avoid
+the failing shapes. No upstream fix known as of 2026-08-15.
 
 ## Verified on 2026-08-08 (end-to-end run on the DGX Spark)
 

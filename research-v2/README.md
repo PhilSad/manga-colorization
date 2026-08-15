@@ -174,6 +174,7 @@ references). Three input modes, all on the same `data/patch/orig.png`:
 # --quality low --quality medium --quality high   (defaults)
 # --size 2880x2240                                (multiple of 16; source-panel aspect)
 # --atlas-chars frieren himmel heiter eisen       (atlas method)
+# --orig-file "research-v2/data/pages/<page>.png" (colorize any page/panel directly)
 # --no-reference --prompt-file research-v2/data/noref/prompt.txt   (baseline)
 ```
 
@@ -188,8 +189,9 @@ computed cost).
 Flags: `--model`, `--quality` (repeatable; `low|medium|high|auto`),
 `--size` (WxH, constraints: max edge ≤ 3840, both edges multiples of 16,
 ratio ≤ 3:1, 655,360–8,294,400 px), `--output-format` (`png|jpeg|webp`),
-`--input-dir`, `--prompt-file`, `--output-root`, `--env-file`, `--atlas-chars`,
-`--refs-dir`, `--no-reference`. Cost: paid OpenAI API; `gpt-image-2` bills
+`--input-dir`, `--orig-file` (default `<input-dir>/orig.png`; colorize any
+page/panel directly), `--prompt-file`, `--output-root`, `--env-file`,
+`--atlas-chars`, `--refs-dir`, `--no-reference`. Cost: paid OpenAI API; `gpt-image-2` bills
 image input $8/1M tokens, text input $5/1M, image output $30/1M (standard
 tier) and always processes image inputs at high fidelity.
 
@@ -246,6 +248,28 @@ objective metrics here measure only how much/varied color was applied, not
 whether it matches canonical character colors. The no-reference prompt
 (`data/noref/prompt.txt`) asks for a "restrained anime palette consistent with
 the series" — a stronger baseline prompt could close the gap further.
+
+### Full-page atlas + size/cost sweep (p009, runs 20260815-090951 … 091610)
+
+Cost-optimization datapoint: the atlas method applied to a **full page**
+(p009, 1500×2250 B&W) at `medium` quality, keeping the page's 2:3 aspect at
+four output sizes. All runs share the same input page + same 4-character
+atlas (frieren/himmel/heiter/eisen); input tokens are constant (2416 = 2304
+image + 112 text ≈ $0.019), so the cost ladder is output-token driven:
+
+| output size | pixels | output tokens | cost (measured) | latency |
+|---|---:|---:|---:|---:|
+| 2240×3360 | 7.53 MP | 3659 | $0.1288 | 62 s |
+| 1664×2496 | 4.15 MP | 2363 | $0.0899 | 64 s |
+| 1280×1920 | 2.46 MP | 1712 | $0.0704 | 53 s |
+| 1024×1536 | 1.57 MP | 1372 | $0.0602 | 56 s |
+
+Side-by-side comparison sheet (all sizes scaled to the same height, labelled
+with size + cost): `output/page9_atlas_medium_sizes_compare.jpg`; full-res
+PNGs in each run dir. The input-cost floor (~$0.02) means halving the output
+edge only halves the *output* component — the cheapest useful sizes are
+1280×1920 ($0.070) and 1024×1536 ($0.060, the documented medium sweet spot).
+Quality differences are for the reader to judge visually; see the sheet.
 
 ## Conventions
 

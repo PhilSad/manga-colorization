@@ -83,6 +83,9 @@ def main() -> int:
     )
     ap.add_argument("--output-format", default="png", choices=["png", "jpeg", "webp"])
     ap.add_argument("--input-dir", default=str(HERE / "data" / "patch"))
+    ap.add_argument("--orig-file", default=None, metavar="PATH",
+                    help="the B&W image to colorize (default: <input-dir>/orig.png; "
+                    "use this to colorize any page/panel directly)")
     ap.add_argument("--prompt-file", default=None,
                     help="edit prompt file (default: data/patch/prompt.txt for the "
                     "patch mode, data/atlas/prompt.txt for --atlas-chars)")
@@ -116,15 +119,15 @@ def main() -> int:
     client = OpenAI(timeout=600)
 
     input_dir = Path(args.input_dir)
-    orig_path = input_dir / "orig.png"
+    orig_path = Path(args.orig_file) if args.orig_file else (input_dir / "orig.png")
     prompt_path = Path(args.prompt_file) if args.prompt_file else (
         Path(HERE / "data" / "atlas" / "prompt.txt")
         if args.atlas_chars else Path(input_dir / "prompt.txt")
     )
     if not orig_path.exists() or not prompt_path.exists():
         print(
-            f"error: expected {orig_path.name} in {input_dir} and {prompt_path.name} "
-            f"in {prompt_path.parent}",
+            f"error: expected {orig_path.name} in {orig_path.parent} and "
+            f"{prompt_path.name} in {prompt_path.parent}",
             file=sys.stderr,
         )
         return 2

@@ -46,11 +46,14 @@ Pipeline stages (per page):
    scaled down to the megapixel cap (task 0004) → `3_colorized/<page>/`
 5. **Stitch** — each colorized panel is resized back to its original box and
    pasted onto the page; everything outside the panels stays black & white →
-   `4_stitched/<page>.png`
+   `4_stitched/<page>.png`. A panel whose colorized output is missing (e.g. a
+   failed FLUX call) is **always** stitched from its original B&W crop (no
+   flag to opt out): every fallback is logged to stderr, recorded per page
+   (`panels_bw_fallback`) and in `totals.panels_bw_fallback`
 6. **Debug annotation** — a pure-image copy of each stitched page with the
    detected panel bounding boxes (from `1_panels/`) and a label per panel
    with the characters detected for it (from `2_characters/`); panels
-   stitched from their original B&W crop (`--stitch-bw-fallback`) get an
+   stitched from their original B&W crop (step 5's fallback) get an
    orange box and a `[B&W fallback]` tag → `5_debug/<page>.png`
 7. **PDF export** — packs every stitched page (from `4_stitched/`, filename
    order = reading order) into one multi-page PDF with Pillow's native PDF
@@ -198,11 +201,6 @@ the `--sleep` throttle are disabled when N > 1),
 `--worker-colorization N` (parallel colorization worker threads over pages —
 in full-page mode this parallelizes the paid gpt-image-2 calls directly; the
 per-panel progress bars are replaced by a single page bar when N > 1),
-`--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
-FLUX call that errored — is stitched from its original black & white crop
-instead of failing the stitch step; each fallback is logged to stderr and
-recorded in the step record as `panels_bw_fallback` and in the manifest
-`totals.panels_bw_fallback`),
 `--debug-font-size` / `--debug-bbox-width` (5_debug label font size and
 bounding-box stroke width),
 `--pdf-name` / `--pdf-dpi` (6_pdf PDF filename, default `colorized.pdf`;
@@ -336,10 +334,10 @@ output/<YYYYMMDD-HHMMSS>/
 The final pipeline stage (`debug` → `5_debug/`) renders a debug copy of each
 `4_stitched/` page with a colored bounding box per panel and a label with the
 panel name + the characters detected for it (from `2_characters/`); panels
-that were stitched from their original B&W crop (`--stitch-bw-fallback`) get
-an orange box and a `[B&W fallback]` tag (from the stitch step record in the
-run's `manifest.json`). It runs automatically at the end of every run and
-writes a per-page `summary.json`.
+that were stitched from their original B&W crop (the stitch step's always-on
+fallback) get an orange box and a `[B&W fallback]` tag (from the stitch step
+record in the run's `manifest.json`). It runs automatically at the end of
+every run and writes a per-page `summary.json`.
 
 `scripts/annotate_stitch.py` is the standalone, offline companion of that
 stage: it re-annotates any *completed* run (same `steps.debug.run_debug_step`

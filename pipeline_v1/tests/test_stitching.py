@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from PIL import Image, ImageDraw
 
 from detection import PanelBox
@@ -142,59 +141,10 @@ def test_stitch_step(tmp_path):
         assert image.getpixel((200, 300)) == (255, 255, 255)  # outside B&W
 
 
-def test_stitch_step_missing_colorized_raises(tmp_path):
-    from config import PipelineConfig
-    from run_context import RunContext
-    from steps.stitch import run_stitch_step
-
-    _build_step_layout(tmp_path)
-    (tmp_path / "3_colorized").rename(tmp_path / "3_colorized_gone")
-    refs = tmp_path / "refs"
-    refs.mkdir()
-    config = PipelineConfig(
-        input_dir=tmp_path / "pages",
-        refs_dir=refs,
-        output_root=tmp_path / "output2",
-        mock=True,
-    )
-    ctx = RunContext.create(tmp_path / "output2", {"status": "running"})
-    import shutil
-
-    shutil.copytree(tmp_path / "1_panels", ctx.step_dir("panels"), dirs_exist_ok=True)
-    with pytest.raises(ValueError):
-        run_stitch_step(ctx, config)
-
-
-def test_stitch_step_missing_colorized_raises_without_flag(tmp_path):
-    """A single missing colorized panel still fails loudly unless
-    --stitch-bw-fallback is enabled."""
-    from config import PipelineConfig
-    from run_context import RunContext
-    from steps.stitch import run_stitch_step
-
-    _build_step_layout(tmp_path)
-    (tmp_path / "3_colorized" / "p001" / "panel_0002.png").unlink()
-    refs = tmp_path / "refs"
-    refs.mkdir()
-    config = PipelineConfig(
-        input_dir=tmp_path / "pages",
-        refs_dir=refs,
-        output_root=tmp_path / "output4",
-        mock=True,
-    )
-    ctx = RunContext.create(tmp_path / "output4", {"status": "running"})
-    import shutil
-
-    shutil.copytree(tmp_path / "1_panels", ctx.step_dir("panels"), dirs_exist_ok=True)
-    shutil.copytree(tmp_path / "3_colorized", ctx.step_dir("colorize"),
-                    dirs_exist_ok=True)
-    with pytest.raises(ValueError, match="panel_0002"):
-        run_stitch_step(ctx, config)
-
-
 def test_stitch_step_bw_fallback_missing_panel(tmp_path, capsys):
-    """--stitch-bw-fallback: a missing colorized panel is stitched from the
-    original black & white crop, logged, and recorded in the step record."""
+    """A missing colorized panel (e.g. a failed FLUX call) is always stitched
+    from the original black & white crop, logged, and recorded in the step
+    record (no flag required)."""
     from config import PipelineConfig
     from run_context import RunContext
     from steps.stitch import run_stitch_step
@@ -208,7 +158,6 @@ def test_stitch_step_bw_fallback_missing_panel(tmp_path, capsys):
         refs_dir=refs,
         output_root=tmp_path / "output5",
         mock=True,
-        stitch_bw_fallback=True,
     )
     ctx = RunContext.create(tmp_path / "output5", {"status": "running"})
     import shutil
@@ -235,8 +184,8 @@ def test_stitch_step_bw_fallback_missing_panel(tmp_path, capsys):
 
 
 def test_stitch_step_bw_fallback_missing_whole_page(tmp_path, capsys):
-    """--stitch-bw-fallback with no colorized dir at all for a page stitches
-    every panel from its original crop and logs a warning."""
+    """A page with no colorized dir at all still stitches every panel from its
+    original crop and logs a warning (always-on behaviour)."""
     from config import PipelineConfig
     from run_context import RunContext
     from steps.stitch import run_stitch_step
@@ -250,7 +199,6 @@ def test_stitch_step_bw_fallback_missing_whole_page(tmp_path, capsys):
         refs_dir=refs,
         output_root=tmp_path / "output6",
         mock=True,
-        stitch_bw_fallback=True,
     )
     ctx = RunContext.create(tmp_path / "output6", {"status": "running"})
     import shutil

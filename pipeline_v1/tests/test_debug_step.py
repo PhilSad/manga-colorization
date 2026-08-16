@@ -3,7 +3,7 @@
 The final pipeline stage annotates each stitched page with the detected panel
 bounding boxes (from 1_panels/<page>/panels.json) and the characters detected
 per panel (from 2_characters/<page>/<panel>.json). Panels stitched from their
-original B&W crop (--stitch-bw-fallback) get an orange box. The standalone
+original B&W crop (the stitch step's always-on fallback) get an orange box. The standalone
 offline tool scripts/annotate_stitch.py delegates to the same
 `run_debug_step`, so these tests also cover its rendering.
 """
@@ -131,8 +131,8 @@ def test_full_run_creates_debug_step_outputs(tmp_path):
 
 
 def test_debug_marks_bw_fallback_panels_orange(tmp_path):
-    """Panels recorded as --stitch-bw-fallback in the run manifest get an
-    orange bbox and a [B&W fallback] tag."""
+    """Panels recorded as B&W fallbacks in the run manifest (stitch step's
+    always-on fallback) get an orange bbox and a [B&W fallback] tag."""
     run_dir = _build_minimal_run(tmp_path, with_manifest_fallback=True)
     ctx = RunContext.load(run_dir)
     record = run_debug_step(ctx, PipelineConfig(), output_dir=run_dir / "5_debug")

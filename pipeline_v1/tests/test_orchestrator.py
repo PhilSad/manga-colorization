@@ -159,17 +159,16 @@ def test_steps_subset(tmp_path):
     assert ctx.manifest["totals"]["flux_calls"] == 0
 
 
-def test_stitch_without_colorize_fails_and_keeps_artifacts(tmp_path):
+def test_stitch_without_colorize_bw_fallback(tmp_path):
+    """Running panels -> characters -> stitch with no colorize step no longer
+    fails: the stitch step always falls back to the original B&W crops, and
+    every panel is recorded as a fallback (totals.panels_bw_fallback)."""
     config = make_config(tmp_path, steps=("panels", "characters", "stitch"))
-    runner = PipelineRunner(config, make_backends())
-    with pytest.raises(ValueError):
-        runner.run()
-    ctx = RunContext.load(_latest_run(tmp_path / "output"))
-    assert ctx.manifest["status"] == "failed"
-    assert "colorize" in (ctx.manifest.get("error") or "")
-    # Earlier step artifacts are preserved.
-    assert (ctx.run_dir / "1_panels").is_dir()
-    assert (ctx.run_dir / "2_characters").is_dir()
+    ctx = PipelineRunner(config, make_backends()).run()
+    assert ctx.manifest["status"] == "completed"
+    assert ctx.manifest["totals"]["panels_bw_fallback"] == 4  # 2 pages x 2 panels
+    assert (ctx.run_dir / "4_stitched" / "p001.png").is_file()
+    assert (ctx.run_dir / "4_stitched" / "p002.png").is_file()
 
 
 def test_failure_records_error(tmp_path):

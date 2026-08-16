@@ -233,13 +233,13 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   `--verify-prompt-file` override the verifier), `--worker-detection N` (parallel page-level detection),
   `--worker-colorization N` (parallel page-level colorization — parallelizes
   the paid gpt-image-2 calls directly in full-page mode),
-  `--stitch-bw-fallback` (a panel whose colorized output is missing — e.g. a
-  failed FLUX call — is stitched from its original B&W crop instead of failing
-  the stitch step; each fallback is logged to stderr and recorded per page and
-  in `totals.panels_bw_fallback`), `--debug-font-size` / `--debug-bbox-width`
+  `--debug-font-size` / `--debug-bbox-width`
   (5_debug rendering knobs), `--pdf-name` / `--pdf-dpi` (6_pdf PDF filename,
   default `colorized.pdf`; embedding resolution, default 72 — page size in
-  points = pixels × 72 / dpi).
+  points = pixels × 72 / dpi). The stitch step always falls back to the
+  original B&W crop for a panel whose colorized output is missing (e.g. a
+  failed FLUX call) — no flag to opt out; each fallback is logged to stderr
+  and recorded per page and in `totals.panels_bw_fallback`.
 - Full-page mode: `--full-page` skips panel extraction entirely and colorizes
   the whole page in one OpenAI `gpt-image-2` call (atlas + palette
   instruction, minimal aspect-preserving size). `--atlas-source {detected,cast}`
@@ -259,8 +259,8 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   implementation (no pipeline rerun): a colored bounding box per panel and a
   label with the panel name + the characters detected for it (from
   `2_characters/<page>/<panel>.json`); panels stitched from their original
-  B&W crop (`--stitch-bw-fallback`) get an orange box and a `[B&W fallback]`
-  tag, read from the run's `manifest.json`. Writes `<run-dir>/5_debug/` +
+  B&W crop (the stitch step's always-on fallback) get an orange box and a
+  `[B&W fallback]` tag, read from the run's `manifest.json`. Writes `<run-dir>/5_debug/` +
   `summary.json`; options `--output-dir`, `--page SUBSTR` (repeatable
   filter), `--font-size`, `--bbox-width`. Offline, needs no
   backends/network, and never modifies the run's own outputs.

@@ -192,11 +192,6 @@ class PipelineConfig:
     from_step: str | None = None # start at this step (skip earlier ones)
     profile: str | None = None   # applied --profile (cli_profiles.json), if any
 
-    # Stitch robustness: a panel whose colorized output is missing (e.g. a
-    # failed FLUX call) is stitched from the original black & white crop
-    # instead of failing the whole step; each fallback is logged and recorded.
-    stitch_bw_fallback: bool = False
-
     # Stage 5 (debug annotation): rendering knobs for 5_debug/. The step is
     # pure image processing (no backends); the standalone offline tool
     # scripts/annotate_stitch.py shares this implementation.
@@ -274,7 +269,6 @@ class PipelineConfig:
             "resume": str(self.resume) if self.resume else None,
             "from_step": self.from_step,
             "profile": self.profile,
-            "stitch_bw_fallback": self.stitch_bw_fallback,
             "debug_font_size": self.debug_font_size,
             "debug_bbox_width": self.debug_bbox_width,
             "pdf_name": self.pdf_name,
@@ -592,10 +586,6 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Start at this step (skip earlier ones).")
     parser.add_argument("--resume", type=Path,
                         help="Reuse step outputs from a previous run directory.")
-    parser.add_argument("--stitch-bw-fallback", action="store_true",
-                        help="Stitch missing colorized panels from the original "
-                             "black & white crop (logged and recorded) instead of "
-                             "failing the stitch step.")
     parser.add_argument("--only-panel", action="append", default=[], metavar="PAGE:PANEL",
                         help="Process only the selected panel(s) (repeatable; e.g. "
                              "P003:panel_0006). Pages are matched by exact stem, "
@@ -795,7 +785,6 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             resume=args.resume,
             from_step=args.from_step,
             profile=profile_name,
-            stitch_bw_fallback=args.stitch_bw_fallback,
             debug_font_size=args.debug_font_size,
             debug_bbox_width=args.debug_bbox_width,
             pdf_name=args.pdf_name,

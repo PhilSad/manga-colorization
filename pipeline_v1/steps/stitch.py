@@ -3,10 +3,10 @@
 Reads the geometry from `1_panels/<page>/panels.json`, the colorized panels
 from `3_colorized/<page>/`, and writes the final pages to `4_stitched/`.
 
-With `--stitch-bw-fallback`, a panel whose colorized output is missing (e.g. a
-FLUX call that errored) is stitched from its original black & white crop
-instead of failing the whole step; every such fallback is logged (stderr) and
-recorded per page (`panels_bw_fallback`) and in the step totals.
+A panel whose colorized output is missing (e.g. a FLUX call that errored) is
+always stitched from its original black & white crop instead of failing the
+whole step; every such fallback is logged (stderr) and recorded per page
+(`panels_bw_fallback`) and in the step totals.
 """
 
 from __future__ import annotations
@@ -38,10 +38,9 @@ def run_stitch_step(
     """Run stage 5. `colorized_ext` overrides the panel file extension lookup
     (defaults to the config's output format).
 
-    Missing colorized panels: with `config.stitch_bw_fallback` the original
-    crop is pasted instead (B&W, logged + recorded); without it a ValueError is
-    raised, except for un-selected panels of a targeted rerun (`--only-panel`),
-    which always stay B&W silently.
+    Missing colorized panels: the original crop is pasted instead (B&W, logged
+    + recorded); the only panels that stay B&W silently are the un-selected
+    panels of a targeted rerun (`--only-panel`).
     """
     panels_root = ctx.step_dir("panels")
     colorized_root = ctx.step_dir("colorize")
@@ -67,27 +66,21 @@ def run_stitch_step(
 
         colorized_page_dir = colorized_root / page
         if not colorized_page_dir.is_dir():
-            if not config.stitch_bw_fallback:
-                raise ValueError(
-                    f"no colorized panels for {page}; run the 'colorize' step first"
-                )
             _warn(
                 f"no colorized panels for {page}; stitching all panels from "
-                "their original black & white crops (--stitch-bw-fallback)"
+                "their original black & white crops"
             )
 
         if config.full_page:
             # Full-page passthrough: the single colorized panel already covers
             # the whole page, so copy it straight to the stitched output (no
             # inset, no re-paste). Missing colorized output falls back to the
-            # original page with --stitch-bw-fallback.
+            # original page (B&W).
             bw_fallback: list[str] = []
             crop_name = geometry["detections"][0]["crop"] \
                 if geometry["detections"] else "panel_0001"
             colorized_path = _find_colorized(colorized_page_dir, crop_name, extension)
             if colorized_path is None:
-                if not config.stitch_bw_fallback:
-                    raise ValueError(f"missing colorized panel for {crop_name}")
                 colorized_path = page_dir / crop_name
                 if not colorized_path.is_file():
                     raise ValueError(
@@ -97,7 +90,7 @@ def run_stitch_step(
                 bw_fallback = [crop_name]
                 _warn(
                     f"missing colorized panel for {page}/{crop_name}; copying "
-                    "the original black & white page (--stitch-bw-fallback)"
+                    "the original black & white page"
                 )
             output_path = stitched_dir / f"{page}{extension}"
             with Image.open(colorized_path) as colorized_image:
@@ -133,14 +126,12 @@ def run_stitch_step(
                     continue
                 # Targeted rerun: un-selected panels of the page stay B&W
                 # (only when --only-panel was used); otherwise this is a
-                # missing colorize output.
+                # missing colorize output that falls back to the original crop.
                 if config.only_panels and not panel_selected(
                     page, Path(crop_name).stem, config.only_panels
                 ):
                     skipped.append(crop_name)
                     continue
-                if not config.stitch_bw_fallback:
-                    raise ValueError(f"missing colorized panel for {crop_name}")
                 original_path = page_dir / crop_name
                 if not original_path.is_file():
                     raise ValueError(
@@ -149,8 +140,7 @@ def run_stitch_step(
                     )
                 _warn(
                     f"missing colorized panel for {page}/{crop_name}; "
-                    f"stitching the original black & white crop "
-                    f"(--stitch-bw-fallback)"
+                    "stitching the original black & white crop"
                 )
                 with Image.open(original_path) as original_image:
                     pairs.append(

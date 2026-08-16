@@ -6,8 +6,8 @@ label with the panel name + the characters detected for it (from
 `2_characters/<page>/<panel>.json`). Writes `5_debug/<page>.<ext>` +
 `5_debug/summary.json` with per-page provenance records.
 
-Panels that were stitched from their original black & white crop
-(--stitch-bw-fallback) get an orange bbox and a "[B&W fallback]" tag; the
+Panels that were stitched from their original black & white crop (the stitch
+step's always-on fallback) get an orange bbox and a "[B&W fallback]" tag; the
 fallback list comes from the stitch step record in the run manifest (current
 run, or the --resume run's manifest when resuming from the stitch stage).
 

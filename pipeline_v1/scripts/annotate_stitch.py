@@ -21,8 +21,8 @@ Output (default <run-dir>/5_debug/):
   <page>.png                       same page + bbox + character label per panel
   summary.json                     per-page provenance records
 
-Panels that were stitched from their original black & white crop
-(--stitch-bw-fallback) get an orange bbox and a "[B&W fallback]" tag.
+Panels that were stitched from their original black & white crop (the stitch
+step's always-on fallback) get an orange bbox and a "[B&W fallback]" tag.
 
 Usage:
   .venv/bin/python pipeline_v1/scripts/annotate_stitch.py \

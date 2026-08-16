@@ -156,6 +156,17 @@ class MockVerifier:
     exercise the verify loop's retry path without any network. An optional
     third tuple element provides canned `regions` (bbox verdicts) for
     --verify-mode bbox tests.
+
+    **Keying contract (read before relying on cross-page behavior):**
+    verdicts are looked up by `Path(input_crop).stem` only, and the
+    "bad-once" counter is per stem but SHARED across pages. In full-page
+    mode every page's synthetic panel shares the stem ``panel_0001``, so a
+    ``bad-once`` entry fires for the FIRST page processed and later pages
+    verify good — that is how test_full_page_verify_retry_totals and
+    test_full_page_verify_bbox_mode_e2e get exactly one retried page. There
+    is deliberately no page-qualified key; if per-page verdicts are needed,
+    give the panels distinct stems (e.g. mock detection per page) or extend
+    this mock.
     """
 
     def __init__(

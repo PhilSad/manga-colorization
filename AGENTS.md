@@ -75,6 +75,11 @@ Before considering a method complete, verify that its run entry point creates a 
 
 ## General implementation conventions
 
+- The Python venv lives at the **repository root** (`.venv/`, uv-managed);
+  always invoke it from the repository root (e.g. `.venv/bin/python
+  pipeline_v1/run.py ...`). There is no per-directory venv — `cd`ing into a
+  subdirectory and calling `.venv/bin/python` fails with "No such file or
+  directory".
 - When searching the repository with `grep`/`rg`, exclude the `.venv/` directory by default (e.g. `rg -n pattern . --glob '!.venv/**'` or `grep -rn pattern --exclude-dir=.venv .`) so results aren't drowned in vendored dependencies. Only search inside `.venv/` when deliberately looking for something in it, and make such searches targeted (specific paths, not whole-repo scans).
 - Prefer small, composable scripts with a clear entry point and documented dependencies.
 - Keep method-specific dependencies and configuration inside that method's directory where practical.

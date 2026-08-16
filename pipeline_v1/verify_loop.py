@@ -126,6 +126,18 @@ def run_verify_loop(
     retry path. Each retry attempt doc records `retry_backend`
     ("gpt-image-2-region-edit" | "fix-prompt"), the `regions` it consumed,
     and for region edits the boxed-image record + rendered edit prompt + cost.
+
+    Attempt state machine (what each attempt READS and WRITES):
+
+    | attempt | read (input)                          | write (output)                     |
+    |---------|---------------------------------------|------------------------------------|
+    | 1       | `panel` (B&W crop)                    | `output` (canonical)               |
+    | N>1, fix-prompt  | `panel`                  | `<stem>.attempt_<N><ext>`          |
+    | N>1, region edit | boxes drawn on the PREVIOUS attempt's output — `<stem>.attempt_<N-1><ext>` (or `output` for N=2) at the gpt-image-2 resolution | `<stem>.attempt_<N><ext>` + `<stem>.attempt_<N-1>.boxed.png` |
+
+    The region edit always edits the previous attempt's image (never a file
+    created by the current attempt), so the boxed source exists before the
+    editor is called.
     """
     attempts: list[dict[str, Any]] = []
     verify_calls = 0

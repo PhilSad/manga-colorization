@@ -13,7 +13,8 @@ stitched page into a multi-page PDF.
 ```text
 pipeline_v1/
 ├── run.py                # entry point: config -> backends -> orchestrator
-├── config.py             # PipelineConfig dataclass + argparse CLI + FLUX size helpers
+├── config.py             # PipelineConfig dataclass + argparse CLI (incl. --profile expansion) + FLUX size helpers
+├── cli_profiles.json     # named CLI profiles (--profile NAME): flag sets applied as defaults
 ├── run_context.py        # timestamped run dirs, atomic JSON, incremental manifest
 ├── detection.py          # PanelDetector protocol + YoloPanelDetector (ultralytics, lazy)
 ├── panel_ordering.py     # pure: Japanese reading order for detected boxes
@@ -103,10 +104,16 @@ for `--atlas-source cast` or runs page-level detection for `detected`;
   per-page granularity, not the skeleton — each page becomes one synthetic
   `panel_0001`, so totals/resume/debug stay uniform. `--atlas-source cast`
   skips the characters step (zero VLM calls); `--atlas-source detected` forces
-  `detection_mode="page"`. Output size comes from `config.minimal_gpt_image_size`
+  a page-level detection mode (`page` or the cast-limited `page-cast`).
+  Output size comes from `config.minimal_gpt_image_size`
   (exact ratio, multiples of 16, area/edge/ratio caps; unsolvable sizes raise).
   Parallel colorization (`--worker-colorization N`) threads pages through the
   shared `GptImage2Colorizer` (OpenAI SDK client is thread-safe).
+- **CLI profiles (`--profile NAME`)**: `config.py` expands a named profile
+  from `cli_profiles.json` into argv tokens prepended to the user's flags, so
+  argparse's last-wins precedence gives explicit flags the final say
+  (the applied profile name is recorded in `configuration.profile` in the
+  manifest).
 - **Size policy (user-confirmed)**: each panel is colorized at the resolution
   closest to its original size with both axes multiples of 16
   (`nearest_multiple_of`), then resized back to the exact panel box when

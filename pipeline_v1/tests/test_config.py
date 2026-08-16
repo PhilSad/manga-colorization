@@ -450,3 +450,75 @@ def test_minimal_gpt_image_size_rejects_unsolvable_ratios():
         minimal_gpt_image_size(0, 100)
     with pytest.raises(ValueError, match="positive"):
         minimal_gpt_image_size(100, -5)
+
+
+# ---------------------------------------------------------------------------
+# CLI profiles (--profile, cli_profiles.json)
+
+def test_profile_full_page_applies_defaults():
+    config = parse_args(["--profile", "full-page"])
+    assert config.profile == "full-page"
+    assert config.full_page is True
+    assert config.atlas_source == "detected"
+    assert config.detection_mode == "page-cast"
+    assert config.vlm_model == "openai/gpt-5.6-luna"
+    assert config.worker_detection == 8
+    assert config.worker_colorization == 8
+    assert config.verify_attempts == 0
+
+
+def test_profile_equals_syntax():
+    config = parse_args(["--profile=full-page"])
+    assert config.profile == "full-page"
+    assert config.full_page is True
+
+
+def test_profile_explicit_flags_override():
+    config = parse_args([
+        "--profile", "full-page",
+        "--worker-colorization", "2",
+        "--vlm-model", "google/gemma-4-31b-it",
+    ])
+    assert config.worker_colorization == 2
+    assert config.vlm_model == "google/gemma-4-31b-it"
+    # profile defaults still apply where not overridden
+    assert config.full_page is True
+    assert config.detection_mode == "page-cast"
+    assert config.worker_detection == 8
+
+
+def test_no_profile_defaults_unchanged():
+    config = parse_args([])
+    assert config.profile is None
+    assert config.full_page is False
+    assert config.detection_mode == "panel-page-prev2-cast"
+    assert config.to_dict()["profile"] is None
+
+
+def test_unknown_profile_rejected():
+    with pytest.raises(SystemExit):
+        parse_args(["--profile", "no-such-profile"])
+
+
+def test_profile_recorded_in_manifest_config():
+    config = parse_args(["--profile", "full-page"])
+    assert config.to_dict()["profile"] == "full-page"
+
+
+# ---------------------------------------------------------------------------
+# page-cast detection mode
+
+def test_page_cast_detection_mode_parses():
+    config = parse_args(["--detection-mode", "page-cast"])
+    assert config.detection_mode == "page-cast"
+
+
+def test_full_page_allows_page_cast_detection_mode():
+    # --atlas-source detected keeps a page-level mode; page-cast is allowed
+    # alongside plain page (no forced downgrade).
+    config = parse_args([
+        "--full-page", "--atlas-source", "detected",
+        "--detection-mode", "page-cast",
+    ])
+    assert config.detection_mode == "page-cast"
+    assert config.full_page is True

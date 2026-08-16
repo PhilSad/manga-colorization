@@ -497,6 +497,17 @@ class OpenRouterCharacterDetector:
             profiles=self.profiles, cast_shortlist=shortlist,
         )
 
+    def page_prompt_for(self, cast_key: str | None) -> str:
+        """The page-level prompt rendered for a given cast shortlist. Always
+        renders fresh from immutable inputs (template, roster, profiles), so
+        per-page casts are thread-safe: it never reads or mutates shared
+        prompt state. `None` restores the full roster."""
+        shortlist = cast_shortlist_for(self.chapter_casts_file, cast_key)
+        return build_prompt(
+            self._page_template, self.canonical,
+            profiles=self.profiles, cast_shortlist=shortlist,
+        )
+
     def set_cast(self, cast_key: str | None) -> None:
         """Switch the chapter-cast shortlist for all four prompts (no-op when
         unchanged). Called per page in `panel-page-cast` mode so that
@@ -1058,9 +1069,12 @@ class PageStrategy:
         refs_dir: Path,
         *,
         cast_key: str | None = None,
+        prompt: str | None = None,
     ) -> PageCharacterRecord:
         """One page-level call; per-panel fallbacks for missing/invalid/
-        uncertain entries."""
+        uncertain entries. `prompt` overrides the detector's current page
+        prompt (used by page-cast to render the page's own cast shortlist
+        without touching shared state); `None` uses the detector's prompt."""
         detector = self.detector
         if not detector.prompt or not detector.canonical:
             detector.prepare(refs_dir)
@@ -1070,7 +1084,7 @@ class PageStrategy:
         info = file_record(annotated)
         info["data_base64"] = base64.b64encode(annotated.read_bytes()).decode()
         content = [
-            {"type": "text", "text": detector.prompt},
+            {"type": "text", "text": prompt if prompt is not None else detector.prompt},
             {"type": "image_url",
              "image_url": {"url": f"data:{info['mime_type']};base64,{info['data_base64']}"}},
         ]
@@ -1164,6 +1178,58 @@ class PageStrategy:
         for extra in set(mapping) - expected_set:
             print(f"    page detection: rejecting unexpected panel key {extra!r}",
                   flush=True)
+        return record
+
+
+class PageCastStrategy(PageStrategy):
+    """mode="page-cast": page-level detection with the per-chapter cast
+    shortlist. The effective cast key is the explicit `cast_key` argument,
+    else the detector's fixed `--cast-key`, else derived per page via
+    `cast_key_for_page` (chapter_page_map.json -> filename tag -> `NNN-`
+    prefix). The page prompt is rendered for that cast without touching
+    shared state (thread-safe under `--worker-detection`); `set_cast` still
+    switches the detector's prompts so cropped-panel fallbacks stay in-cast.
+    Pages without a cast fall back to the full roster."""
+
+    mode = "page-cast"
+    label = "page-level+cast"
+
+    def detect(
+        self,
+        page: Path,
+        panels_dir: Path,
+        expected_panels: list[str],
+        refs_dir: Path,
+        *,
+        cast_key: str | None = None,
+    ) -> PageCharacterRecord:
+        detector = self.detector
+        key = cast_key
+        if key is None:
+            key = detector.cast_key
+        if key is None and detector.chapter_casts_file is not None:
+            key = cast_key_for_page(
+                page,
+                detector.chapter_casts_file,
+                detector.chapter_page_map_file,
+            )
+        if key is not None:
+            detector.set_cast(key)
+            prompt = detector.page_prompt_for(key)
+        else:
+            prompt = None
+            print(
+                f"  characters: {page.stem}: no chapter cast derivable for "
+                "page-cast (full roster used); pass --cast-key or use a "
+                "page name/volume the map can resolve",
+                file=sys.stderr,
+                flush=True,
+            )
+        record = super().detect(
+            page, panels_dir, expected_panels, refs_dir,
+            cast_key=key, prompt=prompt,
+        )
+        record.cast_key = key
         return record
 
 
@@ -1528,6 +1594,7 @@ class PanelPagePrev2CastStrategy(PanelPagePrev2Strategy):
 DETECTION_STRATEGIES: dict[str, type[DetectionStrategy]] = {
     "panel": PanelStrategy,
     "page": PageStrategy,
+    "page-cast": PageCastStrategy,
     "panel-page": PanelPageStrategy,
     "panel-page-prev2": PanelPagePrev2Strategy,
     "panel-page-cast": PanelPageCastStrategy,

@@ -23,6 +23,9 @@ Pipeline stages (per page):
    cast shortlist; missing/invalid/`uncertain`
    results get a cropped-panel fallback. `--detection-mode panel` keeps the V1
    panel-only behaviour; `--detection-mode page` makes one call per page;
+   `--detection-mode page-cast` is the same page-level call restricted to an
+   automatically derived per-chapter cast shortlist (same resolution order as
+   panel-page-cast: `--cast-key` wins, then per-page derivation);
    `--detection-mode panel-page` (V1.2) keeps one call per panel
    but sends the full page as global context plus the target panel, with the
    same cropped-panel fallback as page mode. `--detection-mode panel-page-prev2`
@@ -102,6 +105,36 @@ Offline demo (mock backends, no API keys, no server):
 .venv/bin/python pipeline_v1/run.py --mock --limit 1
 ```
 
+## Profiles
+
+The CLI has grown a lot of flags, so named default profiles let one flag stand
+in for a whole set of them. Profiles live in `pipeline_v1/cli_profiles.json`
+(profile name → `description` + `args` mapping of flag → value, keys without
+the leading dashes) and are applied with `--profile NAME`:
+
+```bash
+.venv/bin/python pipeline_v1/run.py --profile full-page \
+  --input-dir data/chapter_134 --refs-dir data/refs --skip-first 3 --limit 5
+```
+
+Precedence: **explicit command-line flags always win** over profile values
+(profile flags are injected first, so argparse's last-wins semantics apply;
+`--only-panel`/`--force-characters` accumulate instead). A profile cannot be
+"unset" per flag — to run without a profile default, pass the value you want
+or drop `--profile`. Boolean profile flags are always-on (e.g.
+`"full-page": true`); `false`/`null` values emit nothing. `--help` lists the
+available profile names, and the applied profile name is recorded in each
+run's `manifest.json` under `configuration.profile` so runs stay reproducible.
+
+Current profiles:
+
+| Profile | Expands to | Notes |
+|---|---|---|
+| `full-page` | `--full-page --atlas-source detected --detection-mode page-cast --vlm-model openai/gpt-5.6-luna --worker-detection 8 --worker-colorization 8 --verify-attempts 0` | Full-page gpt-image-2 colorization; per page, one Luna (OpenRouter) call restricted to the auto-derived per-chapter cast (`page-cast`) picks the atlas characters; 8 parallel detection/colorization workers; no verification loop. Needs `OPENAI_API_KEY` (colorization) + `OPENROUTER_API_KEY` (detection). |
+
+To add a profile, add an entry to `cli_profiles.json`; unknown profile names
+and unknown/unknown-valued flags in a profile fail loudly at parse time.
+
 ### Full-page gpt-image-2 mode
 
 `--full-page` skips panel extraction entirely: the whole page is colorized in
@@ -115,6 +148,10 @@ output layout (one synthetic `panel_0001` per page).
 .venv/bin/python pipeline_v1/run.py \
   --input-dir data/chapter_134 --refs-dir data/refs \
   --full-page --atlas-source detected --skip-first 3 --limit 5
+
+# Same, with cast-limited Luna detection + 8 workers, via the profile:
+.venv/bin/python pipeline_v1/run.py --profile full-page \
+  --input-dir data/chapter_134 --refs-dir data/refs --skip-first 3 --limit 5
 
 # Zero VLM calls: full chapter cast for the atlas (no OpenRouter key needed):
 .venv/bin/python pipeline_v1/run.py \
@@ -133,13 +170,17 @@ Quality is fixed at `medium` (no flag) — the research-v2 measured sweet spot
 with exponential backoff (up to 3 retries) and then fail loudly
 (`ColorizeRecord(status="error")`).
 
-Useful flags: `--skip-first N`, `--limit N`, `--steps panels,characters`,
+Useful flags: `--profile NAME` (named defaults, see [Profiles](#profiles)),
+`--skip-first N`, `--limit N`, `--steps panels,characters`,
 `--from-step colorize`, `--resume <previous-run-dir>` (re-uses its step
 outputs; with `--from-step` only the earlier step outputs are copied, task
 0001), `--atlas-columns N`, `--num-inference-steps` (4 for the
 step-distilled model; 20–50 if the server runs the undistilled base),
-`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
-(panel-page = one call per panel with the full page as context,
+`--lora-scale` (0.8–1.0), `--seed`, `--detection-mode page|page-cast|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
+(page = one call per page with per-panel fallbacks, `prompt.txt`;
+page-cast = page with the automatically derived per-chapter cast shortlist
+from `chapter_page_map.json`, `--cast-key` wins;
+panel-page = one call per panel with the full page as context,
 `prompt_panel_page.txt`; panel-page-cast = same with an automatically derived
 per-chapter cast shortlist from `chapter_page_map.json`, `--cast-key` wins;
 panel-page-prev2 = panel-page that also sends the two preceding pages in

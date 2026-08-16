@@ -295,11 +295,12 @@ class MockPageCharacterDetector:
         self.cast_key: str | None = cast_key  # fixed --cast-key override
 
     def strategy_for(self, mode: str):
-        """Page-context mock supports "page", "panel-page",
+        """Page-context mock supports "page", "page-cast", "panel-page",
         "panel-page-prev2", "panel-page-cast", "panel-page-prev2-cast"
         (panel mode uses MockCharacterDetector)."""
         strategies = {
             "page": _MockPageStrategy,
+            "page-cast": _MockPageCastStrategy,
             "panel-page": _MockPanelPageStrategy,
             "panel-page-prev2": _MockPanelPagePrev2Strategy,
             "panel-page-cast": _MockPanelPageCastStrategy,
@@ -476,6 +477,38 @@ class _MockPageStrategy:
         return self.detector.detect_page(
             page, panels_dir, expected_panels, refs_dir
         )
+
+
+class _MockPageCastStrategy(_MockPageStrategy):
+    """mode="page-cast": derive the chapter cast like the real strategy
+    (explicit key -> detector's fixed cast -> cast_key_for_page), switch the
+    mock's prompts, and delegate to the page-level detect_page."""
+
+    mode = "page-cast"
+    label = "page-level+cast"
+
+    def detect(self, page, panels_dir, expected_panels, refs_dir, *, cast_key=None):
+        from characters import cast_key_for_page
+
+        key = cast_key or self.detector.cast_key
+        if key is None:
+            key = cast_key_for_page(
+                page, CHAPTER_CASTS_FILE, CHAPTER_PAGE_MAP_FILE
+            )
+        if key is not None:
+            self.detector.set_cast(key)
+        else:
+            print(
+                f"  characters: {page.name}: no chapter cast derivable for "
+                "page-cast (full roster used)",
+                file=sys.stderr,
+                flush=True,
+            )
+        record = self.detector.detect_page(
+            page, panels_dir, expected_panels, refs_dir
+        )
+        record.cast_key = key
+        return record
 
 
 class _MockPanelPageStrategy:

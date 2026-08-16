@@ -172,12 +172,14 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 3. **Detect characters per page** — OpenRouter `google/gemma-4-31b-it`, one
    paid call per page mapping numbered panels to canonical characters; missing/
    invalid/`uncertain` panels get a cropped-panel fallback. `--detection-mode
-   page|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
-   selects page-level (V1.1), one-call-per-panel (V1), one-call-per-panel with
+   page|page-cast|panel|panel-page|panel-page-cast|panel-page-prev2|panel-page-prev2-cast`
+   selects page-level (V1.1), page-level restricted to an automatically derived
+   per-chapter cast shortlist, one-call-per-panel (V1), one-call-per-panel with
    the full page as context, that plus an **automatically derived per-chapter
    cast shortlist**, the full-page variant that also sends the two preceding
    pages as story context, and the prev2 variant with the per-chapter cast
-   shortlist. `panel-page-prev2-cast` is the default. `panel-page-cast` and
+   shortlist. `panel-page-prev2-cast` is the default. `page-cast`,
+   `panel-page-cast` and
    `panel-page-prev2-cast` derive the shortlist from the page's chapter via
    `frieren_wiki_dataset/chapter_page_map.json` —
    fixing mislabeled v09 tags; `--cast-key` overrides the derivation, so
@@ -214,7 +216,11 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   `output/` and `models/` are gitignored.
 - A "colorize a volume" request also means `--skip-first 3 --limit 5` here
   (see above); run against Spark with `--endpoint http://spark:3000`.
-- Useful flags: `--steps panels,characters`, `--from-step colorize`,
+- Useful flags: `--profile NAME` (named default flag sets from
+  `pipeline_v1/cli_profiles.json`, e.g. `--profile full-page`; explicit flags
+  override profile values, and the profile name lands in
+  `configuration.profile` in the manifest), `--steps panels,characters`,
+  `--from-step colorize`,
   `--resume <previous-run-dir>`, `--atlas-columns N`, `--num-inference-steps`
   (4 for the step-distilled model), `--lora-scale`, `--seed`, `--detection-mode`,
   `--cast-key`, `--only-panel PAGE:PANEL` (targeted rerun),
@@ -237,11 +243,15 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
 - Full-page mode: `--full-page` skips panel extraction entirely and colorizes
   the whole page in one OpenAI `gpt-image-2` call (atlas + palette
   instruction, minimal aspect-preserving size). `--atlas-source {detected,cast}`
-  picks where the atlas characters come from: `detected` (default) forces
-  `--detection-mode page` (one VLM call per page), `cast` skips character
+  picks where the atlas characters come from: `detected` (default) forces a
+  page-level detection mode — `page` (one VLM call per page over the full
+  roster) or the cast-limited `page-cast` (per-page auto-derived chapter cast
+  shortlist); `cast` skips character
   detection entirely (zero VLM calls, `OPENROUTER_API_KEY` not needed — only
-  `OPENAI_API_KEY`). `--atlas-source cast` requires `--full-page`. See
-  `pipeline_v1/README.md` §Full-page gpt-image-2 mode.
+  `OPENAI_API_KEY`). `--atlas-source cast` requires `--full-page`. The
+  `full-page` profile (`--profile full-page`) bundles the full-page + Luna +
+  `page-cast` + 8-worker + no-verify configuration. See
+  `pipeline_v1/README.md` §Profiles and §Full-page gpt-image-2 mode.
 - Debug annotation: the pipeline's final `debug` step (see step 6 above)
   writes `5_debug/` automatically at the end of every run. Its offline
   companion, `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`,

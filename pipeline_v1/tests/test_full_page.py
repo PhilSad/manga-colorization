@@ -349,3 +349,42 @@ def test_sum_gpt_image_cost_includes_retry_attempts():
 def test_cast_without_full_page_rejected():
     with pytest.raises(SystemExit):
         parse_args(["--atlas-source", "cast"])
+
+
+# ---------------------------------------------------------------------------
+# --profile full-page: the named profile expands to the full-page flags
+# (cast-limited page-cast detection, 8 workers, no verification) and the
+# mock pipeline runs end to end with those defaults applied.
+
+def test_full_page_profile_mock_pipeline(tmp_path):
+    ctx, config, _ = run_full_page(tmp_path, pages=2, extra_args=["--profile", "full-page"])
+
+    assert ctx.manifest["status"] == "completed"
+    conf = ctx.manifest["configuration"]
+    assert conf["profile"] == "full-page"
+    assert conf["full_page"] is True
+    assert conf["atlas_source"] == "detected"
+    assert conf["detection_mode"] == "page-cast"
+    assert conf["vlm_model"] == "openai/gpt-5.6-luna"
+    assert conf["worker_detection"] == 8
+    assert conf["worker_colorization"] == 8
+    assert conf["verify_attempts"] == 0
+
+    # Detection actually ran (page-cast is a real page-level mode, not the
+    # atlas-source cast no-op) and the per-page provenance records the cast
+    # resolution (no derivable cast for p00x -> None, full roster).
+    characters_summary = read_json(ctx.run_dir / "2_characters" / "summary.json")
+    assert "skipped" not in characters_summary
+    assert len(characters_summary["records"]) == 2
+    provenance = read_json(
+        ctx.run_dir / "2_characters" / "p001" / "page_call.json"
+    )
+    assert provenance["cast_key"] is None
+
+    # Colorize: one gpt-image-2 mock call per page, no verify retries.
+    colorize_summary = read_json(ctx.run_dir / "3_colorized" / "summary.json")
+    assert len(colorize_summary["records"]) == 2
+    assert colorize_summary["totals"]["api_calls"] == 2
+    totals = ctx.manifest["totals"]
+    assert totals["gpt_image_calls"] == 2
+    assert totals["verify_calls"] == 0

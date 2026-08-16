@@ -3,11 +3,15 @@
 Every knob of every stage lives here so orchestrator, steps and tests share one
 definition. Defaults follow the repo conventions (AGENTS.md) and the research
 methods the pipeline ports.
+
+Named CLI profiles (`--profile NAME`, `cli_profiles.json`) expand to default
+flags: explicit command-line flags always win over profile values.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from dataclasses import dataclass, field
@@ -38,6 +42,7 @@ DEFAULT_REFS_DIR = REPO_ROOT / "data" / "refs"
 DEFAULT_OUTPUT_ROOT = PIPELINE_DIR / "output"
 DEFAULT_ENDPOINT = "http://spark:3000"
 DEFAULT_VLM_MODEL = "google/gemma-4-31b-it"
+DEFAULT_CLI_PROFILES_FILE = PIPELINE_DIR / "cli_profiles.json"
 DEFAULT_VLM_PROMPT_FILE = PIPELINE_DIR / "prompt.txt"
 DEFAULT_VLM_PANEL_PROMPT_FILE = PIPELINE_DIR / "prompt_panel.txt"
 DEFAULT_VLM_PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
@@ -185,6 +190,7 @@ class PipelineConfig:
     mock: bool = False
     resume: Path | None = None   # previous run dir to reuse its step outputs
     from_step: str | None = None # start at this step (skip earlier ones)
+    profile: str | None = None   # applied --profile (cli_profiles.json), if any
 
     # Stitch robustness: a panel whose colorized output is missing (e.g. a
     # failed FLUX call) is stitched from the original black & white crop
@@ -267,6 +273,7 @@ class PipelineConfig:
             "mock": self.mock,
             "resume": str(self.resume) if self.resume else None,
             "from_step": self.from_step,
+            "profile": self.profile,
             "stitch_bw_fallback": self.stitch_bw_fallback,
             "debug_font_size": self.debug_font_size,
             "debug_bbox_width": self.debug_bbox_width,
@@ -324,12 +331,13 @@ def _validate(config: PipelineConfig) -> None:
             f"--from-step must be one of {STEP_ORDER}, got {config.from_step!r}"
         )
     if config.detection_mode not in (
-        "page", "panel", "panel-page", "panel-page-cast",
+        "page", "page-cast", "panel", "panel-page", "panel-page-cast",
         "panel-page-prev2", "panel-page-prev2-cast"
     ):
         raise ValueError(
-            "--detection-mode must be 'page', 'panel', 'panel-page', "
-            "'panel-page-cast', 'panel-page-prev2' or 'panel-page-prev2-cast'"
+            "--detection-mode must be 'page', 'page-cast', 'panel', "
+            "'panel-page', 'panel-page-cast', 'panel-page-prev2' or "
+            "'panel-page-prev2-cast'"
         )
     if config.blank_ink_threshold < 0 or config.blank_ink_threshold >= 1:
         raise ValueError("--blank-ink-threshold must be in [0, 1)")
@@ -352,11 +360,14 @@ def _validate(config: PipelineConfig) -> None:
         if not names:
             raise ValueError(f"--force-characters {key} has no names")
 
-    # Full-page gpt-image-2 mode: `--atlas-source detected` forces the
-    # page-level detection mode (one VLM call per page); `--atlas-source cast`
-    # is full-page mode only (zero VLM calls).
+    # Full-page gpt-image-2 mode: `--atlas-source detected` forces a
+    # page-level detection mode (one VLM call per page) — either the plain
+    # `page` or the cast-limited `page-cast`; `--atlas-source cast` is
+    # full-page mode only (zero VLM calls).
     if config.full_page:
-        if config.atlas_source == "detected" and config.detection_mode != "page":
+        if config.atlas_source == "detected" and config.detection_mode not in (
+            "page", "page-cast"
+        ):
             print(
                 f"WARNING: --full-page --atlas-source detected forces "
                 f"--detection-mode 'page' (got {config.detection_mode!r})",
@@ -399,7 +410,9 @@ def _validate(config: PipelineConfig) -> None:
         )
 
 
-def parse_args(argv: list[str] | None = None) -> PipelineConfig:
+def _build_parser() -> argparse.ArgumentParser:
+    """The argparse parser for the pipeline CLI (built once per parse_args;
+    also used to resolve --profile before the final parse)."""
     parser = argparse.ArgumentParser(
         prog="pipeline_v1",
         description=(
@@ -412,6 +425,14 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             "as a single multi-page PDF (6_pdf/)."
         ),
     )
+    try:
+        available = ", ".join(sorted(load_cli_profiles()))
+    except ValueError:
+        available = "(see pipeline_v1/cli_profiles.json)"
+    parser.add_argument("--profile", default=None, metavar="NAME",
+                        help="Apply a named default profile from "
+                             "pipeline_v1/cli_profiles.json; explicit flags "
+                             f"override profile values. Available: {available}")
     parser.add_argument("--input-dir", type=Path, default=DEFAULT_INPUT_DIR,
                         help="Directory of manga pages (sorted by filename).")
     parser.add_argument("--refs-dir", type=Path, default=DEFAULT_REFS_DIR,
@@ -434,11 +455,15 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         help="Panel+page+prev2 prompt (detection_mode="
                              "'panel-page-prev2' calls).")
     parser.add_argument("--detection-mode",
-                        choices=("page", "panel", "panel-page", "panel-page-cast",
-                                 "panel-page-prev2", "panel-page-prev2-cast"),
+                        choices=("page", "page-cast", "panel", "panel-page",
+                                 "panel-page-cast", "panel-page-prev2",
+                                 "panel-page-prev2-cast"),
                         default="panel-page-prev2-cast",
                         help="page: one paid call per page with per-panel fallbacks "
-                             "(V1.1); panel: V1 behaviour, one call per panel; "
+                             "(V1.1); page-cast: page with an automatically derived "
+                             "per-chapter cast shortlist (same resolution order as "
+                             "panel-page-cast, i.e. --cast-key wins); panel: V1 "
+                             "behaviour, one call per panel; "
                              "panel-page: one call per panel sending the full page as "
                              "context plus the target panel (per-panel fallback); "
                              "panel-page-cast: panel-page with an automatically "
@@ -614,6 +639,93 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser.add_argument("--openai-api-key-env", default=DEFAULT_OPENAI_API_KEY_ENV,
                         help="Env var holding the OpenAI API key for full-page "
                              "gpt-image-2 calls (default OPENAI_API_KEY).")
+    return parser
+
+
+def load_cli_profiles(path: Path = DEFAULT_CLI_PROFILES_FILE) -> dict[str, dict]:
+    """Load the named CLI profiles from `cli_profiles.json`: a mapping of
+    profile name -> {"description": str, "args": {flag: value}}, where args
+    keys are flag names without the leading dashes (e.g. "full-page")."""
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"cannot read cli profiles file {path}: {exc}")
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid JSON in cli profiles file {path}: {exc}")
+    profiles = raw.get("profiles", raw) if isinstance(raw, dict) else raw
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError(
+            f"cli profiles file {path} must contain a non-empty 'profiles' mapping"
+        )
+    result: dict[str, dict] = {}
+    for name, entry in profiles.items():
+        if not isinstance(entry, dict) or not isinstance(entry.get("args"), dict):
+            raise ValueError(
+                f"profile {name!r} in {path} must be an object with an 'args' "
+                "mapping of flag -> value"
+            )
+        result[str(name)] = {
+            "description": str(entry.get("description", "")),
+            "args": dict(entry["args"]),
+        }
+    return result
+
+
+def profile_to_argv(args: dict[str, object]) -> list[str]:
+    """Expand a profile's {flag: value} mapping into CLI argv tokens:
+    `--flag` for boolean True, `--flag <value>` otherwise; False and null
+    values emit nothing (there is no bare flag that could express them)."""
+    tokens: list[str] = []
+    allowed = set("abcdefghijklmnopqrstuvwxyz0123456789-")
+    for flag, value in args.items():
+        if (
+            not isinstance(flag, str) or not flag
+            or flag.startswith("-")
+            or any(ch not in allowed for ch in flag)
+        ):
+            raise ValueError(f"invalid profile flag {flag!r}")
+        if value is None or value is False:
+            continue
+        tokens.append(f"--{flag}")
+        if value is not True:
+            tokens.append(str(value))
+    return tokens
+
+
+def parse_args(argv: list[str] | None = None) -> PipelineConfig:
+    parser = _build_parser()
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = list(argv)
+
+    # Resolve --profile before the final parse: profile values are injected as
+    # argv tokens *before* the user's own flags, so argparse's last-wins
+    # semantics give explicit command-line flags precedence over profile
+    # defaults (store/append actions keep collecting, as documented).
+    profile_name = None
+    try:
+        probe = parser.parse_args(argv)
+        profile_name = getattr(probe, "profile", None)
+        if profile_name:
+            profiles = load_cli_profiles()
+            if profile_name not in profiles:
+                parser.error(
+                    f"unknown profile {profile_name!r}; available: "
+                    f"{sorted(profiles)}"
+                )
+            profile_args = profiles[profile_name]["args"]
+            unknown = [
+                f"--{flag}" for flag in profile_args
+                if f"--{flag}" not in parser._option_string_actions
+            ]
+            if unknown:
+                parser.error(
+                    f"profile {profile_name!r} references unknown flag(s): "
+                    f"{', '.join(sorted(unknown))}"
+                )
+            argv = profile_to_argv(profile_args) + argv
+    except ValueError as exc:
+        parser.error(str(exc))
     args = parser.parse_args(argv)
 
     try:
@@ -682,6 +794,7 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             mock=args.mock,
             resume=args.resume,
             from_step=args.from_step,
+            profile=profile_name,
             stitch_bw_fallback=args.stitch_bw_fallback,
             debug_font_size=args.debug_font_size,
             debug_bbox_width=args.debug_bbox_width,

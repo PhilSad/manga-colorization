@@ -12,6 +12,9 @@ Modes (mirror pipeline_v1 `--detection-mode`):
   - panel:            V1, one call per panel, the committed crop alone
   - page:             V1.1, one call per page (numbered panels), per-panel
                       cropped fallbacks for missing/uncertain/unknown entries
+  - page-cast:        V1.1 page-level call restricted to the automatically
+                      derived per-chapter cast shortlist (cast_key_for_page),
+                      mirroring the pipeline's `--detection-mode page-cast`
   - panel-page:       V1.2, one call per panel: full page (target highlighted)
                       as context + the crop, same cropped fallbacks
   - panel-page-cast:  V1.2 with an automatically derived per-chapter cast
@@ -76,7 +79,7 @@ from test_integration_detection import DETECTION_CASES  # noqa: E402
 from util import sha256  # noqa: E402
 
 DEFAULT_MODELS = ["google/gemma-4-31b-it", "openai/gpt-5.6-luna"]
-DEFAULT_MODES = ["panel", "page", "panel-page", "panel-page-cast"]
+DEFAULT_MODES = ["panel", "page", "page-cast", "panel-page", "panel-page-cast"]
 DEFAULT_REPS = 4
 OUTPUT_ROOT = TESTS_DIR / "output"
 PANEL_PAGE_PROMPT_FILE = PIPELINE_DIR / "prompt_panel_page.txt"
@@ -167,8 +170,8 @@ def main() -> int:
     parser.add_argument("--models", default=",".join(DEFAULT_MODELS),
                         help="comma-separated OpenRouter model ids")
     parser.add_argument("--modes", default=",".join(DEFAULT_MODES),
-                        help="comma-separated modes: panel,page,panel-page,"
-                             "panel-page-cast")
+                        help="comma-separated modes: panel,page,page-cast,"
+                             "panel-page,panel-page-cast")
     parser.add_argument("--reps", type=int, default=DEFAULT_REPS)
     parser.add_argument("--workers", type=int, default=8,
                         help="parallel detection threads (1 = sequential); items "

@@ -422,3 +422,26 @@ def test_verify_not_found_not_retried(tmp_path):
     assert record.status == "error"
     assert "NotFoundError" in record.error
     assert len(verifier.client.chat.completions.calls) == 1
+
+
+def test_verify_permission_denied_not_retried(tmp_path):
+    """A 403 (e.g. OpenRouter "Key limit exceeded", model not allowed for
+    this key) is deterministic — one attempt, no transient backoff retries.
+    Regression: PermissionDeniedError is an APIStatusError (an APIError
+    subclass) and used to fall into the transient-retry branch, burning 8
+    attempts with exponential backoff per call on a permanent key problem."""
+    from openai import PermissionDeniedError
+
+    colorized = _panel(tmp_path / "colorized.png")
+    denied = make_openai_error(
+        PermissionDeniedError,
+        "Key limit exceeded (total limit)",
+        status=403,
+    )
+    verifier = ColorVerifier(client=FakeClient([denied]))
+    record = verifier.verify(colorized, None)
+
+    assert record.status == "error"
+    assert "PermissionDeniedError" in record.error
+    assert "Key limit exceeded" in record.error
+    assert len(verifier.client.chat.completions.calls) == 1

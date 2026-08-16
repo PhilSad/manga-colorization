@@ -645,6 +645,7 @@ def call_vlm(
         APIConnectionError,
         BadRequestError,
         NotFoundError,
+        PermissionDeniedError,
         RateLimitError,
     )
 
@@ -721,6 +722,17 @@ def call_vlm(
                 text="", usage={}, cost_usd=None, cost_source="unavailable",
                 latency_s=time.monotonic() - started, model_returned=None,
                 attempts=attempts, error=f"NotFoundError: {error}",
+            )
+        except PermissionDeniedError as error:
+            # 403 (e.g. OpenRouter "Key limit exceeded", model not allowed for
+            # this key): deterministic — retrying burns backoff time and (for
+            # paid tier) nothing else. Must sit BEFORE the generic APIError
+            # branch below (PermissionDeniedError is an APIStatusError, i.e.
+            # an APIError, and would otherwise be treated as transient).
+            return _CallResult(
+                text="", usage={}, cost_usd=None, cost_source="unavailable",
+                latency_s=time.monotonic() - started, model_returned=None,
+                attempts=attempts, error=f"PermissionDeniedError: {error}",
             )
         except (APIConnectionError, APIError) as error:
             if attempts >= MAX_ATTEMPTS:

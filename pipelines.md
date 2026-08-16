@@ -243,6 +243,25 @@ Frieren wrong; a second iteration would presumably box the hair. Honest limits
 recorded in the manifests: no mask (boxes are the only locator), the model may
 repaint beyond the box, and an edit can only fix what the bbox pass found.
 
+**Integration status (2026-08-16, plan `docs/plans/verify-bbox-region-edit.md`
+implemented):** the probed experiment is wired into the pipeline as an
+**opt-in verify mode** — `--verify-mode bbox` (full-page mode only, user
+decisions: merged single Luna call carrying verdict + fix_prompt + regions,
+empty-regions fallback = fix-prompt re-colorize). Implementation:
+`verify_color.py` (`BBOX_VERDICT_SCHEMA`, `parse_bbox_verdict`, verifier
+`response_format`/`reasoning_effort` params), `region_edit.py` (`draw_boxes` /
+`region_instruction` / `GptImage2RegionEditor` — duplicated from the probes,
+which stay standalone per user decision), `verify_loop.py` (`verify_mode` +
+`region_editor` retry branch), CLI flags in `config.py`, `region_edit_calls` /
+`region_edit_cost_usd` manifest totals, and the mock backends
+(`MockRegionEditor`) + offline test coverage (`tests/test_region_edit.py`, bbox
+flows in `tests/test_verify_loop.py`, e2e in `tests/test_full_page.py`;
+349 offline tests green). **Pending next live run** — a real full-page run on
+1–2 pages with `--verify-attempts 3 --verify-mode bbox` (reusing a page with a
+known Eisen beard / Frieren hair catch, e.g. vol 1 p003 or the probe's p010);
+measured numbers (per-retry cost, iterations to verified, recall misses) will
+be recorded here — never fabricated.
+
 ---
 
 ## V1.1 — fixed evaluation set, explicit palettes, page-level detection

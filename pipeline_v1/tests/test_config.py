@@ -159,6 +159,52 @@ def test_invalid_verify_values_rejected():
             parse_args(argv)
 
 
+def test_verify_mode_bbox_flags_parse():
+    config = parse_args([
+        "--full-page",
+        "--verify-attempts", "2",
+        "--verify-mode", "bbox",
+        "--verify-bbox-prompt-file", "custom/bbox.txt",
+        "--verify-reasoning-effort", "medium",
+        "--region-edit-prompt-file", "custom/edit.txt",
+        "--region-edit-model", "gpt-image-2-custom",
+    ])
+    assert config.verify_mode == "bbox"
+    assert config.verify_bbox_prompt_file == Path("custom/bbox.txt")
+    assert config.verify_reasoning_effort == "medium"
+    assert config.region_edit_prompt_file == Path("custom/edit.txt")
+    assert config.region_edit_model == "gpt-image-2-custom"
+    # the bbox default token budget: 8192 unless --verify-max-tokens set
+    assert config.verify_max_tokens == 8192
+    d = config.to_dict()
+    assert d["verify_mode"] == "bbox"
+    assert d["region_edit_model"] == "gpt-image-2-custom"
+
+
+def test_verify_mode_bbox_respects_explicit_max_tokens():
+    config = parse_args([
+        "--full-page", "--verify-attempts", "2", "--verify-mode", "bbox",
+        "--verify-max-tokens", "4096",
+    ])
+    assert config.verify_max_tokens == 4096
+
+
+def test_verify_mode_bbox_requires_full_page():
+    with pytest.raises(SystemExit):
+        parse_args(["--verify-attempts", "2", "--verify-mode", "bbox"])
+
+
+def test_verify_mode_bbox_requires_verify_attempts():
+    with pytest.raises(SystemExit):
+        parse_args(["--full-page", "--verify-mode", "bbox"])
+
+
+def test_verify_mode_unknown_rejected():
+    with pytest.raises(SystemExit):
+        parse_args(["--full-page", "--verify-attempts", "1",
+                    "--verify-mode", "magic"])
+
+
 def test_invalid_v1_1_values_rejected():
     for argv in (
         ["--detection-mode", "pagex"],

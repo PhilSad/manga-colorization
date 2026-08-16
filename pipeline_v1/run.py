@@ -44,6 +44,7 @@ def build_backends(config):
             MockColorizer,
             MockPageCharacterDetector,
             MockPanelDetector,
+            MockRegionEditor,
             MockVerifier,
         )
         from orchestrator import Backends
@@ -55,6 +56,9 @@ def build_backends(config):
             character_detector = MockPageCharacterDetector(
                 cast_key=config.cast_key
             )
+        region_editor = (
+            MockRegionEditor() if config.verify_mode == "bbox" else None
+        )
         return Backends(
             detector=MockPanelDetector(),
             character_detector=character_detector,
@@ -62,6 +66,7 @@ def build_backends(config):
                 backend="gpt-image-2" if config.full_page else "flux"
             ),
             verifier=MockVerifier(),
+            region_editor=region_editor,
         )
 
     if config.full_page:
@@ -212,18 +217,47 @@ def _build_full_page_backends(config):
         api_key_env=config.openai_api_key_env,
         output_format=config.output_format,
     )
+    region_editor = None
+    if config.verify_mode == "bbox":
+        region_editor = _build_region_editor(config)
     return Backends(
         detector=None,
         character_detector=character_detector,
         colorizer=colorizer,
         verifier=_build_verifier(config, os.getenv(config.verify_api_key_env)),
+        region_editor=region_editor,
+    )
+
+
+def _build_region_editor(config):
+    """GptImage2RegionEditor for --verify-mode bbox (paid gpt-image-2 region
+    edits; the OpenAI key is already required by full-page mode)."""
+    from config import parse_gpt_size
+    from region_edit import GptImage2RegionEditor
+
+    if not config.region_edit_prompt_file.is_file():
+        raise SystemExit(
+            f"region edit prompt file not found: {config.region_edit_prompt_file}"
+        )
+    return GptImage2RegionEditor(
+        prompt_template=config.region_edit_prompt_file.read_text(encoding="utf-8"),
+        model=config.region_edit_model or config.gpt_model,
+        size=parse_gpt_size(config.gpt_size) if config.gpt_size else None,
+        atlas_scale=config.gpt_atlas_scale,
+        api_key_env=config.openai_api_key_env,
+        output_format=config.output_format,
     )
 
 
 def _build_verifier(config, api_key):
     """ColorVerifier for the verify loop, or None when --verify-attempts is
     off (the default; zero extra OpenRouter calls). Raises SystemExit when
-    enabled but the OpenRouter key or the prompt file is missing."""
+    enabled but the OpenRouter key or the prompt file is missing.
+
+    --verify-mode bbox builds the bbox variant: the BBOX verdict schema
+    (verdict + fix_prompt + regions in one call), the bbox prompt file, the
+    8192-token budget (resolved by config), and high reasoning effort passed
+    via `reasoning: {effort: ...}`."""
     if config.verify_attempts <= 0:
         return None
     if not api_key:
@@ -231,17 +265,21 @@ def _build_verifier(config, api_key):
             "--verify-attempts needs an OpenRouter key: set "
             f"{config.verify_api_key_env} or add it to {REPO_ROOT / '.env'}"
         )
-    if not config.verify_prompt_file.is_file():
-        raise SystemExit(
-            f"verify prompt file not found: {config.verify_prompt_file}"
-        )
-    from verify_color import ColorVerifier
+    bbox_mode = config.verify_mode == "bbox"
+    prompt_file = (
+        config.verify_bbox_prompt_file if bbox_mode else config.verify_prompt_file
+    )
+    if not prompt_file.is_file():
+        raise SystemExit(f"verify prompt file not found: {prompt_file}")
+    from verify_color import BBOX_RESPONSE_FORMAT, ColorVerifier
 
     return ColorVerifier(
         model=config.verify_model,
         api_key=api_key,
-        prompt_template=config.verify_prompt_file.read_text(encoding="utf-8"),
+        prompt_template=prompt_file.read_text(encoding="utf-8"),
         max_tokens=config.verify_max_tokens,
+        response_format=BBOX_RESPONSE_FORMAT if bbox_mode else None,
+        reasoning_effort=config.verify_reasoning_effort if bbox_mode else None,
     )
 
 

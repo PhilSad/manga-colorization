@@ -30,8 +30,11 @@ pipeline_v1/
 ├── atlas.py              # labelled atlas filtered to detected characters only
 ├── colorizer.py          # Colorizer protocol + FluxColorizer (multipart POST /edit; palette + size cap)
 ├── gpt_colorizer.py      # GptImage2Colorizer: OpenAI images.edit (minimal size, medium quality, usage/cost)
+├── region_edit.py        # bbox mode: draw_boxes + region_instruction + GptImage2RegionEditor (region-scoped edits)
 ├── colorizer_prompt.txt  # colorize-only prompt with mngclranm trigger + {character_profiles}
 ├── gpt_image_prompt.txt  # gpt-image-2 atlas prompt (size + palette placeholders, no hardcoded names)
+├── gpt_region_edit_prompt.txt  # bbox edit template ({region_instruction}/{palette_instruction} slots)
+├── verify_bbox_prompt.txt      # bbox verdict prompt (verdict + fix_prompt + regions in one Luna call)
 ├── steps/colorize.py     # stage 4 -> 3_colorized/ (filtered atlas + palette + resume reuse)
 ├── stitching.py          # pure: paste colorized panels back at recorded boxes
 ├── steps/stitch.py       # stage 5 -> 4_stitched/
@@ -40,12 +43,13 @@ pipeline_v1/
 ├── orchestrator.py       # step sequencing, manifest aggregation, resume (copies steps before --from-step)
 ├── mock_backends.py      # fake detector / VLM / colorizer for offline runs & tests
 ├── evaluation/v1_1_cases.json  # fixed failure set (task 0001), run by the integration suite
-├── verify_color.py       # real gpt-5.6-luna generic color verifier (strict structured output: analyse/good_color), integration suite
+├── verify_color.py       # real gpt-5.6-luna generic color verifier (strict structured output: analyse/good_color; bbox verdict schema + reasoning effort for --verify-mode bbox), integration suite
+├── verify_loop.py        # colorize+verify retry loop (fix-prompt full re-colorize, or bbox region edits via region_edit.py)
 ├── tests/                # offline unit tests + real-network integration suite (-m integration)
 ├── output/<ts>/          # per-run artifacts (gitignored)
 │   ├── 1_panels/         # crops + panels.json (boxes + reading order + provenance) + overlay
 │   ├── 2_characters/     # per-panel detection JSONs (source: page|fallback|forced) + summary
-│   ├── 3_colorized/      # per-panel colorized outputs
+│   ├── 3_colorized/      # per-panel colorized outputs (+ verify.json / attempt_<n> / boxed sources)
 │   ├── 4_stitched/       # final pages
 │   ├── 5_debug/          # stitched pages + bbox + characters per panel (stage 6)
 │   ├── 6_pdf/            # colorized.pdf + summary.json (stage 7)

@@ -149,15 +149,17 @@ class MockVerifier:
 
     Verdicts are canned per panel stem (the monochrome crop's stem — stable
     across retries even though the colorized file is renamed per attempt):
-    `by_panel: {stem: ("good"|"bad"|"bad-once", fix_prompt)}`. Default: good
-    (verified). "bad" yields a MISMATCH verdict carrying the given fix prompt
-    (or a default one); "bad-once" is bad on the first verify call for that
-    stem and good afterwards (the fix worked) — both exercise the verify
-    loop's retry path without any network.
+    `by_panel: {stem: ("good"|"bad"|"bad-once", fix_prompt, regions?)}`.
+    Default: good (verified). "bad" yields a MISMATCH verdict carrying the
+    given fix prompt (or a default one); "bad-once" is bad on the first
+    verify call for that stem and good afterwards (the fix worked) — both
+    exercise the verify loop's retry path without any network. An optional
+    third tuple element provides canned `regions` (bbox verdicts) for
+    --verify-mode bbox tests.
     """
 
     def __init__(
-        self, by_panel: dict[str, tuple[str, str]] | None = None
+        self, by_panel: dict[str, tuple[str, str, list] | tuple[str, str]] | None = None
     ) -> None:
         self.by_panel = by_panel or {}
         self.calls: list[tuple[Path, Path | None, Path | None]] = []
@@ -174,20 +176,22 @@ class MockVerifier:
         colorized = Path(colorized)
         self.calls.append((colorized, input_crop, atlas))
         stem = Path(input_crop).stem if input_crop is not None else colorized.stem
-        verdict, fix = self.by_panel.get(stem, ("good", ""))
+        verdict, fix, *rest = self.by_panel.get(stem, ("good", ""))
+        regions = rest[0] if rest else []
         if verdict == "bad-once":
             n = self._stem_counts.get(stem, 0)
             self._stem_counts[stem] = n + 1
             if n == 0:
                 verdict, fix = "bad", fix
             else:
-                verdict, fix = "good", ""
+                verdict, fix, regions = "good", "", []
         good = verdict == "good"
         return ColorVerifyRecord(
             status="verified" if good else "mismatch",
             good_color=good,
             analyse="mock analysis",
             fix_prompt="" if good else (fix or "mock: re-colorize with canonical palette"),
+            regions=list(regions),
             response_text="",
             usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
             cost_usd=0.0001,
@@ -197,6 +201,67 @@ class MockVerifier:
             attempts=1,
             finished_at="mock",
             error=None,
+        )
+
+
+class MockRegionEditor:
+    """Deterministic offline stand-in for region_edit.GptImage2RegionEditor
+    (--verify-mode bbox): "edits" the boxed image with a distinct tint,
+    records every call, and charges a canned est_cost_usd so totals and
+    per-attempt cost accounting are exercised offline.
+    """
+
+    def __init__(
+        self, color: tuple[int, int, int] | None = None, cost_usd: float = 0.02
+    ) -> None:
+        self.color = color or (205, 92, 155)  # distinct from the colorizer tints
+        self.cost_usd = cost_usd
+        self.calls: list[tuple[Path, Path | None, Path, str, str]] = []
+
+    def target_size(self, image: Path) -> tuple[int, int]:
+        with Image.open(image) as im:
+            return (im.width, im.height)
+
+    def render_prompt(
+        self, width: int, height: int, instruction: str, palette_instruction: str = ""
+    ) -> str:
+        return (
+            f"region edit {width}x{height}\n{instruction}\n{palette_instruction}"
+        )
+
+    def edit(
+        self,
+        boxed_image: Path,
+        atlas: Path | None,
+        output: Path,
+        region_instruction_text: str,
+        palette_instruction: str = "",
+    ) -> ColorizeRecord:
+        self.calls.append(
+            (Path(boxed_image), atlas, Path(output),
+             region_instruction_text, palette_instruction)
+        )
+        with Image.open(boxed_image) as image:
+            rgb = image.convert("RGB")
+        tint = Image.new("RGB", rgb.size, self.color)
+        blended = Image.blend(rgb, tint, 0.6)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        blended.save(output)
+        return ColorizeRecord(
+            status="ok",
+            output=output,
+            requested_size=(rgb.width, rgb.height),
+            latency_s=0.01,
+            error=None,
+            seed=None,
+            original_size=(rgb.width, rgb.height),
+            scale=1.0,
+            cap_applied=False,
+            max_megapixels=None,
+            model="gpt-image-2 (mock region editor)",
+            quality="medium",
+            usage={},
+            est_cost_usd=self.cost_usd,
         )
 
 

@@ -15,9 +15,12 @@ from openai import BadRequestError
 
 from test_characters import FakeClient, FakeResponse, FakeUsage, make_openai_error
 from verify_color import (
+    BBOX_RESPONSE_FORMAT,
+    BBOX_VERDICT_SCHEMA,
     COLOR_VERDICT_SCHEMA,
     RESPONSE_FORMAT,
     ColorVerifier,
+    parse_bbox_verdict,
     parse_color_verdict,
 )
 
@@ -69,6 +72,91 @@ def test_parse_color_verdict_missing_analyse_defaults():
     verdict = parse_color_verdict('{"good_color": true}')
     assert verdict["good_color"] is True
     assert verdict["analyse"] == ""
+
+
+# ---------------------------------------------------------------------------
+# Bbox verdict (--verify-mode bbox): schema + parser
+
+def test_bbox_verdict_schema_is_strict_and_complete():
+    """The bbox contract: analyse + good_color + fix_prompt + regions[], all
+    required, no extra properties; region items carry character/problem/
+    fix_suggestion/bbox in normalized 0-1000 integer coordinates."""
+    schema = BBOX_VERDICT_SCHEMA
+    assert set(schema["properties"]) == {
+        "analyse", "good_color", "fix_prompt", "regions"
+    }
+    assert schema["properties"]["fix_prompt"]["type"] == "string"
+    assert schema["required"] == ["analyse", "good_color", "fix_prompt", "regions"]
+    assert schema["additionalProperties"] is False
+    region_schema = schema["properties"]["regions"]["items"]
+    assert set(region_schema["properties"]) == {
+        "character", "problem", "fix_suggestion", "bbox"
+    }
+    assert region_schema["required"] == [
+        "character", "problem", "fix_suggestion", "bbox"
+    ]
+    assert region_schema["additionalProperties"] is False
+    assert BBOX_RESPONSE_FORMAT["json_schema"]["strict"] is True
+    assert BBOX_RESPONSE_FORMAT["json_schema"]["schema"] is BBOX_VERDICT_SCHEMA
+
+
+def test_parse_bbox_verdict_ok():
+    verdict = parse_bbox_verdict(
+        '{"analyse": "Eisen beard white", "good_color": false, '
+        '"fix_prompt": "Eisen: beard golden-brown", '
+        '"regions": [{"character": "Eisen", "problem": "beard white", '
+        '"fix_suggestion": "beard golden-brown", '
+        '"bbox": [93, 197, 304, 375]}]}'
+    )
+    assert verdict["good_color"] is False
+    assert verdict["fix_prompt"] == "Eisen: beard golden-brown"
+    assert len(verdict["regions"]) == 1
+    region = verdict["regions"][0]
+    assert region["character"] == "Eisen"
+    assert region["bbox"] == [93, 197, 304, 375]
+
+
+def test_parse_bbox_verdict_empty_regions_and_fenced_json():
+    verdict = parse_bbox_verdict(
+        "```json\n{\"analyse\": \"fine\", \"good_color\": \"true\", "
+        "\"fix_prompt\": \"\", \"regions\": []}\n```"
+    )
+    assert verdict["good_color"] is True
+    assert verdict["regions"] == []
+
+
+def test_parse_bbox_verdict_missing_bbox_keeps_none():
+    """A region without a usable bbox is kept with bbox=None (draw_boxes
+    skips it; the region text is still recorded)."""
+    verdict = parse_bbox_verdict(
+        '{"analyse": "a", "good_color": false, "fix_prompt": "f", '
+        '"regions": [{"character": "Frieren", "problem": "p", '
+        '"fix_suggestion": "s"}, '
+        '{"character": "Eisen", "problem": "p", "fix_suggestion": "s", '
+        '"bbox": [0, 0, 10.4, 5.9]}]}'
+    )
+    assert verdict["regions"][0]["bbox"] is None
+    assert verdict["regions"][1]["bbox"] == [0, 0, 10, 6]
+
+
+def test_parse_bbox_verdict_out_of_range_not_clamped_by_parser():
+    """The parser keeps raw coordinates; clamping to 0-1000 happens when the
+    boxes are drawn (draw_boxes)."""
+    verdict = parse_bbox_verdict(
+        '{"analyse": "a", "good_color": false, "fix_prompt": "f", '
+        '"regions": [{"character": "x", "problem": "p", '
+        '"fix_suggestion": "s", "bbox": [-50, 0, 1200, 1000]}]}'
+    )
+    assert verdict["regions"][0]["bbox"] == [-50, 0, 1200, 1000]
+
+
+def test_parse_bbox_verdict_rejects_malformed():
+    assert parse_bbox_verdict("") is None
+    assert parse_bbox_verdict("no json") is None
+    assert parse_bbox_verdict('{"analyse": "missing flag"}') is None
+    assert parse_bbox_verdict('{"good_color": "maybe"}') is None
+    assert parse_bbox_verdict('{"good_color": false, "regions": "notalist"}') is None
+    assert parse_bbox_verdict("[1, 2]") is None
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +280,68 @@ def test_verify_bad_request_does_not_downgrade(tmp_path):
     # the failing call still carried the strict schema + require_parameters
     assert calls[0]["response_format"] == RESPONSE_FORMAT
     assert calls[0]["extra_body"] == {"provider": {"require_parameters": True}}
+
+
+def test_verify_bbox_mode_request_shape_and_regions(tmp_path):
+    """--verify-mode bbox: the verifier sends the BBOX verdict schema with
+    `reasoning: {effort: "high"}` merged into extra_body (on top of
+    require_parameters), and maps the parsed regions onto the record."""
+    colorized = _panel(tmp_path / "colorized.png")
+
+    def bad():
+        return FakeResponse(
+            '{"analyse": "Eisen beard white", "good_color": false, '
+            '"fix_prompt": "Eisen: beard golden-brown", '
+            '"regions": [{"character": "Eisen", "problem": "beard white", '
+            '"fix_suggestion": "beard golden-brown", '
+            '"bbox": [93, 197, 304, 375]}]}',
+            usage=FakeUsage(),
+        )
+
+    verifier = ColorVerifier(
+        client=FakeClient([bad]),
+        response_format=BBOX_RESPONSE_FORMAT,
+        reasoning_effort="high",
+        max_tokens=8192,
+    )
+    record = verifier.verify(colorized, None)
+
+    assert record.status == "mismatch"
+    assert record.fix_prompt == "Eisen: beard golden-brown"
+    assert len(record.regions) == 1
+    assert record.regions[0]["bbox"] == [93, 197, 304, 375]
+    call = verifier.client.chat.completions.calls[0]
+    assert call["response_format"] == BBOX_RESPONSE_FORMAT
+    assert call["max_tokens"] == 8192
+    assert call["extra_body"] == {
+        "reasoning": {"effort": "high"},
+        "provider": {"require_parameters": True},
+    }
+    assert "temperature" not in call
+
+
+def test_verify_bbox_mode_verified_records_empty_regions(tmp_path):
+    colorized = _panel(tmp_path / "colorized.png")
+
+    def ok():
+        return FakeResponse(
+            '{"analyse": "all canonical", "good_color": true, '
+            '"fix_prompt": "", "regions": []}',
+            usage=FakeUsage(),
+        )
+
+    verifier = ColorVerifier(
+        client=FakeClient([ok]),
+        response_format=BBOX_RESPONSE_FORMAT,
+        reasoning_effort="high",
+    )
+    record = verifier.verify(colorized, None)
+
+    assert record.status == "verified"
+    assert record.regions == []
+    # regions omitted from to_dict when empty (fix-prompt records unchanged)
+    assert "regions" not in record.to_dict()
+    assert record.to_dict()["fix_prompt"] == ""
 
 
 def test_verify_unparseable_content(tmp_path):

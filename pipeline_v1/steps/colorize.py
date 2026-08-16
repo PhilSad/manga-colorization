@@ -77,6 +77,9 @@ def _new_totals() -> dict:
         "verifier_error_panels": 0,
         "colorization_retries": 0,
         "verify_cost_usd": 0.0,
+        # bbox mode (--verify-mode bbox): gpt-image-2 region edits.
+        "region_edit_calls": 0,
+        "region_edit_cost_usd": 0.0,
     })
     return totals
 
@@ -86,12 +89,13 @@ def run_colorize_step(
     config: PipelineConfig,
     colorizer,  # Colorizer
     verifier=None,  # ColorVerifier (None -> no verification loop)
+    region_editor=None,  # region_edit.GptImage2RegionEditor (bbox mode)
 ) -> dict:
     """Run stage 4 for all panels of all pages. Returns per-call records.
 
     When `verifier` is set and `config.verify_attempts > 0`, each panel goes
     through the verify loop (verify_loop.py) instead of a single colorize
-    call."""
+    call; `region_editor` is handed to the loop in bbox mode."""
     from atlas import build_filtered_atlas  # noqa: F401 (kept for _process_page imports)
     from profiles import load_profiles, profiles_sha256
 
@@ -120,6 +124,7 @@ def run_colorize_step(
             page_records, page_totals, _ = _process_page(
                 ctx, config, colorizer, page_dir,
                 profiles, profiles_sha, extension, verifier=verifier,
+                region_editor=region_editor,
                 progress=True,
             )
             records.extend(page_records)
@@ -140,6 +145,7 @@ def run_colorize_step(
                     pool.submit(
                         _process_page, ctx, config, colorizer, page_dir,
                         profiles, profiles_sha, extension, verifier=verifier,
+                        region_editor=region_editor,
                         progress=False,
                     ): page_dir
                     for page_dir in page_dirs
@@ -166,6 +172,7 @@ def _process_page(
     extension: str,
     *,
     verifier=None,
+    region_editor=None,
     progress: bool,
 ) -> tuple[list[dict], dict, set[str]]:
     """Full per-page colorization work: character lookup, atlas build, calls,
@@ -241,7 +248,7 @@ def _process_page(
                 record, doc, verify_doc = _colorize_with_verify_loop(
                     ctx, config, colorizer, verifier, panel_path, atlas,
                     output_path, page, stem, palette, characters, profiles,
-                    profiles_sha,
+                    profiles_sha, region_editor=region_editor,
                 )
                 page_totals["api_calls"] += verify_doc["api_calls"]
                 page_totals["successful_calls"] += verify_doc["successful_calls"]
@@ -256,6 +263,11 @@ def _process_page(
                 page_totals["colorization_retries"] += verify_doc["colorization_retries"]
                 page_totals["verify_cost_usd"] = round(
                     page_totals["verify_cost_usd"] + verify_doc["verify_cost_usd"], 8
+                )
+                page_totals["region_edit_calls"] += verify_doc["region_edit_calls"]
+                page_totals["region_edit_cost_usd"] = round(
+                    page_totals["region_edit_cost_usd"]
+                    + verify_doc["region_edit_cost_usd"], 8
                 )
                 outcome = verify_doc["outcome"]
                 if outcome == "verified":
@@ -306,6 +318,8 @@ def _colorize_with_verify_loop(
     characters: list[str],
     profiles: dict,
     profiles_sha: str,
+    *,
+    region_editor=None,
 ) -> tuple[object, dict, dict]:
     """Run the per-panel verify loop (verify_loop.py) and persist the extra
     provenance: `<stem>.verify.json` (outcome, every attempt's colorize +
@@ -325,6 +339,8 @@ def _colorize_with_verify_loop(
         output_path,
         palette_instruction=palette,
         max_attempts=max(1, config.verify_attempts),
+        verify_mode=config.verify_mode,
+        region_editor=region_editor,
     )
 
     record = result.colorize
@@ -341,6 +357,8 @@ def _colorize_with_verify_loop(
         "verify_calls": result.verify_calls,
         "successful_verify_calls": result.successful_verify_calls,
         "verify_cost_usd": result.verify_cost_usd,
+        "region_edit_calls": result.region_edit_calls,
+        "region_edit_cost_usd": result.region_edit_cost_usd,
         "attempts": result.attempts,
     }
 
@@ -369,6 +387,8 @@ def _colorize_with_verify_loop(
         "successful_verify_calls": result.successful_verify_calls,
         "colorization_retries": result.colorization_retries,
         "verify_cost_usd": result.verify_cost_usd,
+        "region_edit_calls": result.region_edit_calls,
+        "region_edit_cost_usd": result.region_edit_cost_usd,
     }
     return record, doc, verify_doc
 
@@ -434,6 +454,7 @@ def _merge_totals(target: dict, source: dict) -> None:
         "mismatch_panels",
         "verifier_error_panels",
         "colorization_retries",
+        "region_edit_calls",
     ):
         target[key] += source.get(key, 0)
     target["total_latency_s"] = round(
@@ -441,6 +462,9 @@ def _merge_totals(target: dict, source: dict) -> None:
     )
     target["verify_cost_usd"] = round(
         target["verify_cost_usd"] + source.get("verify_cost_usd", 0.0), 8
+    )
+    target["region_edit_cost_usd"] = round(
+        target["region_edit_cost_usd"] + source.get("region_edit_cost_usd", 0.0), 8
     )
 
 

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from colorizer import ColorizeRecord
+from region_edit import draw_boxes, region_instruction
 from util import file_record
 from verify_color import (
     ERROR,
@@ -67,6 +68,8 @@ class VerifyLoopResult:
     verify_calls: int = 0
     successful_verify_calls: int = 0
     verify_cost_usd: float = 0.0
+    region_edit_calls: int = 0          # bbox mode: gpt-image-2 region edits
+    region_edit_cost_usd: float = 0.0
 
     @property
     def colorization_retries(self) -> int:
@@ -96,6 +99,8 @@ def run_verify_loop(
     output: Path,
     palette_instruction: str = "",
     max_attempts: int = 2,
+    verify_mode: str = "fix-prompt",
+    region_editor=None,
 ) -> VerifyLoopResult:
     """Colorize + verify up to `max_attempts` times.
 
@@ -109,16 +114,32 @@ def run_verify_loop(
 
     `max_attempts` semantics: 1 = verify and output the fix prompt only (no
     re-colorization); N >= 2 = up to N colorization attempts with at most
-    N-1 fix-prompt retries.
+    N-1 retries.
+
+    `verify_mode="bbox"` (full-page mode only, config-validated) switches
+    the retry path: a mismatch verdict that carries `regions` triggers a
+    **region edit** instead of a full re-colorization — the rejected image is
+    boxed with `draw_boxes` (region_edit.py), and `region_editor` (a
+    GptImage2RegionEditor) recolors only the boxed regions. A mismatch with
+    empty regions (localization recall miss — the probed failure mode) falls
+    back to the fix-prompt full re-colorization, so the loop always has a
+    retry path. Each retry attempt doc records `retry_backend`
+    ("gpt-image-2-region-edit" | "fix-prompt"), the `regions` it consumed,
+    and for region edits the boxed-image record + rendered edit prompt + cost.
     """
     attempts: list[dict[str, Any]] = []
     verify_calls = 0
     successful_verify_calls = 0
     verify_cost_usd = 0.0
+    region_edit_calls = 0
+    region_edit_cost_usd = 0.0
     fix_prompt = ""
     final_record: ColorizeRecord | None = None
     last_ok_record: ColorizeRecord | None = None
     outcome = OUTCOME_MISMATCH  # default when the last verdict is "not good"
+
+    bbox_mode = verify_mode == "bbox"
+    previous_output: Path | None = None  # the rejected image a retry edits
 
     for attempt in range(1, max_attempts + 1):
         if attempt == 1:
@@ -128,11 +149,56 @@ def run_verify_loop(
             attempt_output = output.with_name(
                 f"{output.stem}.attempt_{attempt}{output.suffix}"
             )
-            prompt = _apply_fix(palette_instruction, fix_prompt)
+            if bbox_mode:
+                prompt = ""  # set by the retry branch below
+            else:
+                prompt = _apply_fix(palette_instruction, fix_prompt)
 
-        record = colorizer.colorize(
-            panel, atlas, attempt_output, palette_instruction=prompt
-        )
+        # Retry branch (attempt > 1): bbox mode edits the boxed regions when
+        # the previous verdict localized them; otherwise (and always in
+        # fix-prompt mode) re-colorize the whole image with the fix prompt.
+        retry_backend: str | None = None
+        regions: list[dict[str, Any]] = []
+        boxed_path: Path | None = None
+        edit_prompt = ""
+        edit_cost_usd: float | None = None
+        if attempt > 1:
+            if bbox_mode:
+                regions = list(verdict.regions) if verdict is not None else []
+                if regions and region_editor is not None:
+                    retry_backend = "gpt-image-2-region-edit"
+                    width, height = region_editor.target_size(previous_output)
+                    boxed_path = output.with_name(
+                        f"{output.stem}.attempt_{attempt - 1}.boxed.png"
+                    )
+                    draw_boxes(
+                        previous_output, regions, boxed_path, size=(width, height)
+                    )
+                    instruction = region_instruction(regions)
+                    edit_prompt = region_editor.render_prompt(
+                        width, height, instruction, palette_instruction
+                    )
+                    prompt = edit_prompt
+                else:
+                    retry_backend = "fix-prompt"
+                    prompt = _apply_fix(palette_instruction, fix_prompt)
+            else:
+                prompt = _apply_fix(palette_instruction, fix_prompt)
+
+        if attempt > 1 and retry_backend == "gpt-image-2-region-edit":
+            record = region_editor.edit(
+                boxed_path, atlas, attempt_output,
+                region_instruction(regions), palette_instruction,
+            )
+            if record.est_cost_usd is not None:
+                edit_cost_usd = record.est_cost_usd
+                region_edit_cost_usd += record.est_cost_usd
+            if record.status == "ok":
+                region_edit_calls += 1
+        else:
+            record = colorizer.colorize(
+                panel, atlas, attempt_output, palette_instruction=prompt
+            )
         final_record = record
 
         verdict = None
@@ -148,10 +214,20 @@ def run_verify_loop(
         attempt_doc: dict[str, Any] = {
             "attempt": attempt,
             "prompt_used": prompt,
-            "colorize": record.to_dict(panel, atlas),
+            "colorize": record.to_dict(
+                boxed_path if boxed_path is not None else panel, atlas
+            ),
         }
         if verdict is not None:
             attempt_doc["verify"] = verdict.to_dict()
+        if bbox_mode and attempt > 1:
+            attempt_doc["retry_backend"] = retry_backend
+            if regions:
+                attempt_doc["regions"] = regions
+            if retry_backend == "gpt-image-2-region-edit":
+                attempt_doc["boxed_image"] = file_record(boxed_path)
+                attempt_doc["edit_prompt"] = edit_prompt
+                attempt_doc["edit_cost_usd"] = edit_cost_usd
         attempts.append(attempt_doc)
 
         if record.status != "ok":
@@ -175,12 +251,22 @@ def run_verify_loop(
             break
 
         # verdict.status == MISMATCH: output the fix prompt for the user and,
-        # with attempts left, re-colorize with it.
+        # with attempts left, retry — bbox mode via the region editor when
+        # regions were localized, otherwise the fix-prompt re-colorization.
         fix_prompt = (verdict.fix_prompt or _synthesize_fix(verdict.analyse)).strip()
-        print(f"[verify] {panel.name}: palette MISMATCH (attempt {attempt})",
+        retry_hint = ""
+        if bbox_mode:
+            retry_hint = (
+                f": {len(verdict.regions)} regions → gpt-image-2 region edit"
+                if verdict.regions and region_editor is not None
+                else ": no regions → fix-prompt re-colorize"
+            )
+        print(f"[verify] {panel.name}: palette MISMATCH "
+              f"(attempt {attempt}){retry_hint}",
               flush=True)
         print(f"[verify] fix prompt:\n{fix_prompt}", flush=True)
         if attempt < max_attempts:
+            previous_output = attempt_output
             continue
         outcome = OUTCOME_MISMATCH
         break
@@ -215,4 +301,6 @@ def run_verify_loop(
         verify_calls=verify_calls,
         successful_verify_calls=successful_verify_calls,
         verify_cost_usd=round(verify_cost_usd, 8),
+        region_edit_calls=region_edit_calls,
+        region_edit_cost_usd=round(region_edit_cost_usd, 8),
     )

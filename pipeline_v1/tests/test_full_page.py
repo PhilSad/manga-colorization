@@ -230,6 +230,92 @@ def test_full_page_verify_retry_totals(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# bbox verify mode end-to-end (--verify-mode bbox, mock backends): the retry
+# path runs a region edit instead of a full re-colorization, boxed images are
+# kept, and the manifest records the region-edit totals.
+
+def test_full_page_verify_bbox_mode_e2e(tmp_path):
+    from mock_backends import MockRegionEditor, MockVerifier
+
+    make_page(tmp_path, "p001.png")
+    make_page(tmp_path, "p002.png")
+    (tmp_path / "refs").mkdir(parents=True, exist_ok=True)
+    argv = [
+        "--input-dir", str(tmp_path / "pages"),
+        "--refs-dir", str(tmp_path / "refs"),
+        "--output-root", str(tmp_path / "output"),
+        "--mock",
+        "--full-page",
+        "--verify-mode", "bbox",
+        "--verify-attempts", "3",
+    ]
+    config = parse_args(argv)
+    assert config.verify_max_tokens == 8192  # bbox default budget
+    backends = build_backends(config)
+    assert backends.region_editor is not None
+    # Both full-page panels share the stem panel_0001, and the MockVerifier
+    # counts per stem: the FIRST panel to be verified gets the bad-once
+    # verdict (mismatch + 1 region -> region edit), later ones are good.
+    backends.verifier = MockVerifier(by_panel={
+        "panel_0001": ("bad-once", "fix: beard golden-brown",
+                        [{"character": "Eisen", "problem": "beard white",
+                          "fix_suggestion": "Eisen: beard golden-brown",
+                          "bbox": [0, 0, 500, 500]}])
+    })
+    backends.region_editor = MockRegionEditor()
+    runner = PipelineRunner(config, backends)
+    ctx = runner.run()
+
+    assert ctx.manifest["status"] == "completed"
+    totals = ctx.manifest["totals"]
+    # p001 colorizes + region-edits, p002 colorizes -> 3 calls, 2 panels.
+    assert totals["gpt_image_calls"] == 3
+    assert totals["panels_colorized"] == 2
+    assert totals["colorization_retries"] == 1
+    assert totals["verify_calls"] == 3
+    assert totals["verified_panels"] == 2
+    assert totals["mismatch_panels"] == 0
+    assert totals["region_edit_calls"] == 1
+    assert totals["region_edit_cost_usd"] == pytest.approx(0.02, abs=1e-9)
+    # mock mode: pricing_assumptions is a single note dict (no blocks)
+    assert ctx.manifest["prompt_hashes"]["verify_bbox_prompt_sha256"]
+    assert ctx.manifest["prompt_hashes"]["region_edit_prompt_sha256"]
+
+    # The retried page's attempt doc recorded the region edit provenance.
+    p001_rec = next(
+        r for r in ctx.manifest["steps"]["colorize"]["records"]
+        if r["page"] == "p001"
+    )
+    loop = p001_rec["verify_loop"]
+    assert loop["outcome"] == "verified"
+    assert loop["region_edit_calls"] == 1
+    assert loop["region_edit_cost_usd"] == pytest.approx(0.02, abs=1e-9)
+    retry_doc = loop["attempts"][1]
+    assert retry_doc["retry_backend"] == "gpt-image-2-region-edit"
+    assert len(retry_doc["regions"]) == 1
+    assert retry_doc["boxed_image"]["filename"] == "panel_0001.attempt_1.boxed.png"
+    assert retry_doc["edit_cost_usd"] == pytest.approx(0.02, abs=1e-9)
+    # The non-retried page has no retry backend recorded.
+    p002_rec = next(
+        r for r in ctx.manifest["steps"]["colorize"]["records"]
+        if r["page"] == "p002"
+    )
+    assert len(p002_rec["verify_loop"]["attempts"]) == 1
+
+    # Boxed image kept on disk next to the attempt images.
+    colorized_p001 = ctx.run_dir / "3_colorized" / "p001"
+    assert (colorized_p001 / "panel_0001.attempt_1.boxed.png").is_file()
+    assert (colorized_p001 / "panel_0001.attempt_1.png").is_file()
+    assert (colorized_p001 / "panel_0001.attempt_2.png").is_file()
+    assert (colorized_p001 / "panel_0001.png").is_file()
+    # the boxed image is the attempt-1 output with boxes drawn on it
+    boxed = Image.open(colorized_p001 / "panel_0001.attempt_1.boxed.png")
+    attempt1 = Image.open(colorized_p001 / "panel_0001.attempt_1.png")
+    assert boxed.size == attempt1.size
+    boxed.close(), attempt1.close()
+
+
+# ---------------------------------------------------------------------------
 # sum_gpt_image_cost: retry attempts must be counted even though the top-level
 # record only carries the final attempt's cost.
 

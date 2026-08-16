@@ -21,7 +21,7 @@ with retry/backoff and `usage.cost` accounting lives in
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,96 @@ RESPONSE_FORMAT: dict[str, Any] = {
     },
 }
 
+# bbox mode (`--verify-mode bbox`, see verify_loop.py): the retry verdict
+# carries the corrective regions too, so one Luna call per retry provides the
+# fix_prompt (full-panel fallback) AND the edit-need bounding boxes. The
+# probe schema (scripts/probe_luna_bboxes.py) plus `fix_prompt` — the probe's
+# exact recipe and the empty-regions fallback coexist (user decision 1, plan
+# docs/plans/verify-bbox-region-edit.md).
+BBOX_VERDICT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "analyse": {
+            "type": "string",
+            "description": (
+                "Which characters' palettes are correct or wrong, and where "
+                "the wrong regions are."
+            ),
+        },
+        "good_color": {
+            "type": "boolean",
+            "description": "True if every character has its canonical palette.",
+        },
+        "fix_prompt": {
+            "type": "string",
+            "description": (
+                "If good_color is false: a concise corrective instruction "
+                "for the colorizer naming each wrong character and the exact "
+                "canonical colors to apply (e.g. 'Frieren: hair silver-white, "
+                "eyes teal — the hair was colored lavender'). Empty string "
+                "when good_color is true."
+            ),
+        },
+        "regions": {
+            "type": "array",
+            "description": (
+                "One entry per region of the colorized image that needs a "
+                "color edit; empty when good_color is true or when no region "
+                "can be localized (the fix_prompt then covers the whole panel)."
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "character": {
+                        "type": "string",
+                        "description": (
+                            "Canonical character name from the atlas, or a "
+                            "short description."
+                        ),
+                    },
+                    "problem": {
+                        "type": "string",
+                        "description": (
+                            "What is wrong and what the canonical color "
+                            "should be."
+                        ),
+                    },
+                    "fix_suggestion": {
+                        "type": "string",
+                        "description": (
+                            "Exact corrective instruction for the colorizer."
+                        ),
+                    },
+                    "bbox": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": (
+                            "[x1, y1, x2, y2] in normalized 0-1000 integer "
+                            "coordinates; (0,0) top-left, (1000,1000) "
+                            "bottom-right of the colorized image."
+                        ),
+                    },
+                },
+                "required": [
+                    "character", "problem", "fix_suggestion", "bbox",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["analyse", "good_color", "fix_prompt", "regions"],
+    "additionalProperties": False,
+}
+
+BBOX_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "bbox_verdict",
+        "strict": True,
+        "schema": BBOX_VERDICT_SCHEMA,
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Answer parsing
@@ -117,6 +207,59 @@ def parse_color_verdict(text: str) -> dict | None:
     }
 
 
+def parse_bbox_verdict(text: str) -> dict | None:
+    """Parse `{analyse, good_color, fix_prompt, regions[]}` for bbox mode.
+
+    Mirrors the probe's parser (scripts/probe_luna_bboxes.py) plus the
+    `fix_prompt` field; returns None for malformed answers. Regions whose
+    bbox is missing/malformed are kept with `bbox: None` (draw_boxes skips
+    them; the region text is still recorded)."""
+    if not text:
+        return None
+    data = _extract_json_object(text.strip())
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("good_color")
+    if isinstance(raw, bool):
+        good_color = raw
+    elif isinstance(raw, str) and raw.strip().lower() in ("true", "false"):
+        good_color = raw.strip().lower() == "true"
+    else:
+        return None
+    regions = data.get("regions")
+    if regions is None:
+        regions = []
+    elif not isinstance(regions, list):
+        return None
+    cleaned: list[dict[str, Any]] = []
+    for region in regions:
+        if not isinstance(region, dict):
+            continue
+        bbox = region.get("bbox")
+        if (
+            isinstance(bbox, list)
+            and len(bbox) == 4
+            and all(isinstance(v, (int, float)) for v in bbox)
+        ):
+            bbox = [int(round(float(v))) for v in bbox]
+        else:
+            bbox = None
+        cleaned.append(
+            {
+                "character": str(region.get("character") or ""),
+                "problem": str(region.get("problem") or ""),
+                "fix_suggestion": str(region.get("fix_suggestion") or ""),
+                "bbox": bbox,
+            }
+        )
+    return {
+        "analyse": str(data.get("analyse") or ""),
+        "good_color": good_color,
+        "fix_prompt": str(data.get("fix_prompt") or ""),
+        "regions": cleaned,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Verifier client
 
@@ -137,9 +280,10 @@ class ColorVerifyRecord:
     error: str | None = None
     fix_prompt: str = ""        # corrective instruction ("" when good_color)
     finished_at: str | None = None
+    regions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        doc = {
             "status": self.status,
             "good_color": self.good_color,
             "analyse": self.analyse,
@@ -154,6 +298,9 @@ class ColorVerifyRecord:
             "error": self.error,
             "finished_at": self.finished_at,
         }
+        if self.regions:
+            doc["regions"] = self.regions
+        return doc
 
 
 class ColorVerifier:
@@ -169,6 +316,8 @@ class ColorVerifier:
         max_tokens: int = 1024,
         temperature: float = 0.0,
         prompt_template: str | None = None,
+        response_format: dict | None = None,  # default: COLOR_VERDICT_SCHEMA
+        reasoning_effort: str | None = None,  # bbox mode: "high"
     ) -> None:
         self.model = model
         self.api_key = api_key
@@ -182,6 +331,8 @@ class ColorVerifier:
 
             self.client = OpenAI(api_key=api_key, base_url=api_base)
         self.prompt_template = prompt_template
+        self.response_format = response_format or RESPONSE_FORMAT
+        self.reasoning_effort = reasoning_effort
 
     def verify(
         self,
@@ -208,28 +359,42 @@ class ColorVerifier:
         )
         content = _content_with_images(template, (colorized, input_crop, atlas))
 
+        merged_body: dict[str, Any] = dict(extra_body or {})
+        if self.reasoning_effort:
+            merged_body.setdefault(
+                "reasoning", {"effort": self.reasoning_effort}
+            )
         result = call_vlm(
             self.client, self.model, content,
             max_tokens=self.max_tokens, temperature=self.temperature,
-            response_format=RESPONSE_FORMAT,
-            extra_body=extra_body,
+            response_format=self.response_format,
+            extra_body=merged_body,
         )
-        parsed = parse_color_verdict(result.text) if result.error is None else None
+        parsed = None
+        if result.error is None:
+            schema = self.response_format.get("json_schema", {}).get("schema", {})
+            if "regions" in schema.get("properties", {}):
+                parsed = parse_bbox_verdict(result.text)
+            else:
+                parsed = parse_color_verdict(result.text)
 
         if result.error is not None:
             status = ERROR
             good_color = None
             analyse = ""
             fix_prompt = ""
+            regions: list[dict[str, Any]] = []
         elif parsed is None:
             status = UNPARSEABLE
             good_color = None
             analyse = ""
             fix_prompt = ""
+            regions = []
         else:
             good_color = parsed["good_color"]
             analyse = parsed["analyse"]
             fix_prompt = parsed["fix_prompt"]
+            regions = parsed.get("regions", [])
             status = VERIFIED if good_color else MISMATCH
 
         return ColorVerifyRecord(
@@ -237,6 +402,7 @@ class ColorVerifier:
             good_color=good_color,
             analyse=analyse,
             fix_prompt=fix_prompt,
+            regions=regions,
             response_text=result.text,
             usage=result.usage,
             cost_usd=result.cost_usd,

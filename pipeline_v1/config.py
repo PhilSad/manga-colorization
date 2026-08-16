@@ -54,6 +54,14 @@ DEFAULT_CHAPTER_PAGE_MAP_FILE = (
 DEFAULT_VERIFY_MODEL = "openai/gpt-5.6-luna"
 DEFAULT_VERIFY_PROMPT_FILE = PIPELINE_DIR / "verify_color_prompt.txt"
 
+# bbox mode (--verify-mode bbox, full-page only): the verifier's bbox verdict
+# schema (analyse/good_color/fix_prompt/regions[]) with high reasoning effort
+# and an 8192-token budget (the probe proved 2048 truncates and wastes the
+# call); retries then region-edit the boxed areas with gpt-image-2
+# (region_edit.py) instead of re-colorizing the whole page.
+DEFAULT_VERIFY_BBOX_PROMPT_FILE = PIPELINE_DIR / "verify_bbox_prompt.txt"
+DEFAULT_REGION_EDIT_PROMPT_FILE = PIPELINE_DIR / "gpt_region_edit_prompt.txt"
+
 # FLUX VAE constraint: every requested dimension must be a multiple of 16.
 FLUX_MULTIPLE = 16
 # The smallest dimension we will ever request (rounding must not produce 0).
@@ -160,6 +168,13 @@ class PipelineConfig:
     verify_prompt_file: Path = DEFAULT_VERIFY_PROMPT_FILE
     verify_max_tokens: int = 1024
     verify_api_key_env: str = "OPENROUTER_API_KEY"
+    # bbox mode (full-page only): retries region-edit the localized boxes via
+    # gpt-image-2 instead of re-colorizing the whole page (region_edit.py).
+    verify_mode: str = "fix-prompt"        # fix-prompt | bbox
+    verify_bbox_prompt_file: Path = DEFAULT_VERIFY_BBOX_PROMPT_FILE
+    verify_reasoning_effort: str = "high"  # bbox mode only (passed as reasoning.effort)
+    region_edit_prompt_file: Path = DEFAULT_REGION_EDIT_PROMPT_FILE
+    region_edit_model: str | None = None   # None -> reuse --gpt-model
 
     # Page selection (repo convention: --skip-first / --limit)
     skip_first: int = 0
@@ -241,6 +256,11 @@ class PipelineConfig:
             "verify_prompt_file": str(self.verify_prompt_file),
             "verify_max_tokens": self.verify_max_tokens,
             "verify_api_key_env": self.verify_api_key_env,
+            "verify_mode": self.verify_mode,
+            "verify_bbox_prompt_file": str(self.verify_bbox_prompt_file),
+            "verify_reasoning_effort": self.verify_reasoning_effort,
+            "region_edit_prompt_file": str(self.region_edit_prompt_file),
+            "region_edit_model": self.region_edit_model,
             "skip_first": self.skip_first,
             "limit": self.limit,
             "steps": list(self.steps),
@@ -355,6 +375,29 @@ def _validate(config: PipelineConfig) -> None:
     if config.gpt_size is not None:
         parse_gpt_size(config.gpt_size)  # raises ValueError on bad format/size
 
+    # bbox verify mode (user decisions, docs/plans/verify-bbox-region-edit.md):
+    # full-page mode only, needs retries to be meaningful, and the region
+    # editor is a paid gpt-image-2 call (OpenAI key check lives in run.py).
+    if config.verify_mode not in ("fix-prompt", "bbox"):
+        raise ValueError(
+            f"--verify-mode must be 'fix-prompt' or 'bbox', got {config.verify_mode!r}"
+        )
+    if config.verify_mode == "bbox" and not config.full_page:
+        raise ValueError("--verify-mode bbox requires --full-page")
+    if config.verify_mode == "bbox" and config.verify_attempts < 1:
+        raise ValueError("--verify-mode bbox requires --verify-attempts >= 1")
+    if (
+        config.verify_mode == "fix-prompt"
+        and config.verify_reasoning_effort != "high"
+    ):
+        print(
+            f"WARNING: --verify-reasoning-effort is only used in bbox mode "
+            f"(got {config.verify_reasoning_effort!r} with --verify-mode "
+            "fix-prompt)",
+            file=sys.stderr,
+            flush=True,
+        )
+
 
 def parse_args(argv: list[str] | None = None) -> PipelineConfig:
     parser = argparse.ArgumentParser(
@@ -452,12 +495,38 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
                         default=DEFAULT_VERIFY_PROMPT_FILE,
                         help="Prompt for the color verification model "
                              "(default: verify_color_prompt.txt).")
-    parser.add_argument("--verify-max-tokens", type=int, default=1024,
+    parser.add_argument("--verify-max-tokens", type=int,
                         help="Completion token cap for the verifier "
-                             "(default: 1024).")
+                             "(default: 1024; 8192 when --verify-mode bbox — "
+                             "the probe proved 8192 is required for high-effort "
+                             "bbox output).")
     parser.add_argument("--verify-api-key-env", default="OPENROUTER_API_KEY",
                         help="Env var holding the OpenRouter key used by the "
                              "verifier (default: OPENROUTER_API_KEY).")
+    parser.add_argument("--verify-mode", choices=("fix-prompt", "bbox"),
+                        default="fix-prompt",
+                        help="Retry backend for the verify loop: 'fix-prompt' "
+                             "(default) re-colorizes the whole page with the "
+                             "verdict's fix prompt; 'bbox' (full-page mode only) "
+                             "draws the verdict's bboxes on the rejected page and "
+                             "gpt-image-2 recolors only those regions "
+                             "(region_edit.py); a mismatch without regions falls "
+                             "back to the fix-prompt re-colorization.")
+    parser.add_argument("--verify-bbox-prompt-file", type=Path,
+                        default=DEFAULT_VERIFY_BBOX_PROMPT_FILE,
+                        help="Prompt for the bbox verdict (--verify-mode bbox; "
+                             "default: verify_bbox_prompt.txt).")
+    parser.add_argument("--verify-reasoning-effort", default="high",
+                        help="OpenRouter reasoning.effort for the verifier in "
+                             "bbox mode (default: high; ignored in fix-prompt "
+                             "mode).")
+    parser.add_argument("--region-edit-prompt-file", type=Path,
+                        default=DEFAULT_REGION_EDIT_PROMPT_FILE,
+                        help="Edit prompt template for bbox-mode region edits "
+                             "(default: gpt_region_edit_prompt.txt).")
+    parser.add_argument("--region-edit-model", default=None,
+                        help="OpenAI image model for bbox-mode region edits "
+                             "(default: reuses --gpt-model, i.e. gpt-image-2).")
     parser.add_argument("--api-key-env", default="OPENROUTER_API_KEY")
     parser.add_argument("--atlas-columns", type=int,
                         help="Atlas grid columns (default: ceil(sqrt(n))).")
@@ -596,8 +665,17 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             verify_attempts=args.verify_attempts,
             verify_model=args.verify_model,
             verify_prompt_file=args.verify_prompt_file,
-            verify_max_tokens=args.verify_max_tokens,
+            verify_max_tokens=(
+                args.verify_max_tokens
+                if args.verify_max_tokens is not None
+                else 8192 if args.verify_mode == "bbox" else 1024
+            ),
             verify_api_key_env=args.verify_api_key_env,
+            verify_mode=args.verify_mode,
+            verify_bbox_prompt_file=args.verify_bbox_prompt_file,
+            verify_reasoning_effort=args.verify_reasoning_effort,
+            region_edit_prompt_file=args.region_edit_prompt_file,
+            region_edit_model=args.region_edit_model,
             skip_first=args.skip_first,
             limit=args.limit,
             steps=steps,

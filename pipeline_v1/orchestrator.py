@@ -41,6 +41,7 @@ class Backends:
     character_detector: object
     colorizer: object
     verifier: object | None = None  # verify_color.ColorVerifier (None -> no loop)
+    region_editor: object | None = None  # region_edit.GptImage2RegionEditor (bbox mode)
 
 
 def sum_gpt_image_cost(records: list[dict]) -> float:
@@ -142,6 +143,8 @@ class PipelineRunner:
                 "verifier_error_panels": 0,
                 "colorization_retries": 0,
                 "verify_cost_usd": 0.0,
+                "region_edit_calls": 0,
+                "region_edit_cost_usd": 0.0,
                 "panels_bw_fallback": 0,
                 "pages_stitched": 0,
                 "pages_annotated": 0,
@@ -162,6 +165,8 @@ class PipelineRunner:
             ("colorizer_prompt", self.config.colorizer_prompt_file),
             ("gpt_image_prompt", self.config.gpt_image_prompt_file),
             ("verify_prompt", self.config.verify_prompt_file),
+            ("verify_bbox_prompt", self.config.verify_bbox_prompt_file),
+            ("region_edit_prompt", self.config.region_edit_prompt_file),
             ("profiles", self.config.profiles_file),
         ):
             try:
@@ -232,6 +237,18 @@ class PipelineRunner:
                           "totals.verify_cost_usd. --verify-attempts 1 = check "
                           "and output fix prompt only; N >= 2 re-colorizes with "
                           "the fix prompt up to N-1 times."),
+            },
+            "region_edit": {
+                "provider": "OpenAI Images API (paid, standard tier)",
+                "model": self.config.region_edit_model or self.config.gpt_model,
+                "quality": GPT_IMAGE_QUALITY,
+                "enabled": self.config.verify_mode == "bbox",
+                "note": ("--verify-mode bbox retry backend: gpt-image-2 "
+                          "images.edit recolors only the Luna-bbox regions of a "
+                          "rejected page. Probe-measured $0.04593 @ 672x1008 "
+                          "medium (2026-08-16); per-call est_cost_usd recorded "
+                          "in the verify attempt docs and "
+                          "totals.region_edit_cost_usd."),
             },
         }
 
@@ -317,6 +334,7 @@ class PipelineRunner:
             record = run_colorize_step(
                 ctx, self.config, self.backends.colorizer,
                 verifier=self.backends.verifier,
+                region_editor=self.backends.region_editor,
             )
             totals = record["totals"]
             self.manifest_totals_update(ctx, {
@@ -327,6 +345,8 @@ class PipelineRunner:
                 "verifier_error_panels": totals.get("verifier_error_panels", 0),
                 "colorization_retries": totals.get("colorization_retries", 0),
                 "verify_cost_usd": totals.get("verify_cost_usd", 0.0),
+                "region_edit_calls": totals.get("region_edit_calls", 0),
+                "region_edit_cost_usd": totals.get("region_edit_cost_usd", 0.0),
             })
             if self.config.full_page:
                 # gpt-image-2 backend: per-call est_cost_usd (None for failed
@@ -383,7 +403,8 @@ class PipelineRunner:
 
     def manifest_totals_update(self, ctx: RunContext, update: dict) -> None:
         for key, value in update.items():
-            if key in ("openrouter_cost_usd", "verify_cost_usd"):
+            if key in ("openrouter_cost_usd", "verify_cost_usd",
+                       "region_edit_cost_usd"):
                 ctx.manifest["totals"][key] = round(
                     ctx.manifest["totals"].get(key, 0.0) + value, 8
                 )

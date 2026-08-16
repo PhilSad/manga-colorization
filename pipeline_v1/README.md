@@ -168,7 +168,15 @@ bounding-box stroke width),
 embedding resolution, default 72 — page size in points = pixels × 72 / dpi),
 `--verify-attempts N` (character-palette verification loop, 0 = off),
 `--verify-model <openrouter-model>` (default `openai/gpt-5.6-luna`),
-`--verify-prompt-file <path>` (default `verify_color_prompt.txt`).
+`--verify-prompt-file <path>` (default `verify_color_prompt.txt`),
+`--verify-mode fix-prompt|bbox` (retry backend, default `fix-prompt`),
+`--verify-bbox-prompt-file <path>` (bbox verdict prompt, default
+`verify_bbox_prompt.txt`),
+`--verify-reasoning-effort <effort>` (bbox mode only, default `high`),
+`--region-edit-prompt-file <path>` (bbox edit template, default
+`gpt_region_edit_prompt.txt`),
+`--region-edit-model <model>` (bbox editor model, default reuses
+`--gpt-model`).
 
 ### Character-palette verification loop (`--verify-attempts`)
 
@@ -209,6 +217,49 @@ visible in the per-call records.
 non-empty. Verify calls are paid OpenRouter calls (Luna pricing, measured
 per call); retries are extra FLUX calls on the Spark server (still $0/call).
 
+### Bbox-guided region edits (`--verify-mode bbox`)
+
+Full-page mode only (config validation rejects it without `--full-page`):
+the retry path of the verification loop switches from re-colorizing the
+**whole page** with the fix prompt to a **region-scoped gpt-image-2 edit**.
+The verifier's bbox verdict schema (`analyse` / `good_color` / `fix_prompt` /
+`regions[]` — one Luna call per retry, `reasoning: {effort: "high"}`, 8192
+output tokens: the probe proved 2048 truncates and wastes the call) also
+emits the bounding boxes of the palette-wrong regions (normalized 0–1000
+coordinates). On a mismatch:
+
+1. `regions` non-empty → the rejected page is copied with the boxes drawn on
+   it as `<panel>.attempt_<n>.boxed.png` (drawn at the resolution actually
+   sent to gpt-image-2), and `GptImage2RegionEditor` (region_edit.py,
+   `images.edit`, no mask — the boxes are the only locator) recolors only
+   the boxed regions with the atlas + canonical palette; the next verify
+   call sees the edited page, so a localization recall miss on one pass is
+   simply boxed again on the next (the probed failure mode).
+2. `regions` empty (localization recall miss) → fall back to the fix-prompt
+   full re-colorization (`retry_backend: "fix-prompt"`); the loop always
+   has a retry path.
+
+Per attempt, `3_colorized/<page>/<panel>.verify.json` records
+`retry_backend` (`"gpt-image-2-region-edit"` | `"fix-prompt"`), the
+consumed `regions`, and for region edits the `boxed_image` file record, the
+rendered `edit_prompt` and `edit_cost_usd`; the boxed image is kept on disk
+next to the attempt images. The manifest `totals` gain `region_edit_calls`
+and `region_edit_cost_usd`; `pricing_assumptions.region_edit` documents the
+editor pricing.
+
+```bash
+# full-page + bbox-guided retries (up to 2 retries per page):
+.venv/bin/python pipeline_v1/run.py \
+  --input-dir data/chapter_134 --refs-dir data/refs \
+  --full-page --verify-mode bbox --verify-attempts 3 --skip-first 3 --limit 5
+```
+
+Measured (probe `20260816-111714-gpt-edit-bbox`): a region edit costs
+≈ **$0.04593** @ 672×1008 medium, vs ≈ $0.0499 for a fix-prompt full
+re-colorize — slightly cheaper *and* targeted, at the price of possible
+extra iterations when localization recall misses. Per bbox retry: 1 Luna
+bbox call ≈ $0.00176 + 1 gpt-image-2 edit ≈ $0.046 ≈ **$0.048/retry**.
+
 ```bash
 # verify only, output fix prompts, no re-colorization:
 .venv/bin/python pipeline_v1/run.py \
@@ -230,7 +281,9 @@ output/<YYYYMMDD-HHMMSS>/
 ├── 3_colorized/<page>/     colorized panels + per-panel atlas + verify
 │                           records (<panel>.verify.json, fix prompts,
 │                           attempt_<n> images for superseded attempts
-│                           when --verify-attempts ≥ 2, incl. attempt_1)
+│                           when --verify-attempts ≥ 2, incl. attempt_1;
+│                           bbox mode additionally keeps
+│                           attempt_<n>.boxed.png region-edit sources)
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
 ├── 5_debug/<page>.png      stitched page + bbox + character label per panel
 ├── 6_pdf/colorized.pdf     all stitched pages as one multi-page PDF
@@ -400,6 +453,10 @@ the computed size for comparison runs.
   Retries are extra colorization calls — on FLUX they are still $0/call, but
   in full-page mode each gpt-image-2 retry costs ≈ $0.05/page (measured:
   one retry $0.05074 in that run).
+- **Region edits** (OpenAI `gpt-image-2`, bbox mode only): probe-measured
+  ≈ **$0.04593** @ 672×1008 medium (2026-08-16); recorded per edit in the
+  verify attempt docs (`edit_cost_usd`) and the manifest
+  `totals.region_edit_calls` / `totals.region_edit_cost_usd`.
 
 ## Testing
 

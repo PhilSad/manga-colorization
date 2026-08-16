@@ -18,7 +18,7 @@ from PIL import Image
 
 from colorizer import ColorizeRecord
 from detection import PanelBox
-from mock_backends import MockColorizer, MockVerifier
+from mock_backends import MockColorizer, MockRegionEditor, MockVerifier
 from orchestrator import Backends, PipelineRunner
 from tests.synthetic_page import READING_ORDER, build_page, panel_box
 from verify_color import ColorVerifyRecord, VERIFIED, MISMATCH, ERROR
@@ -258,6 +258,187 @@ def test_apply_fix():
     )
     # empty palette -> the fix block alone (still authoritative)
     assert _apply_fix("", "use teal") == f"{FIX_HEADER}\nuse teal"
+
+
+# ---------------------------------------------------------------------------
+# bbox mode (--verify-mode bbox): region-guided retries
+
+REGIONS = [
+    {"character": "Eisen", "problem": "beard white",
+     "fix_suggestion": "Eisen: beard golden-brown", "bbox": [0, 0, 500, 500]},
+]
+
+
+# Sentinel distinguishing "no editor given" from "explicitly None".
+_MISSING = object()
+
+
+def _bbox_loop(tmp_path, verifier_by_panel, *, max_attempts=2, region_editor=_MISSING):
+    from mock_backends import MockRegionEditor, MockVerifier
+
+    panel = _panel(tmp_path / "panel_0001.png")
+    atlas = tmp_path / "atlas.jpg"
+    Image.new("RGB", (16, 16), "gray").save(atlas)
+    output = _loop_output(tmp_path)
+    colorizer = MockColorizer()
+    verifier = MockVerifier(verifier_by_panel)
+    editor = MockRegionEditor() if region_editor is _MISSING else region_editor
+    result = run_verify_loop(
+        colorizer, verifier, panel, atlas, output,
+        palette_instruction="palette: canonical",
+        max_attempts=max_attempts,
+        verify_mode="bbox",
+        region_editor=editor,
+    )
+    return result, colorizer, verifier, editor, output, atlas
+
+
+def test_bbox_verified_first_attempt_no_editor_call(tmp_path):
+    result, colorizer, _, editor, output, _ = _bbox_loop(
+        tmp_path, {"panel_0001": ("good", "")}
+    )
+
+    assert result.outcome == OUTCOME_VERIFIED
+    assert result.region_edit_calls == 0
+    assert editor.calls == []
+    assert len(colorizer.calls) == 1
+    assert output.is_file()
+
+
+def test_bbox_mismatch_with_regions_edits_then_verified(tmp_path):
+    """Mismatch + regions: the boxed image is written, the editor is called
+    with boxed + atlas, the edited attempt is verified again, and the attempt
+    doc records retry_backend/regions/boxed_image/edit_prompt/edit_cost_usd."""
+    result, colorizer, verifier, editor, output, atlas = _bbox_loop(
+        tmp_path, {"panel_0001": ("bad-once", "Eisen: beard golden-brown", REGIONS)}
+    )
+
+    assert result.outcome == OUTCOME_VERIFIED
+    assert len(result.attempts) == 2
+    assert result.colorization_retries == 1
+    assert result.region_edit_calls == 1
+    assert result.region_edit_cost_usd == pytest.approx(0.02, abs=1e-9)
+    assert result.verify_calls == 2
+
+    # editor saw the boxed image + atlas; no extra full colorize call
+    assert len(editor.calls) == 1
+    boxed_path, atlas_seen, edit_out, instruction, palette = editor.calls[0]
+    assert boxed_path.name == "panel_0001.attempt_1.boxed.png"
+    assert boxed_path.is_file()
+    assert atlas_seen == atlas
+    assert edit_out.name == "panel_0001.attempt_2.png"
+    assert "Region 0 (Eisen)" in instruction
+    assert palette == "palette: canonical"
+    assert len(colorizer.calls) == 1  # attempt 1 only
+
+    # attempt doc provenance
+    retry_doc = result.attempts[1]
+    assert retry_doc["retry_backend"] == "gpt-image-2-region-edit"
+    assert retry_doc["regions"] == REGIONS
+    assert retry_doc["boxed_image"]["filename"] == "panel_0001.attempt_1.boxed.png"
+    assert "Region 0 (Eisen)" in retry_doc["edit_prompt"]
+    assert retry_doc["edit_cost_usd"] == pytest.approx(0.02, abs=1e-9)
+    # the colorize provenance for the region edit points at the boxed image
+    assert retry_doc["colorize"]["panel"] == "panel_0001.attempt_1.boxed.png"
+    # the mismatched verdict recorded its regions too
+    assert result.attempts[0]["verify"]["regions"] == REGIONS
+
+    # final canonical output is the edited attempt
+    assert output.read_bytes() == output.with_name(
+        "panel_0001.attempt_2.png"
+    ).read_bytes()
+    # attempt 1 preserved (plus its boxed copy)
+    assert output.with_name("panel_0001.attempt_1.png").is_file()
+
+
+def test_bbox_mismatch_empty_regions_falls_back_to_fix_prompt(tmp_path):
+    """Mismatch + empty regions (the probed recall-miss failure mode): the
+    loop falls back to the fix-prompt full re-colorization, no editor call."""
+    result, colorizer, verifier, editor, output, _ = _bbox_loop(
+        tmp_path, {"panel_0001": ("bad-once", "Eisen: beard golden-brown", [])}
+    )
+
+    assert result.outcome == OUTCOME_VERIFIED
+    assert len(result.attempts) == 2
+    assert result.region_edit_calls == 0
+    assert editor.calls == []
+    assert len(colorizer.calls) == 2  # attempt 1 + fix-prompt retry
+    retry_doc = result.attempts[1]
+    assert retry_doc["retry_backend"] == "fix-prompt"
+    assert "regions" not in retry_doc
+    assert FIX_HEADER in retry_doc["prompt_used"]
+    assert "beard golden-brown" in retry_doc["prompt_used"]
+
+
+def test_bbox_mismatch_exhausted_after_region_edit(tmp_path):
+    """The region edit does not fix it: attempts exhausted -> mismatch, the
+    edited attempt kept as canonical."""
+    result, colorizer, verifier, editor, output, _ = _bbox_loop(
+        tmp_path, {"panel_0001": ("bad", "still wrong", REGIONS)}
+    )
+
+    assert result.outcome == OUTCOME_MISMATCH
+    assert len(result.attempts) == 2
+    assert result.region_edit_calls == 1
+    assert len(editor.calls) == 1
+    assert output.is_file()
+    assert output.with_name("panel_0001.attempt_1.boxed.png").is_file()
+    # both superseded attempts keep their images
+    assert output.with_name("panel_0001.attempt_1.png").is_file()
+    assert output.with_name("panel_0001.attempt_2.png").is_file()
+
+
+def test_bbox_mismatch_empty_regions_exhausted(tmp_path):
+    result, colorizer, verifier, editor, output, _ = _bbox_loop(
+        tmp_path, {"panel_0001": ("bad", "still wrong", [])}
+    )
+
+    assert result.outcome == OUTCOME_MISMATCH
+    assert result.region_edit_calls == 0
+    assert editor.calls == []
+    assert len(colorizer.calls) == 2
+
+
+def test_bbox_verifier_error_stops_without_edit(tmp_path):
+    """A broken verifier in bbox mode stops like fix-prompt mode: no region
+    edit is attempted on a non-mismatch verdict."""
+    panel = _panel(tmp_path / "panel_0001.png")
+    output = _loop_output(tmp_path)
+    colorizer = MockColorizer()
+    editor = MockRegionEditor()
+
+    class BrokenVerifier:
+        def verify(self, colorized, input_crop, atlas=None):
+            return ColorVerifyRecord(
+                status=ERROR, good_color=None, analyse="", fix_prompt="",
+                regions=[], response_text="boom", usage={}, cost_usd=None,
+                cost_source="", latency_s=0.01, model_returned="mock",
+                attempts=1, finished_at="now", error="http 500",
+            )
+
+    result = run_verify_loop(
+        colorizer, BrokenVerifier(), panel, None, output,
+        max_attempts=2, verify_mode="bbox", region_editor=editor,
+    )
+
+    assert result.outcome == OUTCOME_VERIFIER_ERROR
+    assert result.region_edit_calls == 0
+    assert editor.calls == []
+    assert len(colorizer.calls) == 1
+
+
+def test_bbox_mode_requires_editor_for_region_edits(tmp_path):
+    """Defensive: bbox mode without an editor degrades to the fix-prompt
+    retry instead of crashing."""
+    result, colorizer, verifier, editor, output, _ = _bbox_loop(
+        tmp_path, {"panel_0001": ("bad-once", "fix it", REGIONS)},
+        region_editor=None,
+    )
+
+    assert result.outcome == OUTCOME_VERIFIED
+    assert len(result.attempts) == 2
+    assert result.attempts[1]["retry_backend"] == "fix-prompt"
+    assert len(colorizer.calls) == 2
 
 
 # ---------------------------------------------------------------------------

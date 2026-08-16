@@ -57,7 +57,15 @@ def test_ship_profiles_load_and_validate_against_refs():
 def test_ship_profiles_have_canonical_palettes():
     profiles = load_profiles(PROFILES_FILE)
     frieren = profiles["frieren"]
-    assert "silver-white hair" in frieren.canonical_palette
+    assert any("silver-white hair" in c for c in frieren.canonical_palette)
+    # tightened (2026-08-16): the recurring live-run failures — lavender
+    # Frieren hair, green/olive eyes, white Eisen beard — are pinned as
+    # explicit negatives so the colorizer cannot fall back to them.
+    assert any("never lavender" in c for c in frieren.canonical_palette)
+    assert any("teal" in c for c in frieren.canonical_palette)
+    eisen = profiles["eisen"]
+    assert any("golden-brown" in c and "never white" in c
+               for c in eisen.canonical_palette)
     heiter = profiles["heiter"]
     assert "light green hair" in heiter.canonical_palette
     assert "glasses" in heiter.canonical_palette

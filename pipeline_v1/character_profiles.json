@@ -6,7 +6,14 @@
       "name": "Frieren",
       "aliases": ["Frieren the Slayer"],
       "identity_cues": ["elf", "long silver twin-tail hair", "elven ears"],
-      "canonical_palette": ["silver-white hair", "green eyes", "white coat with gold trim"],
+      "canonical_palette": [
+        "silver-white hair (light silver-grey, never lavender, purple, pink, or grey-green)",
+        "teal eyes (teal-green/turquoise, never plain green, olive, or blue)",
+        "white robe with golden-brown trim",
+        "white mantle with golden-brown trim",
+        "dark navy leggings",
+        "brown leather boots (never black)"
+      ],
       "reference_files": ["frieren_reference.webp", "Frieren_anime_profile.webp"],
       "variants": {}
     },
@@ -14,7 +21,12 @@
       "name": "Fern",
       "aliases": ["Frieren's apprentice"],
       "identity_cues": ["pale hair", "mage staff", "young mage girl"],
-      "canonical_palette": ["pale lavender hair", "purple-brown eyes", "dark mage robe with white trim"],
+      "canonical_palette": [
+        "pale lavender-violet hair",
+        "violet-purple eyes",
+        "charcoal-black outer cloak with white trim",
+        "white blouse and white long dress"
+      ],
       "reference_files": ["fern_reference.webp"],
       "variants": {}
     },
@@ -46,7 +58,13 @@
       "name": "Eisen",
       "aliases": ["Eisen the Dwarf"],
       "identity_cues": ["dwarf", "tall", "white beard", "heavy armor"],
-      "canonical_palette": ["white hair and beard", "grey eyes", "heavy grey armour"],
+      "canonical_palette": [
+        "golden-brown hair and beard (never white, grey, or orange)",
+        "pale grey eyes",
+        "light grey steel armour",
+        "light grey steel helmet",
+        "rust-red cloak (never brown, burgundy, or black)"
+      ],
       "reference_files": ["eisen_reference.webp"],
       "variants": {}
     },

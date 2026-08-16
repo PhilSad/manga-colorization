@@ -194,6 +194,55 @@ so OpenRouter cost is **$0.00** (only `OPENAI_API_KEY` needed). Results:
 - **Total run cost: ≈ $2.043** (zero VLM detection, 39 min wall time,
   25/25 pages colorized + stitched + debug annotated).
 
+### BBox probe: can a retry fix only the flagged regions? (2026-08-16)
+
+Open question behind a planned verify-loop improvement: instead of
+re-colorizing the whole panel on a mismatch, localize what is wrong and edit
+only those regions. Two **behavior probes** (no pipeline change — nothing in
+`verify_loop.py` / `verify_color.py` / `gpt_colorizer.py` is modified; wiring
+bboxes into the loop is a separate, future step):
+
+- `scripts/probe_luna_bboxes.py` — the localization half: ask
+  `openai/gpt-5.6-luna` (OpenRouter) with `reasoning: {effort: "high"}` and a
+  strict `json_schema` structured output (`analyse` / `good_color` / `regions[]`
+  with `bbox` in normalized 0–1000 coordinates + `problem` + `fix_suggestion`)
+  for the bounding boxes of the palette-edit regions on a rejected colorization;
+  draws the boxes on the image for visual inspection.
+- `scripts/probe_gpt_edit_bbox.py` — the edit half: draws Luna's boxes on the
+  rejected page, hands the boxed image + labelled atlas to `gpt-image-2`
+  (`GptImage2Colorizer`, `images.edit`, no mask — the boxes are the only
+  locator) with a prompt that recolors **only inside the red rectangles**, then
+  optionally re-probes the edited result with Luna (`--verify`).
+
+Measured on the rejected `panel_0001.attempt_2.png` of run `20260815-174713`
+p010 (ground-truth fix prompt from that run: "Eisen: beard golden-brown/blond —
+it was colored white. Frieren: hair silver-white — it was colored
+lavender-purple."):
+
+1. **Luna localization** (`20260816-110358-luna-bbox`): works — verdict
+   NEEDS EDITS with 2 regions, both Eisen's beard (left portrait
+   `[93,197,304,375]`, wagon scene `[467,163,537,253]`), **$0.00176**
+   (`usage.cost`, 30.0s, 9656 tokens of which 2588 reasoning). Token budget
+   matters: at `max_tokens=2048` (`20260816-110322-luna-bbox`) the high-effort
+   reasoning consumes the whole budget and the structured output comes back
+   **unparseable** ($0.00208 wasted, 33.1s) — 8192 is needed.
+2. **gpt-image-2 region edit** (`20260816-111714-gpt-edit-bbox`): the boxed
+   image + atlas → edited.png, **$0.04593** (medium, 672×1008, 38.5s). The
+   Luna re-probe of the edited page (`verify2/`, $0.00278, 35.1s) reports
+   **STILL NEEDS EDITS but only 1 region: Frieren's hair**
+   (`[781,154,878,240]`, lavender → silver-white) — both Eisen-beard regions
+   are no longer flagged, i.e. the edit landed exactly where told.
+
+**Findings**: both halves of the loop are individually viable — Luna can emit
+edit-need bboxes under strict structured output + high reasoning effort, and
+gpt-image-2 applies box-scoped recolors correctly. The failure mode is
+**region recall, not editing**: the first localization pass missed Frieren's
+hair that the ground-truth fix prompt flags (Eisen's dominant repeated catch
+likely draws all the attention), so the one-shot edit fixed Eisen but left
+Frieren wrong; a second iteration would presumably box the hair. Honest limits
+recorded in the manifests: no mask (boxes are the only locator), the model may
+repaint beyond the box, and an edit can only fix what the bbox pass found.
+
 ---
 
 ## V1.1 — fixed evaluation set, explicit palettes, page-level detection

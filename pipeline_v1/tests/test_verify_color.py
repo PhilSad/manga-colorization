@@ -206,6 +206,55 @@ def test_verify_unparseable_content(tmp_path):
     assert record.good_color is None
 
 
+def test_call_vlm_merges_extra_body_with_require_parameters(tmp_path):
+    """`extra_body` (the bbox probe's `reasoning: {effort: ...}`) is merged
+    on top of `provider.require_parameters` for structured calls — the caller
+    never has to re-specify the provider pin."""
+    colorized = _panel(tmp_path / "colorized.png")
+
+    def ok():
+        return FakeResponse(
+            '{"analyse": "fine", "good_color": true}',
+            usage=FakeUsage(),
+        )
+
+    verifier = ColorVerifier(client=FakeClient([ok]))
+    verifier.verify(
+        colorized, None,
+        extra_body={"reasoning": {"effort": "high"}},
+    )
+
+    call = verifier.client.chat.completions.calls[0]
+    assert call["extra_body"] == {
+        "reasoning": {"effort": "high"},
+        "provider": {"require_parameters": True},
+    }
+
+
+def test_call_vlm_extra_body_caller_wins_on_conflict(tmp_path):
+    """A key the caller passes in `extra_body` overrides the default —
+    used to pin a different provider block without duplicating reasoning."""
+    colorized = _panel(tmp_path / "colorized.png")
+
+    def ok():
+        return FakeResponse(
+            '{"analyse": "fine", "good_color": true}',
+            usage=FakeUsage(),
+        )
+
+    verifier = ColorVerifier(client=FakeClient([ok]))
+    verifier.verify(
+        colorized, None,
+        extra_body={
+            "reasoning": {"effort": "high"},
+            "provider": {"require_parameters": False},
+        },
+    )
+
+    call = verifier.client.chat.completions.calls[0]
+    assert call["extra_body"]["provider"] == {"require_parameters": False}
+
+
 def test_verify_not_found_not_retried(tmp_path):
     """A routing 404 (no endpoint supports the required parameters) is
     deterministic — recorded as an error after exactly one attempt, no

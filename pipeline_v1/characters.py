@@ -616,6 +616,7 @@ def call_vlm(
     max_tokens: int = 1024,
     temperature: float = 0.0,
     response_format: dict | None = None,
+    extra_body: dict[str, Any] | None = None,
 ) -> "_CallResult":
     """One OpenAI-compatible chat completion with retry/backoff and
     `usage.cost` accounting (OpenRouter). Shared by character detection
@@ -631,7 +632,14 @@ def call_vlm(
     also omit `temperature` (gpt-5.6-luna does not list it as a supported
     parameter — `require_parameters` would otherwise reject every endpoint)
     and a routing 404 (NotFoundError) is recorded immediately, not
-    retried."""
+    retried.
+
+    `extra_body` (optional) is merged into the request's `extra_body` on top
+    of the defaults — used by the bbox probe (scripts/probe_luna_bboxes.py)
+    to add OpenAI-style `reasoning: {"effort": "high", ...}` for Luna while
+    keeping `provider.require_parameters` for structured outputs. Merge order
+    is caller wins: a key present in `extra_body` overrides the same key in
+    the default dict."""
     from openai import (
         APIError,
         APIConnectionError,
@@ -657,7 +665,14 @@ def call_vlm(
             kwargs["temperature"] = temperature
         if current_format is not None:
             kwargs["response_format"] = current_format
-        if structured:
+        if extra_body:
+            body: dict[str, Any] = dict(extra_body)
+            if structured:
+                body.setdefault(
+                    "provider", {"require_parameters": True}
+                )
+            kwargs["extra_body"] = body
+        elif structured:
             kwargs["extra_body"] = {"provider": {"require_parameters": True}}
         started = time.monotonic()
         try:

@@ -1,0 +1,38 @@
+You are localizing the mistakes in a manga colorization, region by region.
+
+Provided images:
+- #1: the colorized image under review (the output of a manga colorization pipeline)
+- #2: the original monochrome image (linework and character-position reference)
+- #3: the reference atlas of the characters that should appear (canonical palette reference)
+
+A previous verification pass judged this colorization as NOT palette-correct:
+characters are colored with the wrong canonical Frieren palette. Your job is to
+pinpoint exactly WHERE in the colorized image (#1) edits are needed, so a
+follow-up step could re-color only those regions.
+
+For EVERY region of #1 where a character (or an object such as hair, beard,
+eyes, armour, clothing, cloak) is colored wrong relative to the canonical
+palette, output one `regions` entry with:
+
+- `character`: the canonical character name from the atlas (e.g. "Frieren",
+  "Eisen", "Himmel"); use "background" or a short description if the atlas
+  does not name the character;
+- `problem`: what is wrong and what the canonical color should be
+  (e.g. "hair was colored lavender-purple, should be silver-white");
+- `fix_suggestion`: the exact corrective instruction for the colorizer
+  (e.g. "Eisen: beard golden-brown/blond — it was colored white");
+- `bbox`: the tightest rectangle around the wrongly-colored region, as
+  `[x1, y1, x2, y2]` with **integer coordinates normalized to a 0-1000
+  range** where (0,0) is the top-left of image #1 and (1000,1000) is the
+  bottom-right. Cover the whole wrongly-colored object (e.g. a whole head of
+  hair), not a single pixel.
+
+Rules:
+- Only report regions that actually need a color edit. If the palette is
+  entirely correct, return an empty `regions` list and `good_color: true`.
+- Prefer a small number of tight, well-chosen boxes over many loose ones.
+- Be precise: use the monochrome image (#2) and the atlas (#3) to identify
+  the character before drawing its box.
+
+Answer in JSON only, with no extra text:
+{ "analyse": "which characters' palettes are correct or wrong, and where the wrong regions are", "good_color": true or false, "regions": [ { "character": "Name", "problem": "what is wrong and the canonical color", "fix_suggestion": "corrective instruction", "bbox": [x1, y1, x2, y2] } ] }

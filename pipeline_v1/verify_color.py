@@ -188,6 +188,7 @@ class ColorVerifier:
         colorized: Path,
         input_crop: Path | None,
         atlas: Path | None = None,
+        extra_body: dict[str, Any] | None = None,
     ) -> ColorVerifyRecord:
         """Ask the VLM whether every character in the colorized panel has its
         canonical Frieren palette.
@@ -211,6 +212,7 @@ class ColorVerifier:
             self.client, self.model, content,
             max_tokens=self.max_tokens, temperature=self.temperature,
             response_format=RESPONSE_FORMAT,
+            extra_body=extra_body,
         )
         parsed = parse_color_verdict(result.text) if result.error is None else None
 

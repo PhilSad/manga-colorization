@@ -1,0 +1,15 @@
+A manga page was colorized, and a verification pass found wrong colors inside
+the red rectangles drawn on the image. The first image is the colorized page
+under review, with red rectangles marking the regions to fix. The second image
+is a labelled reference atlas of the characters with their canonical colors.
+
+Only recolor the regions inside the red rectangles to the canonical colors
+described below. Keep every pixel outside the red rectangles exactly as it is —
+lineart, colors, screentones, lettering, panel borders, poses, expressions.
+Remove the red rectangle outlines from the output; the corrected regions must
+blend seamlessly with the surrounding artwork.
+
+{character_profiles}
+
+Return only the corrected colorized version of the page at exactly {width}x{height};
+do not crop, rotate, redraw, repaint, or change anything outside the rectangles.

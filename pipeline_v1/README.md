@@ -202,6 +202,9 @@ holds every attempt (colorize + verify records, verdicts, latencies,
 measured `usage.cost`), and the manifest `totals` gain `verify_calls`,
 `successful_verify_calls`, `verified_panels`, `mismatch_panels`,
 `verifier_error_panels`, `colorization_retries` and `verify_cost_usd`.
+Usage records also carry `completion_tokens_details` (e.g. Luna's
+`reasoning_tokens`) whenever the provider returns it, so reasoning spend is
+visible in the per-call records.
 `fix_prompt` (authoritative retry block) is written per panel only when
 non-empty. Verify calls are paid OpenRouter calls (Luna pricing, measured
 per call); retries are extra FLUX calls on the Spark server (still $0/call).

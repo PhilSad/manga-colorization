@@ -102,12 +102,14 @@ def test_validate_characters():
 # Fake OpenAI-compatible client
 
 class FakeUsage:
-    def __init__(self, prompt=10, completion=5, cost=0.0001):
+    def __init__(self, prompt=10, completion=5, cost=0.0001,
+                 completion_tokens_details=None):
         self.prompt_tokens = prompt
         self.completion_tokens = completion
         self.total_tokens = prompt + completion
         self.cost = cost
         self.model_extra = None
+        self.completion_tokens_details = completion_tokens_details
 
 
 class FakeChoice:
@@ -199,6 +201,76 @@ def test_detect_success_ok(tmp_path):
     assert record.cost_source == "usage.cost"
     assert record.usage["total_tokens"] == 15
     assert record.error is None
+
+
+def test_detect_records_completion_tokens_details(tmp_path):
+    """`call_vlm` records provider usage details (reasoning_tokens) when the
+    API returns `completion_tokens_details` — e.g. Luna's reasoning tokens —
+    instead of dropping them."""
+    panel = make_panel(tmp_path)
+
+    def ok():
+        return FakeResponse(
+            '{"characters": ["Frieren"]}',
+            usage=FakeUsage(
+                completion=518,
+                completion_tokens_details={"reasoning_tokens": 377},
+            ),
+        )
+
+    detector = make_detector(tmp_path, [ok])
+    record = detect_panel(detector, panel, make_refs(tmp_path))
+    assert record.status == "ok"
+    assert record.usage["completion_tokens"] == 518
+    assert record.usage["completion_tokens_details"] == {
+        "reasoning_tokens": 377
+    }
+
+
+def test_detect_records_pydantic_usage_details(tmp_path):
+    """The OpenAI SDK returns `completion_tokens_details` as a pydantic
+    object; `_usage_details` flattens it via model_dump (dict passthrough is
+    covered above)."""
+    panel = make_panel(tmp_path)
+
+    class PydanticLikeDetails:
+        def model_dump(self):
+            return {"reasoning_tokens": 42, "audio_tokens": 0}
+
+    def ok():
+        return FakeResponse(
+            '{"characters": ["Fern"]}',
+            usage=FakeUsage(
+                completion=100,
+                completion_tokens_details=PydanticLikeDetails(),
+            ),
+        )
+
+    detector = make_detector(tmp_path, [ok])
+    record = detect_panel(detector, panel, make_refs(tmp_path))
+    assert record.status == "ok"
+    assert record.usage["completion_tokens_details"] == {
+        "reasoning_tokens": 42,
+        "audio_tokens": 0,
+    }
+
+
+def test_detect_no_details_keeps_usage_minimal(tmp_path):
+    """Absent `completion_tokens_details` must not emit an empty key — the
+    recorded usage stays exactly the three token counters."""
+    panel = make_panel(tmp_path)
+
+    def ok():
+        return FakeResponse('{"characters": ["Frieren"]}', usage=FakeUsage())
+
+    detector = make_detector(tmp_path, [ok])
+    record = detect_panel(detector, panel, make_refs(tmp_path))
+    assert record.status == "ok"
+    assert record.usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15,
+    }
 
 
 def test_detect_ok_with_unknown(tmp_path):

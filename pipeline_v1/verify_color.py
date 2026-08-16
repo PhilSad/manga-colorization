@@ -128,7 +128,7 @@ class ColorVerifyRecord:
     good_color: bool | None
     analyse: str
     response_text: str
-    usage: dict[str, int]
+    usage: dict[str, Any]
     cost_usd: float | None
     cost_source: str
     latency_s: float

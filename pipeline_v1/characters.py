@@ -297,7 +297,7 @@ class CharacterRecord:
     characters: list[str]             # canonical names, validated
     unknown_entries: list[str]
     response_text: str
-    usage: dict[str, int]
+    usage: dict[str, Any]
     cost_usd: float | None
     cost_source: str
     latency_s: float
@@ -571,6 +571,44 @@ class OpenRouterCharacterDetector:
         )
 
 
+def _usage_details(details: Any) -> dict[str, Any] | None:
+    """Flatten a provider usage-details object into a JSON-serializable dict.
+
+    OpenAI-compatible SDKs expose `usage.completion_tokens_details` either as
+    a pydantic model (`reasoning_tokens`, `accepted_prediction_tokens`, ...)
+    or — on OpenRouter — as a plain dict. Returns None when absent so the
+    caller keeps the record minimal rather than emitting an empty object.
+    """
+    if details is None:
+        return None
+    if isinstance(details, dict):
+        return dict(details)
+    dump = getattr(details, "model_dump", None)  # pydantic v2
+    if callable(dump):
+        try:
+            return dump()
+        except Exception:  # noqa: BLE001 - defensive; fall through to v1
+            pass
+    dump = getattr(details, "dict", None)  # pydantic v1
+    if callable(dump):
+        try:
+            return dump()
+        except Exception:  # noqa: BLE001 - defensive; fall through below
+            pass
+    # last resort: attribute bag
+    fields: dict[str, Any] = {}
+    for name in (
+        "reasoning_tokens",
+        "accepted_prediction_tokens",
+        "rejected_prediction_tokens",
+        "audio_tokens",
+    ):
+        value = getattr(details, name, None)
+        if value is not None:
+            fields[name] = value
+    return fields or None
+
+
 def call_vlm(
     client: Any,
     model: str,
@@ -703,6 +741,11 @@ def call_vlm(
                 "completion_tokens": usage.completion_tokens,
                 "total_tokens": usage.total_tokens,
             }
+            details = _usage_details(
+                getattr(usage, "completion_tokens_details", None)
+            )
+            if details is not None:
+                usage_record["completion_tokens_details"] = details
             cost_value = getattr(usage, "cost", None)
             if cost_value is None:
                 raw_usage = getattr(usage, "model_extra", None) or {}
@@ -729,7 +772,7 @@ def call_vlm(
 @dataclass
 class _CallResult:
     text: str
-    usage: dict[str, int]
+    usage: dict[str, Any]
     cost_usd: float | None
     cost_source: str
     latency_s: float

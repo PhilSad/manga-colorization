@@ -163,6 +163,26 @@ class GptImage2RegionEditor:
 
     # -- prompt rendering ---------------------------------------------------
 
+    def target_size(self, image: Path) -> tuple[int, int]:
+        """The size at which `image` will be sent to gpt-image-2 (explicit
+        --gpt-size override, else the minimal aspect-preserving size). The
+        verify loop draws Luna's boxes at this resolution so they are
+        pixel-correct for the edit request."""
+        with Image.open(image) as opened:
+            original = (opened.width, opened.height)
+        return self.size or minimal_gpt_image_size(*original)
+
+    def render_prompt(
+        self,
+        width: int,
+        height: int,
+        instruction: str,
+        palette_instruction: str = "",
+    ) -> str:
+        """The exact prompt an edit at `width`x`height` will send — recorded
+        in the verify attempt doc (edit_prompt) as provenance."""
+        return self._prompt(width, height, instruction, palette_instruction)
+
     def _prompt(
         self,
         width: int,

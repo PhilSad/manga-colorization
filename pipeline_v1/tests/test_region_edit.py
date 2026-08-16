@@ -196,6 +196,29 @@ def test_region_instruction_falls_back_to_problem():
 # ---------------------------------------------------------------------------
 # GptImage2RegionEditor request contract
 
+def test_target_size_and_render_prompt(tmp_path, monkeypatch):
+    """The verify loop's pre-flight helpers: target_size resolves the edit
+    resolution (minimal size by default, --gpt-size override wins) and
+    render_prompt returns the exact prompt an edit at that size sends.
+    Regression: these existed only on MockRegionEditor, so the real editor
+    crashed on the first bbox retry."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    editor = make_editor(monkeypatch)
+    image = make_boxed(tmp_path, size=(1500, 2250))
+
+    assert editor.target_size(image) == (672, 1008)  # minimal for 1500x2250
+    editor_override = make_editor(monkeypatch, size=(1024, 1536))
+    assert editor_override.target_size(image) == (1024, 1536)
+
+    prompt = editor.render_prompt(
+        672, 1008, "Region 0 (Eisen): fix", "Frieren: silver-white hair"
+    )
+    assert "672x1008" in prompt
+    assert "Region 0 (Eisen): fix" in prompt
+    assert "silver-white hair" in prompt
+    assert "{region_instruction}" not in prompt and "{width}" not in prompt
+
+
 def test_edit_request_shape(tmp_path, monkeypatch):
     """images.edit: boxed image first, atlas uploaded as the filename-carrying
     tuple (the mimetype regression), prompt slots filled, size/quality set,

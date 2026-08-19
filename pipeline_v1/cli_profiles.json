@@ -1,14 +1,14 @@
 {
   "profiles": {
     "full-page": {
-      "description": "Full-page gpt-image-2 colorization with cast-limited Luna character detection (one paid OpenRouter call per page over the auto-derived per-chapter cast), 8 parallel detection/colorization workers, no verification loop.",
+      "description": "Full-page gpt-image-2 colorization with cast-limited Luna character detection (one paid OpenRouter call per page over the auto-derived per-chapter cast), 8 parallel detection workers, 4 parallel colorization workers (gpt-image-2 org rate limit ~5 input-images/min), no verification loop.",
       "args": {
         "full-page": true,
         "atlas-source": "detected",
         "detection-mode": "page-cast",
         "vlm-model": "openai/gpt-5.6-luna",
         "worker-detection": 8,
-        "worker-colorization": 8,
+        "worker-colorization": 4,
         "verify-attempts": 0
       }
     }

@@ -463,7 +463,7 @@ def test_profile_full_page_applies_defaults():
     assert config.detection_mode == "page-cast"
     assert config.vlm_model == "openai/gpt-5.6-luna"
     assert config.worker_detection == 8
-    assert config.worker_colorization == 8
+    assert config.worker_colorization == 4
     assert config.verify_attempts == 0
 
 

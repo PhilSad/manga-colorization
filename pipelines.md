@@ -781,6 +781,23 @@ working unchanged.
   - Volume-1 projection (187 pages): **≈ $9.3** — the projection is now
     backed by measured per-call usage in the manifest
     (`steps.colorize.records[].est_cost_usd`, `totals.gpt_image_cost_usd`).
+- **Best run we ever had (measured, `output/20260819-202719` — volume 2, ch. 8
+  p003–p012, `--profile full-page --skip-first 3 --limit 10`):** the first
+  10-page full-page run; final assembly **10/10 pages colorized, 0 B&W
+  fallbacks**, atlases matched the detected chapter cast (Fern/Frieren/Eisen/
+  Heiter/Himmel per page) and cost landed exactly on the projection
+  (≈ $0.055/page all-in). It needed one targeted fix: the main run
+  (`output/20260819-202106`) colorized 9/10 — p003 hit a gpt-image-2 org rate
+  limit (429, "input-images per min: Limit 5, Used 5") because the profile's
+  8 colorization workers fired 10 calls back-to-back; p003 was retried
+  standalone (`20260819-202607`, `--resume --from-step colorize
+  --only-panel p003:panel_0001 --worker-colorization 1`, 56.7 s) and the full
+  10-page set assembled via `--resume --from-step stitch`. Detection notes:
+  Luna `page-cast` had 8/10 empty page-level responses → per-panel fallback
+  (sensible atlases; p009 no characters → panel-only). Cost: **$0.5015
+  gpt-image-2 (11 calls incl. the rate-limited one) + $0.0463 OpenRouter =
+  ≈ $0.55 ≈ $0.055/page**. This run motivated the profile default change
+  below (`worker-colorization` 8 → 4).
 - **Verification loop on full-page mode (measured):** the same 5 pages were
   re-run with `--verify-attempts 3` (`output/20260815-165721`) — Luna
   verified 5/5 pages (4 on attempt 1, p003 caught and auto-fixed on

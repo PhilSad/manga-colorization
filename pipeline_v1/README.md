@@ -133,7 +133,7 @@ Current profiles:
 
 | Profile | Expands to | Notes |
 |---|---|---|
-| `full-page` | `--full-page --atlas-source detected --detection-mode page-cast --vlm-model openai/gpt-5.6-luna --worker-detection 8 --worker-colorization 8 --verify-attempts 0` | Full-page gpt-image-2 colorization; per page, one Luna (OpenRouter) call restricted to the auto-derived per-chapter cast (`page-cast`) picks the atlas characters; 8 parallel detection/colorization workers; no verification loop. Needs `OPENAI_API_KEY` (colorization) + `OPENROUTER_API_KEY` (detection). |
+| `full-page` | `--full-page --atlas-source detected --detection-mode page-cast --vlm-model openai/gpt-5.6-luna --worker-detection 8 --worker-colorization 4 --verify-attempts 0` | Full-page gpt-image-2 colorization; per page, one Luna (OpenRouter) call restricted to the auto-derived per-chapter cast (`page-cast`) picks the atlas characters; 8 parallel detection workers, 4 parallel colorization workers (kept at 4 to stay under the gpt-image-2 org limit of ~5 input-images/min); no verification loop. Needs `OPENAI_API_KEY` (colorization) + `OPENROUTER_API_KEY` (detection). |
 
 To add a profile, add an entry to `cli_profiles.json`; unknown profile names
 and unknown/unknown-valued flags in a profile fail loudly at parse time.

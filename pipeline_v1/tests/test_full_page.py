@@ -353,8 +353,9 @@ def test_cast_without_full_page_rejected():
 
 # ---------------------------------------------------------------------------
 # --profile full-page: the named profile expands to the full-page flags
-# (cast-limited page-cast detection, 8 workers, no verification) and the
-# mock pipeline runs end to end with those defaults applied.
+# (cast-limited page-cast detection, 8 detection / 4 colorization workers,
+# no verification) and the mock pipeline runs end to end with those defaults
+# applied.
 
 def test_full_page_profile_mock_pipeline(tmp_path):
     ctx, config, _ = run_full_page(tmp_path, pages=2, extra_args=["--profile", "full-page"])
@@ -367,7 +368,7 @@ def test_full_page_profile_mock_pipeline(tmp_path):
     assert conf["detection_mode"] == "page-cast"
     assert conf["vlm_model"] == "openai/gpt-5.6-luna"
     assert conf["worker_detection"] == 8
-    assert conf["worker_colorization"] == 8
+    assert conf["worker_colorization"] == 4
     assert conf["verify_attempts"] == 0
 
     # Detection actually ran (page-cast is a real page-level mode, not the

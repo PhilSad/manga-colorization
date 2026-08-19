@@ -250,7 +250,9 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   detection entirely (zero VLM calls, `OPENROUTER_API_KEY` not needed — only
   `OPENAI_API_KEY`). `--atlas-source cast` requires `--full-page`. The
   `full-page` profile (`--profile full-page`) bundles the full-page + Luna +
-  `page-cast` + 8-worker + no-verify configuration. See
+  `page-cast` + 8 detection / 4 colorization workers + no-verify configuration
+  (colorization workers capped at 4 to stay under the gpt-image-2 org rate
+  limit of ~5 input-images/min). See
   `pipeline_v1/README.md` §Profiles and §Full-page gpt-image-2 mode.
 - Debug annotation: the pipeline's final `debug` step (see step 6 above)
   writes `5_debug/` automatically at the end of every run. Its offline

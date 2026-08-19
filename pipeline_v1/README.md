@@ -419,6 +419,22 @@ API keys, and writes:
                              totals (panels_sanity_checked/_flagged)
 ```
 
+Full-page runs (`--full-page`, or the sparse-art full-page fallback) record
+one *synthetic* box covering the whole page instead of real per-panel
+detections, so the sanity stage re-extracts the real panels with the YOLO
+panel detector on the B&W page (Japanese reading order) and checks each
+detected panel individually: the B&W side is the YOLO crop at the box in
+source coordinates (`bw_box` in the record), the colorized side is the
+stitched page cropped at that box scaled to the stitched page's resolution
+(`box`). Panel names are `yolo_000N.png` (not the recorded `panel_000N.png`).
+The same re-extraction is shared by `scripts/check_sanity.py` and
+`scripts/check_luna_sanity.py`, and both record `bw_box` alongside `box` for
+provenance. Note that when the stitched page is smaller than the source
+(minimal-size gpt-image-2 output, e.g. 672×1008 vs 1500×2250), the colorized
+panels are genuinely lower-resolution than the B&W crops, which the strict
+geometric scorer measures as a fidelity penalty — a real property of the
+output, not a scoring artifact.
+
 `scripts/check_sanity.py` is the standalone, offline companion of that stage:
 it re-checks any *completed* run (same `steps.sanity.run_sanity_step`
 implementation) with custom options, without re-running the pipeline; it
@@ -468,7 +484,10 @@ Writes per-page `<page>.json`, the provenance pairs
 `inputs/<page>/<panel>.bw.png|colorized.png` (analysis-grid resized), a
 `<page>_mismatch.png` contact sheet only for pages with mismatches, and
 `summary.json` with totals + measured cost. Needs `OPENROUTER_API_KEY` in
-`.env`. B&W-fallback panels are skipped. Measured 2026-08-21: ~$0.0015/panel
+`.env`. B&W-fallback panels are skipped. Full-page runs are handled like the
+structural check: the real panels are re-extracted with YOLO from the B&W
+page and each is checked individually (panel names `yolo_000N.png`).
+Measured 2026-08-21: ~$0.0015/panel
 at 1536 px long edge; two ch.134 panel-wise FLUX panels that the structural
 check flagged (line IoU ≈ 0.09) were both judged `match` by Luna — a useful
 reminder that the two checks measure different things.

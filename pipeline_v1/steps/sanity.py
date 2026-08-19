@@ -12,6 +12,12 @@ Reads:
   4_stitched/<page>.<ext>            the final page (colorized panels at box positions)
   3_colorized/<page>/panel_000N.png  fallback when 4_stitched is unavailable
   manifest.json                      B&W-fallback panels are skipped (trivially identical)
+  YOLO panel detector                full-page runs: the recorded geometry is one
+                                     synthetic box covering the whole page, so the
+                                     real panels are re-extracted from the B&W page
+                                     (YoloPanelDetector + reading order) and the
+                                     stitched page is cropped at those boxes (scaled
+                                     to the stitched page's resolution)
 
 Writes:
   7_sanity/<page>.json               per-panel metrics + verdicts
@@ -37,6 +43,10 @@ from selection import page_selected
 from steps.debug import load_fallback_map
 from tqdm import tqdm
 from util import SUPPORTED_IMAGE_SUFFIXES, load_font
+
+# Provenance values that mean "one synthetic box covering the whole page"
+# instead of real per-panel YOLO detections.
+FULL_PAGE_PROVENANCES = ("full-page-mode", "full-page-fallback")
 
 
 def _find_colorized(page_dir: Path, crop_name: str) -> Path | None:
@@ -75,6 +85,136 @@ def _crop_box(image: Image.Image, box: list[float]) -> Image.Image | None:
     return image.crop((x1, y1, x2, y2))
 
 
+def _is_synthetic_full_page(geometry: dict) -> bool:
+    """True when the recorded geometry is one synthetic box covering the
+    whole page (full-page mode or the sparse-art full-page fallback) rather
+    than real per-panel YOLO detections."""
+    detections = geometry.get("detections") or []
+    return (
+        len(detections) == 1
+        and detections[0].get("provenance") in FULL_PAGE_PROVENANCES
+    )
+
+
+def _image_size(path: Path) -> tuple[int, int]:
+    with Image.open(path) as image:
+        return image.size
+
+
+def panel_check_tasks(
+    geometry: dict,
+    page_dir: Path,
+    stitched: Image.Image | None,
+    colorized_root: Path,
+    fallback_stems: set[str],
+    *,
+    detector: object | None = None,
+) -> list[dict]:
+    """Per-panel check tasks for one page (shared by the sanity step and the
+    offline tools scripts/check_sanity.py + scripts/check_luna_sanity.py).
+
+    Normal runs: one task per recorded detection — the B&W crop file plus the
+    recorded box (page coordinates == stitched-page coordinates).
+
+    Full-page runs (one synthetic box covering the whole page): the YOLO panel
+    detector is run on the B&W page to extract the real panels (Japanese
+    reading order), and one task is returned per detected panel. `box` is the
+    detection scaled to the stitched page's resolution (full-page passthrough
+    pages can be smaller than the source), `bw_box` is the detection in B&W
+    page coordinates, and `bw_path` is the full B&W page to crop `bw_box`
+    from. When the whole full-page panel was stitched from B&W, every
+    extracted panel is marked `bw_fallback=True` (trivially identical).
+
+    `detector` is any object with `detect(page_path) -> list[PanelBox]`;
+    defaults to a lazily-constructed `YoloPanelDetector` (torch loaded only
+    when the synthetic branch actually runs).
+    """
+    if not _is_synthetic_full_page(geometry):
+        tasks: list[dict] = []
+        for detection in geometry.get("detections") or []:
+            crop_name = detection["crop"]
+            stem = Path(crop_name).stem
+            bw_path = page_dir / crop_name
+            if not bw_path.is_file():
+                continue
+            tasks.append({
+                "page": page_dir.name,
+                "crop": crop_name,
+                "stem": stem,
+                "colorized_crop": crop_name,
+                "box": detection["box"],
+                "bw_box": None,
+                "bw_path": bw_path,
+                "provenance": detection.get("provenance"),
+                "bw_fallback": stem in fallback_stems,
+                "stitched": stitched,
+                "colorized_root": colorized_root,
+            })
+        return tasks
+
+    # Synthetic full-page geometry: re-extract the real panels with YOLO.
+    recorded_crop = (geometry.get("detections") or [{}])[0].get(
+        "crop", "panel_0001.png"
+    )
+    bw_source = Path(geometry.get("page_path") or "")
+    if not bw_source.is_file():
+        candidate = page_dir / recorded_crop
+        if candidate.is_file():
+            bw_source = candidate
+    if not bw_source.is_file():
+        return []  # nothing to detect against
+
+    if detector is None:
+        from detection import DEFAULT_CONFIDENCE, YoloPanelDetector
+
+        detector = YoloPanelDetector(confidence=DEFAULT_CONFIDENCE)
+    from panel_ordering import reading_order
+
+    detections = detector.detect(bw_source)
+    order = reading_order(detections)
+    ordered = [detections[i] for i in order]
+    if not ordered:
+        return []
+
+    bw_width, bw_height = _image_size(bw_source)
+    scale_x = scale_y = 1.0
+    if stitched is not None:
+        stitched_width, stitched_height = stitched.size
+        scale_x = stitched_width / bw_width
+        scale_y = stitched_height / bw_height
+
+    fallback_recorded = any(
+        Path(d.get("crop", "")).stem in fallback_stems
+        for d in geometry.get("detections") or []
+    )
+    tasks = []
+    for index, box in enumerate(ordered, start=1):
+        crop_name = f"yolo_{index:04d}.png"
+        tasks.append({
+            "page": page_dir.name,
+            "crop": crop_name,
+            "stem": Path(crop_name).stem,
+            "colorized_crop": recorded_crop,
+            "box": [
+                round(box.x1 * scale_x),
+                round(box.y1 * scale_y),
+                round(box.x2 * scale_x),
+                round(box.y2 * scale_y),
+            ],
+            "bw_box": [
+                round(box.x1), round(box.y1),
+                round(box.x2), round(box.y2),
+            ],
+            "bw_path": bw_source,
+            "provenance": "yolo",
+            "bw_fallback": fallback_recorded,
+            "stitched": stitched,
+            "colorized_root": colorized_root,
+            "synthetic": True,
+        })
+    return tasks
+
+
 def run_sanity_step(
     ctx: RunContext,
     config: PipelineConfig,
@@ -83,10 +223,12 @@ def run_sanity_step(
     max_edge: int | None = None,
     page_substrings: tuple[str, ...] = (),
     output_dir: Path | None = None,
+    detector: object | None = None,
 ) -> dict:
     """Run stage 7. `threshold` / `max_edge` / `page_substrings` /
     `output_dir` override the config / run layout (used by the standalone
-    scripts/check_sanity.py tool)."""
+    scripts/check_sanity.py tool); `detector` injects a panel detector for
+    full-page runs (default: YoloPanelDetector)."""
     threshold = config.sanity_threshold if threshold is None else threshold
     max_edge = config.sanity_max_edge if max_edge is None else max_edge
 
@@ -129,19 +271,24 @@ def run_sanity_step(
         stitched = _load_stitched(stitched_dir, page)
         panel_records: list[dict] = []
         sheet_items: list[tuple[dict, Image.Image, Image.Image]] = []
-        for detection in geometry["detections"]:
-            crop_name = detection["crop"]
-            stem = Path(crop_name).stem
-            bw_path = page_dir / crop_name
-            if not bw_path.is_file():
-                continue
-
+        for task in panel_check_tasks(
+            geometry,
+            page_dir,
+            stitched,
+            colorized_root,
+            fallback_map.get(page, set()),
+            detector=detector,
+        ):
+            crop_name = task["crop"]
+            stem = task["stem"]
             record: dict = {
                 "panel": crop_name,
-                "box": detection["box"],
-                "provenance": detection.get("provenance"),
+                "box": task["box"],
+                "provenance": task["provenance"],
             }
-            if stem in fallback_map.get(page, set()):
+            if task.get("bw_box"):
+                record["bw_box"] = task["bw_box"]
+            if task["bw_fallback"]:
                 # Stitched from the original B&W crop: trivially identical.
                 record.update({
                     "bw_fallback": True,
@@ -151,16 +298,28 @@ def run_sanity_step(
                 panel_records.append(record)
                 continue
 
-            with Image.open(bw_path) as bw_image:
+            with Image.open(task["bw_path"]) as bw_image:
                 bw_image = bw_image.convert("RGB")
+            if task.get("bw_box"):
+                # Full-page runs: the B&W panel is the YOLO crop of the page.
+                bw_cropped = _crop_box(bw_image, task["bw_box"])
+                if bw_cropped is not None:
+                    bw_image = bw_cropped
             color_image = None
             if stitched is not None:
-                color_image = _crop_box(stitched, detection["box"])
+                color_image = _crop_box(stitched, task["box"])
             if color_image is None:
-                colorized_path = _find_colorized(colorized_root / page, crop_name)
+                colorized_path = _find_colorized(
+                    colorized_root / page, task["colorized_crop"]
+                )
                 if colorized_path is not None:
                     with Image.open(colorized_path) as colorized_image:
                         color_image = colorized_image.convert("RGB")
+                    if task.get("synthetic"):
+                        # Full-page colorized output: crop the real panel box.
+                        color_cropped = _crop_box(color_image, task["box"])
+                        if color_cropped is not None:
+                            color_image = color_cropped
 
             if color_image is None:
                 record.update({

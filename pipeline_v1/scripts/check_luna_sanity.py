@@ -18,6 +18,12 @@ Input layout (a completed run, e.g. pipeline_v1/output/YYYYMMDD-HHMMSS/):
   3_colorized/<page>/                fallback source for the colorized panels
   manifest.json                      B&W-fallback panels are skipped
 
+Full-page runs (panels.json with one synthetic box covering the whole page,
+e.g. --full-page mode): the real panels are re-extracted with the pipeline's
+YOLO panel detector on the B&W page, and each detected panel is checked
+individually (the stitched page is cropped at the YOLO box scaled to the
+stitched page's resolution; see steps/sanity.py panel_check_tasks).
+
 Output (default <run-dir>/7_sanity_luna/):
   inputs/<page>/<stem>.bw.png        the exact analysis-grid images the model
   inputs/<page>/<stem>.colorized.png saw (long edge <= --max-edge)
@@ -60,7 +66,12 @@ from luna_sanity import (  # noqa: E402
 
 # Reuse the sanity step's per-run loading helpers (same panels/boxes/colorized
 # resolution as 7_sanity/).
-from steps.sanity import _crop_box, _find_colorized, _load_stitched  # noqa: E402
+from steps.sanity import (  # noqa: E402
+    _crop_box,
+    _find_colorized,
+    _load_stitched,
+    panel_check_tasks,
+)
 from steps.debug import load_fallback_map  # noqa: E402
 from tqdm import tqdm  # noqa: E402
 from util import load_font  # noqa: E402
@@ -70,11 +81,13 @@ API_KEY_ENV = "OPENROUTER_API_KEY"
 
 
 def _build_panel_tasks(run_dir: Path, page_substrings: tuple[str, ...]):
-    """(page, crop_name, box, provenance, bw_path) for every panel to check.
-
-    Mirrors the sanity step's iteration: panels with a B&W-fallback record
-    are returned with `bw_fallback=True` (skipped by the caller), blank
-    pages are skipped.
+    """Check tasks for every panel: (page, crop, box, provenance, bw_path,
+    bw_fallback, ...). Shares the sanity step's per-panel task construction
+    (`steps.sanity.panel_check_tasks`): normal runs get one task per recorded
+    detection; full-page runs (one synthetic box covering the page) get one
+    task per real YOLO panel re-extracted from the B&W page. Panels with a
+    B&W-fallback record are returned with `bw_fallback=True` (skipped by the
+    caller), blank pages are skipped.
     """
     from config import PipelineConfig
     from run_context import RunContext
@@ -109,41 +122,39 @@ def _build_panel_tasks(run_dir: Path, page_substrings: tuple[str, ...]):
         if geometry.get("blank_page"):
             continue
         stitched = _load_stitched(stitched_dir, page)
-        for detection in geometry["detections"]:
-            crop_name = detection["crop"]
-            stem = Path(crop_name).stem
-            bw_path = page_dir / crop_name
-            if not bw_path.is_file():
-                continue
-            tasks.append({
-                "page": page,
-                "crop": crop_name,
-                "stem": stem,
-                "box": detection["box"],
-                "provenance": detection.get("provenance"),
-                "bw_path": bw_path,
-                "bw_fallback": stem in fallback_map.get(page, set()),
-                "stitched": stitched,
-                "colorized_root": colorized_root,
-            })
+        tasks.extend(panel_check_tasks(
+            geometry,
+            page_dir,
+            stitched,
+            colorized_root,
+            fallback_map.get(page, set()),
+        ))
     return tasks
 
 
 def _load_color_image(task: dict) -> Image.Image | None:
     """The colorized panel: cropped from the stitched page, else from
-    3_colorized/<page>/ (same resolution as the sanity step)."""
+    3_colorized/<page>/ (same resolution as the sanity step). Full-page runs
+    (synthetic tasks) crop the stitched page at the box scaled to its
+    resolution, and crop the full-page colorized fallback at that box too."""
     stitched = task["stitched"]
     if stitched is not None:
         color_image = _crop_box(stitched, task["box"])
         if color_image is not None:
             return color_image
     colorized_path = _find_colorized(
-        task["colorized_root"] / task["page"], task["crop"]
+        task["colorized_root"] / task["page"], task["colorized_crop"]
     )
     if colorized_path is None:
         return None
     with Image.open(colorized_path) as image:
-        return image.convert("RGB")
+        color_image = image.convert("RGB")
+    if task.get("synthetic"):
+        # Full-page colorized output: crop the real panel box.
+        color_cropped = _crop_box(color_image, task["box"])
+        if color_cropped is not None:
+            color_image = color_cropped
+    return color_image
 
 
 def _check_one(
@@ -159,6 +170,8 @@ def _check_one(
         "box": task["box"],
         "provenance": task["provenance"],
     }
+    if task.get("bw_box"):
+        record["bw_box"] = task["bw_box"]
     if task["bw_fallback"]:
         record.update({
             "bw_fallback": True,
@@ -169,6 +182,11 @@ def _check_one(
 
     with Image.open(task["bw_path"]) as bw_image:
         bw_image = bw_image.convert("RGB")
+    if task.get("bw_box"):
+        # Full-page runs: the B&W panel is the YOLO crop of the page.
+        bw_cropped = _crop_box(bw_image, task["bw_box"])
+        if bw_cropped is not None:
+            bw_image = bw_cropped
     color_image = _load_color_image(task)
     if color_image is None:
         record.update({

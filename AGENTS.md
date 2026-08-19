@@ -215,7 +215,14 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
    < 0.25 / chamfer > 4 px / drift > 3% of diagonal); B&W-fallback panels
    are skipped → `7_sanity/<page>.json` + `summary.json`, plus a
    side-by-side contact sheet `7_sanity/<page>_flagged.png` for pages with
-   flags. Its offline companion `pipeline_v1/scripts/check_sanity.py
+   flags. Full-page runs (`--full-page` / sparse-art fallback) record one
+   synthetic box over the whole page, so the real panels are re-extracted
+   with the YOLO panel detector on the B&W page and each is checked
+   individually (panel names `yolo_000N.png`; the record keeps both `box`
+   scaled to the stitched page's resolution and `bw_box` in B&W source
+   coordinates; shared by all three checkers via
+   `steps.sanity.panel_check_tasks`). Its offline companion
+   `pipeline_v1/scripts/check_sanity.py
    --run-dir <run-dir>` re-checks any completed run with the same
    `steps.sanity.run_sanity_step` implementation (no pipeline rerun,
    honors the run's recorded threshold unless overridden). A paid,

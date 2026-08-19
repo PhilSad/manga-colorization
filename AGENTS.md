@@ -218,7 +218,16 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
    flags. Its offline companion `pipeline_v1/scripts/check_sanity.py
    --run-dir <run-dir>` re-checks any completed run with the same
    `steps.sanity.run_sanity_step` implementation (no pipeline rerun,
-   honors the run's recorded threshold unless overridden).
+   honors the run's recorded threshold unless overridden). A paid,
+   semantic second opinion exists too: `pipeline_v1/scripts/check_luna_sanity.py
+   --run-dir <run-dir>` sends each panel's colorized vs B&W pair to OpenRouter
+   `openai/gpt-5.6-luna` (strict structured output, `luna_sanity.py` +
+   `luna_sanity_prompt.txt`, one call per panel, ~$0.0015/panel @1536px;
+   measured 2026-08-21) → `<run-dir>/7_sanity_luna/`; it judges strokes
+   semantically (missing/added/redrawn lines), so it can call a
+   structurally-flagged redraw acceptable when every stroke survived in
+   substance (observed: ch.134 FLUX panels with line IoU ≈ 0.09 judged
+   `match` by Luna). Needs `OPENROUTER_API_KEY`; B&W-fallback panels skipped.
 
 - Entry point: `pipeline_v1/run.py`; full usage in `pipeline_v1/README.md`,
   module map and design decisions in `pipeline_v1/ARCHITECTURE.md`.

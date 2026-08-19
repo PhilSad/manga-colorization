@@ -440,6 +440,39 @@ flagged panel is not necessarily a *wrong* color — it means the colorized
 line art differs measurably from the original and deserves a visual review
 (the contact sheets are the fastest way to eyeball it).
 
+### Luna line-art check (paid, optional second opinion)
+
+`scripts/check_luna_sanity.py` is the **semantic** counterpart of the
+structural check: it sends each colorized panel side by side with its B&W
+original to OpenRouter `openai/gpt-5.6-luna` (strict structured output,
+`luna_sanity_prompt.txt` + `luna_sanity.py`, one paid call per panel) and
+asks one question — *does the colorized line art match the B&W original?*
+Unlike the IoU/chamfer geometry, Luna judges strokes semantically
+(missing/added/redrawn lines, hatching, screentones), so it agrees on
+straight pixel-preserving edits and can still call a structurally "flagged"
+redraw acceptable when every stroke survived in substance. Records mirror
+`luna_sanity.py`: `line_art_matches` + `analyse`, `status`
+(`match`/`mismatch`/`error`), `analysis_size`, `attempts` (raw retries on
+malformed output, no downgrade), `cost_usd` (`usage.cost` measured),
+`model_returned`.
+
+```bash
+.venv/bin/python pipeline_v1/scripts/check_luna_sanity.py \
+    --run-dir pipeline_v1/output/20260819-202719 \
+    --page p003 --workers 4
+# options: --output-dir (default <run-dir>/7_sanity_luna), --max-edge
+#          (default 1536 px), --model, --workers, --page SUBSTR (repeatable)
+```
+
+Writes per-page `<page>.json`, the provenance pairs
+`inputs/<page>/<panel>.bw.png|colorized.png` (analysis-grid resized), a
+`<page>_mismatch.png` contact sheet only for pages with mismatches, and
+`summary.json` with totals + measured cost. Needs `OPENROUTER_API_KEY` in
+`.env`. B&W-fallback panels are skipped. Measured 2026-08-21: ~$0.0015/panel
+at 1536 px long edge; two ch.134 panel-wise FLUX panels that the structural
+check flagged (line IoU ≈ 0.09) were both judged `match` by Luna — a useful
+reminder that the two checks measure different things.
+
 ## Size policy
 
 Each panel is colorized at the resolution **closest to its original size with

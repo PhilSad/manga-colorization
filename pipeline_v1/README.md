@@ -60,11 +60,17 @@ Pipeline stages (per page):
    writer (no extra dependency): `--pdf-name` (default `colorized.pdf`) and
    `--pdf-dpi` (default 72, page size in points = pixels × 72 / dpi) →
    `6_pdf/colorized.pdf` + `summary.json`
+8. **Sanity check** — pure local compute (numpy + OpenCV, no backends):
+   compares every colorized panel with its black & white original through
+   structural thin-stroke line maps (`sanity.py`) and flags panels whose
+   line art drifted below the fidelity threshold → `7_sanity/<page>.json` +
+   `summary.json`, plus a side-by-side contact sheet `7_sanity/<page>_flagged.png`
+   for every page that has flagged panels
 
 Each invocation creates a fresh `output/YYYYMMDD-HHMMSS/` run directory (never
-overwritten) with the six numbered intermediate directories and an incremental
-`manifest.json` (command, configuration, prompt/profile hashes, per-step
-records, measured costs).
+overwritten) with the seven numbered intermediate directories and an
+incremental `manifest.json` (command, configuration, prompt/profile hashes,
+per-step records, measured costs).
 
 ## Setup
 
@@ -205,6 +211,10 @@ per-panel progress bars are replaced by a single page bar when N > 1),
 bounding-box stroke width),
 `--pdf-name` / `--pdf-dpi` (6_pdf PDF filename, default `colorized.pdf`;
 embedding resolution, default 72 — page size in points = pixels × 72 / dpi),
+`--sanity-threshold 0.45` / `--sanity-max-edge 1024` (7_sanity
+line-fidelity flag threshold in (0, 1] and analysis-grid long-edge cap in
+px — the B&W panel and its colorized output are resampled onto the same
+grid before comparison),
 `--verify-attempts N` (character-palette verification loop, 0 = off),
 `--verify-model <openrouter-model>` (default `openai/gpt-5.6-luna`),
 `--verify-prompt-file <path>` (default `verify_color_prompt.txt`),
@@ -326,6 +336,8 @@ output/<YYYYMMDD-HHMMSS>/
 ├── 4_stitched/<page>.png   final page (panels colorized, rest B&W)
 ├── 5_debug/<page>.png      stitched page + bbox + character label per panel
 ├── 6_pdf/colorized.pdf     all stitched pages as one multi-page PDF
+├── 7_sanity/<page>.json    line-fidelity metrics + verdict per panel
+│   + summary.json, <page>_flagged.png contact sheets
 └── manifest.json
 ```
 
@@ -371,6 +383,62 @@ with custom options, without re-running the pipeline:
 # options: --output-dir, --page SUBSTR (repeatable filter), --name,
 #          --dpi
 ```
+
+## Line-art fidelity sanity check
+
+The final pipeline stage (`sanity` → `7_sanity/`) answers "did the colorizer
+preserve the panel's line art?" It compares every colorized panel with its
+black & white original through structural thin-stroke line maps
+(`pipeline_v1/sanity.py`), independently of the colorizer's color choices:
+
+- both images are resampled onto the same analysis grid (long edge
+  `--sanity-max-edge`, default 1024 px) and binarized into ink masks;
+- the **B&W ink mask is skeletonized to thin lines** (Zhang–Suen) and the
+  colorized ink is dilated; then four scores are computed — **line IoU**
+  (ink overlap on the B&W lines), **chamfer distance** (avg distance from
+  each B&W line pixel to the nearest colorized ink, or its reciprocal
+  similarity), **component similarity** (large connected components of the
+  colorized ink matching B&W line components), and **drift** (phase-correlation
+  shift of the ink distributions, in px and as % of the panel diagonal);
+- a composite **`line_fidelity`** in (0, 1] combines them, and a panel is
+  **flagged** when fidelity < `--sanity-threshold` (default 0.45) **or** any
+  hard rule trips: line IoU < 0.25, chamfer > 4.0 px, or drift > 3% of the
+  panel diagonal.
+
+Panels that were stitched from their original B&W crop (the stitch step's
+always-on fallback) are skipped — there is no colorized output to compare.
+The stage runs automatically at the end of every run, needs no backends or
+API keys, and writes:
+
+```text
+7_sanity/<page>.json         per-panel metrics + verdict (provenance, box,
+                             iou/chamfer/components/drift, fidelity, reasons)
+7_sanity/<page>_flagged.png  side-by-side contact sheet of the flagged panels
+7_sanity/summary.json        per-run totals: pages/panels checked + flagged,
+                             plus the same flags aggregated in the manifest
+                             totals (panels_sanity_checked/_flagged)
+```
+
+`scripts/check_sanity.py` is the standalone, offline companion of that stage:
+it re-checks any *completed* run (same `steps.sanity.run_sanity_step`
+implementation) with custom options, without re-running the pipeline; it
+reuses the run's recorded `sanity_threshold`/`sanity_max_edge` unless
+overridden:
+
+```bash
+.venv/bin/python pipeline_v1/scripts/check_sanity.py \
+    --run-dir pipeline_v1/output/20260819-202719
+# options: --output-dir, --threshold, --max-edge, --page SUBSTR
+#          (repeatable filter)
+```
+
+Interpretation: the scores are strict about *geometry*. A colorizer that
+redraws the art (e.g. panel-wise FLUX.2 edits) loses thin lines and scores
+well below the threshold on every panel, while an edit that preserves the
+original pixels (e.g. the full-page gpt-image-2 mode) passes with margin. A
+flagged panel is not necessarily a *wrong* color — it means the colorized
+line art differs measurably from the original and deserves a visual review
+(the contact sheets are the fastest way to eyeball it).
 
 ## Size policy
 

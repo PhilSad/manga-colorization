@@ -113,11 +113,14 @@ def test_full_run_success(tmp_path):
     assert totals["pages_stitched"] == 2
     assert totals["pages_annotated"] == 2
     assert totals["pdf_pages"] == 2
+    assert totals["panels_sanity_checked"] == 4
+    assert totals["panels_sanity_flagged"] == 0
     assert "wall_time_s" in totals
 
     # Step records are present in the manifest.
     assert set(ctx.manifest["steps"].keys()) == {
         "panels", "characters", "colorize", "stitch", "debug", "pdf",
+        "sanity",
     }
 
 

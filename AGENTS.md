@@ -206,12 +206,25 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
    `6_pdf/colorized.pdf` + `summary.json`; `--pdf-name` / `--pdf-dpi`
    (default 72) control the filename and the embedding resolution
    (page size in points = pixels × 72 / dpi).
+8. **Sanity check** — pure local compute (numpy + OpenCV, no backends):
+   compares every colorized panel with its black & white original through
+   structural thin-stroke line maps (`sanity.py`: line IoU / chamfer /
+   components / phase-correlation drift on a shared analysis grid,
+   `--sanity-threshold 0.45`, `--sanity-max-edge 1024`) and flags panels
+   whose line art drifted below the threshold (fidelity < 0.45, or line IoU
+   < 0.25 / chamfer > 4 px / drift > 3% of diagonal); B&W-fallback panels
+   are skipped → `7_sanity/<page>.json` + `summary.json`, plus a
+   side-by-side contact sheet `7_sanity/<page>_flagged.png` for pages with
+   flags. Its offline companion `pipeline_v1/scripts/check_sanity.py
+   --run-dir <run-dir>` re-checks any completed run with the same
+   `steps.sanity.run_sanity_step` implementation (no pipeline rerun,
+   honors the run's recorded threshold unless overridden).
 
 - Entry point: `pipeline_v1/run.py`; full usage in `pipeline_v1/README.md`,
   module map and design decisions in `pipeline_v1/ARCHITECTURE.md`.
 - Run conventions: same as methods — each invocation creates a fresh
-  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the six
-  numbered intermediate directories and an incremental `manifest.json`
+  `pipeline_v1/output/YYYYMMDD-HHMMSS/` dir (never overwritten) with the
+  seven numbered intermediate directories and an incremental `manifest.json`
   (command, config, prompt/profile hashes, per-step records, measured costs).
   `output/` and `models/` are gitignored.
 - A "colorize a volume" request also means `--skip-first 3 --limit 5` here
@@ -254,7 +267,7 @@ documented in `pipelines.md`, not `methods.md`. Per page it:
   (colorization workers capped at 4 to stay under the gpt-image-2 org rate
   limit of ~5 input-images/min). See
   `pipeline_v1/README.md` §Profiles and §Full-page gpt-image-2 mode.
-- Debug annotation: the pipeline's final `debug` step (see step 6 above)
+- Debug annotation: the pipeline's `debug` step (see step 6 above)
   writes `5_debug/` automatically at the end of every run. Its offline
   companion, `pipeline_v1/scripts/annotate_stitch.py --run-dir <run-dir>`,
   re-annotates any completed run with the same `steps.debug.run_debug_step`

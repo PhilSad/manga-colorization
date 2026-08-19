@@ -23,7 +23,7 @@ REPO_ROOT = PIPELINE_DIR.parent
 # Pipeline stages in execution order; the run directory for each stage is
 # prefixed with its 1-based index (1_panels/, 2_characters/, ...).
 STEP_ORDER: tuple[str, ...] = (
-    "panels", "characters", "colorize", "stitch", "debug", "pdf"
+    "panels", "characters", "colorize", "stitch", "debug", "pdf", "sanity"
 )
 STEP_DIRS: dict[str, str] = {
     "panels": "1_panels",
@@ -32,6 +32,7 @@ STEP_DIRS: dict[str, str] = {
     "stitch": "4_stitched",
     "debug": "5_debug",
     "pdf": "6_pdf",
+    "sanity": "7_sanity",
 }
 
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
@@ -203,6 +204,15 @@ class PipelineConfig:
     pdf_name: str = "colorized.pdf"  # output PDF filename in 6_pdf/
     pdf_dpi: int = 72   # embedding resolution; page size in pt = px * 72 / dpi
 
+    # Stage 7 (sanity, 7_sanity/): line-art fidelity sanity check. Pure local
+    # compute (numpy + OpenCV); compares each colorized panel with its B&W
+    # original through structural line maps (sanity.py) and flags panels below
+    # the threshold for review. The standalone offline tool
+    # scripts/check_sanity.py re-checks any completed run with the same
+    # implementation.
+    sanity_threshold: float = 0.45  # line_fidelity below this -> flagged
+    sanity_max_edge: int = 1024     # analysis-grid long-edge cap (px)
+
     # V1.1 (task 0001): targeted reruns.
     only_panels: tuple[str, ...] = ()  # "PAGE:PANEL" selectors (repeatable)
     forced_characters: dict[str, list[str]] = field(default_factory=dict)
@@ -273,6 +283,8 @@ class PipelineConfig:
             "debug_bbox_width": self.debug_bbox_width,
             "pdf_name": self.pdf_name,
             "pdf_dpi": self.pdf_dpi,
+            "sanity_threshold": self.sanity_threshold,
+            "sanity_max_edge": self.sanity_max_edge,
             "only_panels": list(self.only_panels),
             "forced_characters": self.forced_characters,
         }
@@ -343,6 +355,10 @@ def _validate(config: PipelineConfig) -> None:
         raise ValueError("--pdf-name must end with '.pdf'")
     if config.pdf_dpi < 1:
         raise ValueError("--pdf-dpi must be at least 1")
+    if not 0 < config.sanity_threshold <= 1:
+        raise ValueError("--sanity-threshold must be in (0, 1]")
+    if config.sanity_max_edge < 64:
+        raise ValueError("--sanity-max-edge must be at least 64")
     for selector in config.only_panels:
         from selection import parse_only_panel
 
@@ -415,8 +431,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "gemma-4-31b-it), colorize each panel with FLUX.2 Klein 9B base + LoRA "
             "(atlas filtered to the detected characters), stitch the colorized "
             "panels back onto the original page, annotate a debug copy of "
-            "each stitched page (5_debug/), and export all stitched pages "
-            "as a single multi-page PDF (6_pdf/)."
+            "each stitched page (5_debug/), export all stitched pages "
+            "as a single multi-page PDF (6_pdf/), and run a line-art fidelity "
+            "sanity check on every colorized panel (7_sanity/)."
         ),
     )
     try:
@@ -572,7 +589,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int,
                         help="Process only the first N pages after skip.")
     parser.add_argument("--steps", default=None,
-                        help="Comma-separated subset of panels,characters,colorize,stitch,debug,pdf.")
+                        help="Comma-separated subset of "
+                             "panels,characters,colorize,stitch,debug,pdf,sanity.")
+    parser.add_argument("--sanity-threshold", type=float, default=0.45,
+                        help="7_sanity line-fidelity flag threshold in (0, 1] "
+                             "(default 0.45); panels scoring below it are "
+                             "flagged for review.")
+    parser.add_argument("--sanity-max-edge", type=int, default=1024,
+                        help="7_sanity analysis-grid long-edge cap in px "
+                             "(default 1024); both images are downscaled to "
+                             "this grid before scoring.")
     parser.add_argument("--debug-font-size", type=int, default=42,
                         help="5_debug label font size in px (default 42).")
     parser.add_argument("--debug-bbox-width", type=int, default=5,
@@ -789,6 +815,8 @@ def parse_args(argv: list[str] | None = None) -> PipelineConfig:
             debug_bbox_width=args.debug_bbox_width,
             pdf_name=args.pdf_name,
             pdf_dpi=args.pdf_dpi,
+            sanity_threshold=args.sanity_threshold,
+            sanity_max_edge=args.sanity_max_edge,
             only_panels=tuple(args.only_panel),
             forced_characters=forced_characters,
         )

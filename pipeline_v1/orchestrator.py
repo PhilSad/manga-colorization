@@ -1,4 +1,4 @@
-"""Pipeline orchestrator: runs the six stages in order with fresh
+"""Pipeline orchestrator: runs the pipeline stages in order with fresh
 timestamped run directories, aggregating everything into the manifest.
 
 Step order and run directories:
@@ -8,6 +8,7 @@ Step order and run directories:
   stitch      -> 4_stitched/
   debug       -> 5_debug/     (bbox + characters annotation of the stitched pages)
   pdf         -> 6_pdf/       (one multi-page PDF of all stitched pages)
+  sanity      -> 7_sanity/    (line-art fidelity check of the colorized panels)
 
 `--steps` filters which steps run; `--from-step` skips earlier steps;
 `--resume <dir>` pre-copies a previous run's step outputs so only the missing
@@ -149,6 +150,8 @@ class PipelineRunner:
                 "pages_stitched": 0,
                 "pages_annotated": 0,
                 "pdf_pages": 0,
+                "panels_sanity_checked": 0,
+                "panels_sanity_flagged": 0,
                 "wall_time_s": 0.0,
             },
         }
@@ -303,6 +306,8 @@ class PipelineRunner:
             return (directory / "summary.json").is_file()
         if step == "pdf":
             return (directory / "summary.json").is_file()
+        if step == "sanity":
+            return (directory / "summary.json").is_file()
         return False
 
     # -- step dispatch ------------------------------------------------------
@@ -395,6 +400,14 @@ class PipelineRunner:
             record = run_pdf_step(ctx, self.config)
             self.manifest_totals_update(ctx, {
                 "pdf_pages": record["pages_in_pdf"],
+            })
+        elif step == "sanity":
+            from steps.sanity import run_sanity_step
+
+            record = run_sanity_step(ctx, self.config)
+            self.manifest_totals_update(ctx, {
+                "panels_sanity_checked": record["panels_checked"],
+                "panels_sanity_flagged": record["panels_flagged"],
             })
         else:
             raise ValueError(f"unknown step {step!r}")
